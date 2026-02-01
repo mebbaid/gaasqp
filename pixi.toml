@@ -1,0 +1,14 @@
+[workspace]
+authors = ["mebbaid <mohamed.elobaid@iit.it>"]
+channels = ["conda-forge"]
+name = "geoqp"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+qpsolvers-eigen = ">=0.2.0,<0.3"
+eigen = ">=3.4.0,<4"
+cmake = ">=4.2.3,<5"
+cxx-compiler = ">=1.11.0,<2"

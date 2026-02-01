@@ -63,7 +63,7 @@ public:
             
             // Phase I: Find good vertex
             internal::Phase1Solver phase1(
-                problem.A.data(), problem.b.data(), x_bar,
+                problem.Q.data(), problem.A.data(), problem.b.data(), x_bar,
                 problem.m, problem.n, config_
             );
             

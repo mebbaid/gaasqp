@@ -2,6 +2,7 @@
 #include <cmath>
 #include <algorithm>
 #include <stdexcept>
+#include <cstring>
 
 namespace geoqp {
 namespace internal {
@@ -18,57 +19,52 @@ std::vector<double> Phase3Solver::project_onto_face(
     std::vector<double>& lambda_out
 ) {
     // Project x_bar onto face defined by active constraints
-    // Face: { x : A_active * x = b_active }
-    // 
-    // Projection: x* = argmin ||x - x_bar||^2 subject to A_active * x = b_active
-    //
-    // KKT system:
-    // [ I      A_active^T ] [ x*     ]   [ x_bar    ]
-    // [ A_active    0     ] [ lambda ] = [ b_active ]
-    //
-    // Solution via elimination:
     // x* = x_bar - A_active^T * (A_active * A_active^T)^{-1} * (A_active * x_bar - b_active)
-    // lambda = (A_active * A_active^T)^{-1} * (A_active * x_bar - b_active)
     
-    int k = static_cast<int>(active_set.size());
+    const int k = static_cast<int>(active_set.size());
     
     if (k == 0) {
-        // No active constraints - return x_bar
         lambda_out.clear();
         return x_bar_;
     }
     
-    // Build A_active (k x n) and b_active (k)
+    // Pre-allocate all needed arrays
     std::vector<double> A_active(k * n_);
     std::vector<double> b_active(k);
+    std::vector<double> Ax_bar(k);
+    std::vector<double> residual(k);
+    std::vector<double> G(k * k);
+    std::vector<double> AT_lambda(n_);
+    std::vector<double> x_star(n_);
     
+    // Build A_active and b_active
     for (int i = 0; i < k; ++i) {
-        int constraint_idx = active_set[i];
+        const int constraint_idx = active_set[i];
         b_active[i] = b_[constraint_idx];
-        for (int j = 0; j < n_; ++j) {
-            A_active[i * n_ + j] = A_[constraint_idx * n_ + j];
-        }
+        const double* A_row = A_ + constraint_idx * n_;
+        double* A_active_row = A_active.data() + i * n_;
+        std::memcpy(A_active_row, A_row, n_ * sizeof(double));
     }
     
-    // Compute A_active * x_bar
-    std::vector<double> Ax_bar(k);
+    // Compute A_active * x_bar using optimized matvec
     LinearAlgebra::matvec(A_active.data(), x_bar_.data(), Ax_bar.data(), k, n_);
     
     // Compute residual: A_active * x_bar - b_active
-    std::vector<double> residual(k);
     for (int i = 0; i < k; ++i) {
         residual[i] = Ax_bar[i] - b_active[i];
     }
     
     // Compute Gram matrix: G = A_active * A_active^T (k x k)
-    std::vector<double> G(k * k, 0.0);
+    // Optimize: compute only upper triangle, then fill lower
     for (int i = 0; i < k; ++i) {
-        for (int j = 0; j < k; ++j) {
-            double sum = 0.0;
-            for (int l = 0; l < n_; ++l) {
-                sum += A_active[i * n_ + l] * A_active[j * n_ + l];
-            }
+        const double* row_i = A_active.data() + i * n_;
+        for (int j = i; j < k; ++j) {
+            const double* row_j = A_active.data() + j * n_;
+            double sum = LinearAlgebra::dot(row_i, row_j, n_);
             G[i * k + j] = sum;
+            if (i != j) {
+                G[j * k + i] = sum; // Symmetric
+            }
         }
     }
     
@@ -82,31 +78,18 @@ std::vector<double> Phase3Solver::project_onto_face(
     }
     
     // Compute A_active^T * lambda
-    std::vector<double> AT_lambda(n_, 0.0);
-    for (int j = 0; j < n_; ++j) {
-        for (int i = 0; i < k; ++i) {
-            AT_lambda[j] += A_active[i * n_ + j] * lambda_out[i];
+    std::fill(AT_lambda.begin(), AT_lambda.end(), 0.0);
+    for (int i = 0; i < k; ++i) {
+        const double lambda_i = lambda_out[i];
+        const double* A_row = A_active.data() + i * n_;
+        for (int j = 0; j < n_; ++j) {
+            AT_lambda[j] += A_row[j] * lambda_i;
         }
     }
     
     // Compute x* = x_bar - A_active^T * lambda
-    std::vector<double> x_star(n_);
     for (int j = 0; j < n_; ++j) {
         x_star[j] = x_bar_[j] - AT_lambda[j];
-    }
-    
-    // Verify that x* satisfies the constraints (for debugging)
-    if (config_.verbosity >= 2) {
-        double max_error = 0.0;
-        for (int i = 0; i < k; ++i) {
-            double lhs = 0.0;
-            for (int j = 0; j < n_; ++j) {
-                lhs += A_active[i * n_ + j] * x_star[j];
-            }
-            double error = std::abs(lhs - b_active[i]);
-            max_error = std::max(max_error, error);
-        }
-        // Log: Projection error: max_error
     }
     
     return x_star;

@@ -51,57 +51,51 @@ std::vector<int> Phase2Solver::find_active_face(
 ) {
     // Ray: r(t) = v + t*(x_bar - v) for t in [0, 1]
     
-    // Collect all constraints and their intersection parameters
+    // Pre-allocate to reduce allocations
     std::vector<std::pair<double, int>> intersections;
+    intersections.reserve(m_); // Reserve max possible size
     
+    // Single pass through constraints - compute all intersections
     for (int i = 0; i < m_; ++i) {
         double t = compute_intersection_parameter(v, i);
         
         // Only consider intersections in (0, 1]
-        // We use a small epsilon to avoid numerical issues at t=0
         if (t > 1e-10 && t <= 1.0 + 1e-10) {
-            intersections.push_back({t, i});
+            intersections.emplace_back(t, i);
         }
     }
     
     if (intersections.empty()) {
-        // No intersections found in [0,1]
-        // This could mean x_bar is actually in the polytope interior
-        // Or we need to extend the ray beyond t=1
-        // Check all constraints at larger t values
+        // No intersections in [0,1] - extend search
         for (int i = 0; i < m_; ++i) {
             double t = compute_intersection_parameter(v, i);
             if (t > 1.0 + 1e-10) {
-                intersections.push_back({t, i});
+                intersections.emplace_back(t, i);
             }
         }
         
         if (intersections.empty()) {
-            // Still no intersections - return empty active set
             return std::vector<int>();
         }
     }
     
-    // Find minimum t
-    double t_min = std::numeric_limits<double>::infinity();
-    for (const auto& pair : intersections) {
-        if (pair.first < t_min) {
-            t_min = pair.first;
+    // Find minimum t with single pass
+    double t_min = intersections[0].first;
+    for (size_t i = 1; i < intersections.size(); ++i) {
+        if (intersections[i].first < t_min) {
+            t_min = intersections[i].first;
         }
     }
     
-    // Collect all constraints that are hit at t_min (within tolerance)
+    // Collect all constraints at t_min
     std::vector<int> active_face;
-    const double tol = 1e-8;
+    active_face.reserve(n_); // At most n constraints can be simultaneously active
     
+    const double tol = 1e-8;
     for (const auto& pair : intersections) {
         if (std::abs(pair.first - t_min) <= tol) {
             active_face.push_back(pair.second);
         }
-    }
-    
-    if (config_.verbosity >= 2) {
-        // Log: Found active face with N constraints at t = t_min
     }
     
     return active_face;

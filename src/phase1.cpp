@@ -2,16 +2,35 @@
 #include <cmath>
 #include <limits>
 #include <algorithm>
+#include <set>
 
 namespace geoqp {
 namespace internal {
 
 Phase1Solver::Phase1Solver(
-    const double* A, const double* b,
+    const double* Q, const double* A, const double* b,
     const std::vector<double>& x_bar,
     int m, int n,
     const Config& config
-) : A_(A), b_(b), x_bar_(x_bar), m_(m), n_(n), config_(config) {}
+) : Q_(Q), A_(A), b_(b), x_bar_(x_bar), m_(m), n_(n), config_(config) {}
+
+double Phase1Solver::compute_q_weighted_distance_squared(
+    const std::vector<double>& v) const {
+    // Compute (v - x_bar)^T Q (v - x_bar)
+    // This is the squared Mahalanobis distance in the Q-metric
+    
+    std::vector<double> diff(n_);
+    for (int i = 0; i < n_; ++i) {
+        diff[i] = v[i] - x_bar_[i];
+    }
+    
+    // Compute Q * diff
+    std::vector<double> Q_diff(n_);
+    LinearAlgebra::matvec(Q_, diff.data(), Q_diff.data(), n_, n_);
+    
+    // Compute diff^T * Q_diff
+    return LinearAlgebra::dot(diff.data(), Q_diff.data(), n_);
+}
 
 bool Phase1Solver::is_direction_feasible(
     const std::vector<double>& v,
@@ -60,11 +79,9 @@ std::vector<double> Phase1Solver::pivot_to_neighbor(
     int constraint_to_drop
 ) {
     // Find a neighboring vertex by dropping one constraint
-    // Get current active constraints
     Polytope polytope(A_, b_, m_, n_);
     std::vector<int> active = polytope.get_active_constraints(v, 1e-8);
     
-    // Remove the constraint to drop
     std::vector<int> new_active;
     for (int idx : active) {
         if (idx != constraint_to_drop) {
@@ -77,20 +94,17 @@ std::vector<double> Phase1Solver::pivot_to_neighbor(
         return v;
     }
     
-    // We now have n-1 constraints. We need to find which new constraint becomes active
-    // Move in the direction that improves toward x_bar
-    
+    // Move in the direction that improves toward x_bar_
+
     std::vector<double> direction(n_);
     for (int j = 0; j < n_; ++j) {
         direction[j] = x_bar_[j] - v[j];
     }
     
-    // Find the first constraint we hit when moving in this direction
     double min_t = std::numeric_limits<double>::infinity();
     int new_constraint = -1;
     
     for (int i = 0; i < m_; ++i) {
-        // Skip if already in new_active
         bool already_active = false;
         for (int idx : new_active) {
             if (idx == i) {
@@ -100,7 +114,6 @@ std::vector<double> Phase1Solver::pivot_to_neighbor(
         }
         if (already_active) continue;
         
-        // Compute intersection parameter: v + t*d hits constraint i
         // <a_i, v + t*d> = b_i
         // t = (b_i - <a_i, v>) / <a_i, d>
         
@@ -123,17 +136,12 @@ std::vector<double> Phase1Solver::pivot_to_neighbor(
     }
     
     if (new_constraint == -1) {
-        // No new constraint found - problem may be unbounded
-        // Return current vertex
         return v;
     }
     
-    // Add new constraint to active set
     new_active.push_back(new_constraint);
     
-    // Solve for new vertex defined by new_active constraints
     if (new_active.size() != static_cast<size_t>(n_)) {
-        // Need exactly n constraints
         return v;
     }
     
@@ -153,14 +161,12 @@ std::vector<double> Phase1Solver::pivot_to_neighbor(
         LinearAlgebra::solve_linear_system(A_active.data(), b_active.data(), 
                                           new_vertex.data(), n_);
         
-        // Verify feasibility
         for (int i = 0; i < m_; ++i) {
             double lhs = 0.0;
             for (int j = 0; j < n_; ++j) {
                 lhs += A_[i * n_ + j] * new_vertex[j];
             }
             if (lhs > b_[i] + 1e-6) {
-                // Not feasible
                 return v;
             }
         }
@@ -175,28 +181,19 @@ std::vector<double> Phase1Solver::find_good_vertex(
     const std::vector<double>& initial_vertex,
     int& iterations
 ) {
-    std::vector<double> current_vertex = initial_vertex;
     iterations = 0;
     
-    // For 1D problems, check if the initial vertex is already good
-    // In 1D, a vertex with n=1 active constraint is by definition a boundary point
+    // Special handling for 1D problems
     if (n_ == 1) {
-        // Just verify the vertex is on the boundary
-        for (int i = 0; i < m_; ++i) {
-            double lhs = A_[i] * current_vertex[0];
-            if (std::abs(lhs - b_[i]) < 1e-8) {
-                // This constraint is active - this is a valid vertex
-                return current_vertex;
-            }
-        }
-        // If no constraint is active, we're at an interior point (shouldn't happen)
-        // Move to nearest boundary
-        double min_dist = std::numeric_limits<double>::infinity();
-        double best_x = current_vertex[0];
+        // Find all good vertices (boundary points where direction to x_bar is feasible)
+        double max_dist = -1.0;
+        double best_x = initial_vertex[0];
+        
         for (int i = 0; i < m_; ++i) {
             if (std::abs(A_[i]) > 1e-14) {
                 double x_on_boundary = b_[i] / A_[i];
-                // Check if this is feasible
+                
+                // Check feasibility
                 bool feasible = true;
                 for (int j = 0; j < m_; ++j) {
                     if (A_[j] * x_on_boundary > b_[j] + 1e-8) {
@@ -204,11 +201,18 @@ std::vector<double> Phase1Solver::find_good_vertex(
                         break;
                     }
                 }
+                
                 if (feasible) {
-                    double dist = std::abs(x_on_boundary - x_bar_[0]);
-                    if (dist < min_dist) {
-                        min_dist = dist;
-                        best_x = x_on_boundary;
+                    // Check if this is a good vertex (direction to x_bar is feasible)
+                    double direction = x_bar_[0] - x_on_boundary;
+                    bool is_good = (A_[i] * direction <= 1e-8);
+                    
+                    if (is_good) {
+                        double dist = std::abs(x_on_boundary - x_bar_[0]);
+                        if (dist > max_dist) {
+                            max_dist = dist;
+                            best_x = x_on_boundary;
+                        }
                     }
                 }
             }
@@ -216,67 +220,116 @@ std::vector<double> Phase1Solver::find_good_vertex(
         return std::vector<double>{best_x};
     }
     
+    // For higher dimensions: enumerate good vertices and select farthest
+    // Pre-allocate to reduce dynamic allocations
+    std::vector<std::vector<double>> good_vertices;
+    good_vertices.reserve(std::min(100, m_)); // Reserve reasonable capacity
+    
+    std::set<std::vector<double>> visited;
+    
     const int max_iter = config_.max_simplex_iterations;
     
-    while (iterations < max_iter) {
-        // Compute direction to x_bar
-        std::vector<double> direction(n_);
-        for (int j = 0; j < n_; ++j) {
-            direction[j] = x_bar_[j] - current_vertex[j];
+    // Pre-allocate direction vector to avoid repeated allocations
+    std::vector<double> direction(n_);
+    
+    // Start with initial vertex
+    Polytope polytope(A_, b_, m_, n_);
+    std::vector<double> current_vertex = initial_vertex;
+    visited.insert(current_vertex);
+    
+    // Check if initial vertex is good
+    for (int j = 0; j < n_; ++j) {
+        direction[j] = x_bar_[j] - current_vertex[j];
+    }
+    std::vector<int> active = polytope.get_active_constraints(current_vertex, 1e-8);
+    if (is_direction_feasible(current_vertex, direction, active, config_.tolerance)) {
+        good_vertices.push_back(current_vertex);
+    }
+    
+    // Explore neighboring vertices via simplex pivoting
+    while (iterations < max_iter && !good_vertices.empty()) {
+        bool found_new_vertex = false;
+        
+        for (int idx : active) {
+            std::vector<double> next_vertex = pivot_to_neighbor(current_vertex, idx);
+            
+            // Check if this is a new vertex
+            if (visited.find(next_vertex) == visited.end()) {
+                visited.insert(next_vertex);
+                found_new_vertex = true;
+                
+                // Check if this vertex is good (reuse direction vector)
+                for (int j = 0; j < n_; ++j) {
+                    direction[j] = x_bar_[j] - next_vertex[j];
+                }
+                std::vector<int> next_active = polytope.get_active_constraints(next_vertex, 1e-8);
+                
+                if (is_direction_feasible(next_vertex, direction, next_active, config_.tolerance)) {
+                    good_vertices.push_back(next_vertex);
+                }
+                
+                current_vertex = std::move(next_vertex); // Move instead of copy
+                active = std::move(next_active);
+                break;
+            }
         }
         
-        // Get active constraints
-        Polytope polytope(A_, b_, m_, n_);
-        std::vector<int> active = polytope.get_active_constraints(current_vertex, 1e-8);
-        
-        // Check if direction is feasible
-        if (is_direction_feasible(current_vertex, direction, active, config_.tolerance)) {
-            // Good vertex found!
-            if (config_.verbosity >= 2) {
-                // Vertex is good
-            }
+        if (!found_new_vertex) {
             break;
         }
         
-        // Find most violated constraint
-        int violated = find_most_violated_constraint(current_vertex, direction, active);
-        
-        if (violated == -1) {
-            // No violated constraint found - shouldn't happen
-            break;
-        }
-        
-        // Pivot to neighbor by dropping this constraint
-        std::vector<double> next_vertex = pivot_to_neighbor(current_vertex, violated);
-        
-        // Check if we made progress
-        double dist_old = 0.0, dist_new = 0.0;
-        for (int j = 0; j < n_; ++j) {
-            double diff_old = current_vertex[j] - x_bar_[j];
-            double diff_new = next_vertex[j] - x_bar_[j];
-            dist_old += diff_old * diff_old;
-            dist_new += diff_new * diff_new;
-        }
-        
-        if (dist_new >= dist_old - 1e-10) {
-            // Not making progress - might be cycling
-            if (config_.verbosity >= 1) {
-                // Warning about potential cycling
-            }
-            // Try to continue anyway
-        }
-        
-        current_vertex = next_vertex;
         iterations++;
     }
     
-    if (iterations >= max_iter) {
-        if (config_.verbosity >= 1) {
-            // Max iterations reached in Phase I
+    // If no good vertices found via exploration, use modified simplex
+    if (good_vertices.empty()) {
+        current_vertex = initial_vertex;
+        iterations = 0;
+        
+        while (iterations < max_iter) {
+            for (int j = 0; j < n_; ++j) {
+                direction[j] = x_bar_[j] - current_vertex[j];
+            }
+            
+            active = polytope.get_active_constraints(current_vertex, 1e-8);
+            
+            if (is_direction_feasible(current_vertex, direction, active, config_.tolerance)) {
+                good_vertices.push_back(current_vertex);
+                break;
+            }
+            
+            int violated = find_most_violated_constraint(current_vertex, direction, active);
+            if (violated == -1) {
+                break;
+            }
+            
+            current_vertex = pivot_to_neighbor(current_vertex, violated);
+            iterations++;
         }
     }
     
-    return current_vertex;
+    if (good_vertices.empty()) {
+        return initial_vertex;
+    }
+    
+    // Select the farthest good vertex from x_bar using Q-weighted distance
+    double max_distance_sq = -1.0;
+    size_t farthest_idx = 0;
+    
+    for (size_t i = 0; i < good_vertices.size(); ++i) {
+        // Compute Q-weighted squared distance: (v - x_bar)^T Q (v - x_bar)
+        double dist_sq = compute_q_weighted_distance_squared(good_vertices[i]);
+        if (dist_sq > max_distance_sq) {
+            max_distance_sq = dist_sq;
+            farthest_idx = i;
+        }
+    }
+    
+    if (config_.verbosity >= 1) {
+        // Log: Selected vertex with Q-weighted distance = sqrt(max_distance_sq)
+    }
+    
+    return std::move(good_vertices[farthest_idx]); // Move instead of copy
 }
 
 } // namespace internal

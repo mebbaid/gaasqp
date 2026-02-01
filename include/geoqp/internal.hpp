@@ -58,7 +58,7 @@ namespace geoqp
         {
         public:
             Phase1Solver(
-                const double *A, const double *b,
+                const double *Q, const double *A, const double *b,
                 const std::vector<double> &x_bar,
                 int m, int n,
                 const Config &config);
@@ -82,7 +82,12 @@ namespace geoqp
             std::vector<double> pivot_to_neighbor(
                 const std::vector<double> &v,
                 int constraint_to_drop);
+            
+            // Compute Q-weighted squared distance: (v - x_bar)^T Q (v - x_bar)
+            double compute_q_weighted_distance_squared(
+                const std::vector<double> &v) const;
 
+            const double *Q_;
             const double *A_;
             const double *b_;
             std::vector<double> x_bar_;

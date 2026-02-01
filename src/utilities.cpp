@@ -83,11 +83,24 @@ bool is_feasible(
     int m, int n,
     double tol
 ) {
+    const double* x_ptr = x.data();
+    const double* A_ptr = A.data();
+    
     for (int i = 0; i < m; ++i) {
+        // Compute dot product inline for better performance
+        const double* row = A_ptr + i * n;
         double lhs = 0.0;
-        for (int j = 0; j < n; ++j) {
-            lhs += A[i * n + j] * x[j];
+        
+        // Unrolled loop
+        int j = 0;
+        for (; j + 3 < n; j += 4) {
+            lhs += row[j] * x_ptr[j] + row[j+1] * x_ptr[j+1] +
+                   row[j+2] * x_ptr[j+2] + row[j+3] * x_ptr[j+3];
         }
+        for (; j < n; ++j) {
+            lhs += row[j] * x_ptr[j];
+        }
+        
         if (lhs > b[i] + tol) {
             return false;
         }
