@@ -280,12 +280,17 @@ double FaceHopper::compute_projection_distance_sq(
         }
     }
     
-    // Compute ||x* - x_bar||^2 (Euclidean distance)
-    // The projection is computed using Q, but we compare faces by Euclidean distance to x_bar
+    // Compute Q-weighted distance: (x* - x_bar)^T Q (x* - x_bar)
+    // This is the correct metric for comparing faces when Q ≠ I
     double dist_sq = 0.0;
     for (int i = 0; i < n_; ++i) {
-        double di = x_star[i] - x_bar_[i];
-        dist_sq += di * di;
+        double diff_i = x_star[i] - x_bar_[i];
+        // Compute (Q * diff)[i] component
+        double Qdiff_i = 0.0;
+        for (int k = 0; k < n_; ++k) {
+            Qdiff_i += Q_[i * n_ + k] * (x_star[k] - x_bar_[k]);
+        }
+        dist_sq += diff_i * Qdiff_i;
     }
     
     if (config_.verbosity >= 3) {
@@ -478,13 +483,20 @@ std::vector<int> FaceHopper::find_optimal_face(
                     
                     std::vector<double> x2, lambda2;
                     if (compute_projection_and_lambda(smaller_face, x2, lambda2)) {
-                        // Check if distance is smaller
+                        // Check if Q-weighted distance is smaller: (x - x_bar)^T Q (x - x_bar)
+                        // This is equivalent to comparing objective values since
+                        // f(x) = (1/2)(x - x_bar)^T Q (x - x_bar) + const
                         double d1 = 0.0, d2 = 0.0;
                         for (int j = 0; j < n_; ++j) {
                             double diff1 = x_star[j] - x_bar_[j];
                             double diff2 = x2[j] - x_bar_[j];
-                            d1 += diff1 * diff1;
-                            d2 += diff2 * diff2;
+                            // Q-weighted: sum_k Q[j,k] * diff * diff_k
+                            for (int k = 0; k < n_; ++k) {
+                                double diff1_k = x_star[k] - x_bar_[k];
+                                double diff2_k = x2[k] - x_bar_[k];
+                                d1 += diff1 * Q_[j * n_ + k] * diff1_k;
+                                d2 += diff2 * Q_[j * n_ + k] * diff2_k;
+                            }
                         }
                         
                         if (d2 < d1 - config_.tolerance) {
