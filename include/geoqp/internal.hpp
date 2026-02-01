@@ -54,10 +54,16 @@ namespace geoqp
             int n_;
         };
 
-        class Phase1Solver
+        /**
+         * @brief Initializer - finds a "good" starting vertex
+         * 
+         * A good vertex is one where the direction to x_bar is feasible (doesn't
+         * immediately violate any constraint). This is Phase I of the algorithm.
+         */
+        class Initializer
         {
         public:
-            Phase1Solver(
+            Initializer(
                 const double *Q, const double *A, const double *b,
                 const std::vector<double> &x_bar,
                 int m, int n,
@@ -100,6 +106,12 @@ namespace geoqp
             // Compute vertex from active constraint set
             std::vector<double> compute_vertex_from_active_set(
                 const std::vector<int> &active_indices) const;
+            
+            // Detect if constraints form a box (lb <= x <= ub)
+            void detect_box_constraints();
+            
+            // Fast O(n) algorithm for box-constrained problems
+            std::vector<double> find_good_vertex_box_fast() const;
 
             const double *Q_;
             const double *A_;
@@ -108,25 +120,40 @@ namespace geoqp
             int m_;
             int n_;
             Config config_;
+            
+            // Box constraint detection
+            bool is_box_constrained_ = false;
+            std::vector<double> box_lb_;
+            std::vector<double> box_ub_;
         };
 
-        class Phase2Solver
+        /**
+         * @brief FaceHopper - explores faces to find the optimal one
+         * 
+         * Starting from an initial face (found via ray tracing from a good vertex),
+         * hops between neighboring faces to find the one whose projection of x_bar
+         * is closest. This is Phase II of the algorithm.
+         */
+        class FaceHopper
         {
         public:
-            Phase2Solver(
+            FaceHopper(
                 const double *Q, const double *A, const double *b,
                 const std::vector<double> &x_bar,
                 int m, int n,
                 const Config &config);
 
-            // Find initial blocking face from good vertex
+            // Find initial blocking face from good vertex via ray tracing
             std::vector<int> find_initial_face(
                 const std::vector<double> &v);
             
-            // Explore faces to find optimal face (closest projection to x_bar)
+            // Hop between faces to find optimal face (closest projection to x_bar)
             std::vector<int> find_optimal_face(
                 const std::vector<int> &initial_face,
                 int &iterations);
+            
+            // Get cached Cholesky factorization of Q
+            const std::vector<double>& get_Q_chol() const { return Q_chol_; }
 
         private:
             double compute_intersection_parameter(
@@ -159,12 +186,19 @@ namespace geoqp
             std::vector<double> Q_chol_;
         };
 
-        class Phase3Solver
+        /**
+         * @brief Projector - projects x_bar onto the optimal face
+         * 
+         * Given the optimal face (active constraint set), computes the Q-weighted
+         * projection of x_bar onto that face. This is Phase III of the algorithm.
+         */
+        class Projector
         {
         public:
-            Phase3Solver(
-                const double *A, const double *b,
+            Projector(
+                const double *Q, const double *A, const double *b,
                 const std::vector<double> &x_bar,
+                const std::vector<double> &Q_chol,
                 int m, int n,
                 const Config &config);
 
@@ -173,9 +207,11 @@ namespace geoqp
                 std::vector<double> &lambda_out);
 
         private:
+            const double *Q_;
             const double *A_;
             const double *b_;
             std::vector<double> x_bar_;
+            std::vector<double> Q_chol_;
             int m_;
             int n_;
             Config config_;

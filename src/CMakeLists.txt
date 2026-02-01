@@ -2,9 +2,9 @@ set(GEOQP_SOURCES
     solver.cpp
     linear_algebra.cpp
     polytope.cpp
-    phase1.cpp
-    phase2.cpp
-    phase3.cpp
+    initializer.cpp
+    face_hopper.cpp
+    projector.cpp
     kkt_checker.cpp
     utilities.cpp
     c_api.cpp

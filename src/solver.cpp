@@ -71,12 +71,12 @@ public:
             // Phase I: Find good vertex (farthest from x_bar)
             auto phase1_start = Clock::now();
             
-            internal::Phase1Solver phase1(
+            internal::Initializer initializer(
                 problem.Q.data(), problem.A.data(), problem.b.data(), x_bar,
                 problem.m, problem.n, config_
             );
             
-            std::vector<double> good_vertex = phase1.find_good_vertex(
+            std::vector<double> good_vertex = initializer.find_good_vertex(
                 initial_vertex, sol.phase1_iterations, sol.vertices_explored
             );
             
@@ -88,23 +88,23 @@ public:
                           << " iterations, " << sol.vertices_explored << " vertices explored\n";
             }
             
-            // Phase II: Find initial face via ray tracing, then explore to find optimal face
+            // Phase II: Find initial face via ray tracing, then hop to find optimal face
             auto phase2_start = Clock::now();
             
-            internal::Phase2Solver phase2(
+            internal::FaceHopper face_hopper(
                 problem.Q.data(), problem.A.data(), problem.b.data(), x_bar,
                 problem.m, problem.n, config_
             );
             
             // Step 1: Ray trace to find initial blocking face
-            std::vector<int> initial_face = phase2.find_initial_face(good_vertex);
+            std::vector<int> initial_face = face_hopper.find_initial_face(good_vertex);
             
             if (config_.verbosity >= 2) {
                 std::cout << "Initial face has " << initial_face.size() << " constraints\n";
             }
             
-            // Step 2: Explore faces to find optimal one (closest projection to x_bar)
-            std::vector<int> optimal_face = phase2.find_optimal_face(
+            // Step 2: Hop between faces to find optimal one (closest projection to x_bar)
+            std::vector<int> optimal_face = face_hopper.find_optimal_face(
                 initial_face, sol.phase2_iterations
             );
             
@@ -113,7 +113,7 @@ public:
             
             if (config_.verbosity >= 1) {
                 std::cout << "Phase II: Optimal face found with " << optimal_face.size() 
-                          << " constraints after " << sol.phase2_iterations << " exploration iterations\n";
+                          << " constraints after " << sol.phase2_iterations << " face hops\n";
             }
             
             // Special case: if no active face found, x_bar is the solution
@@ -131,13 +131,14 @@ public:
                 // Phase III: Project x_bar onto optimal face
                 auto phase3_start = Clock::now();
                 
-                internal::Phase3Solver phase3(
-                    problem.A.data(), problem.b.data(), x_bar,
+                internal::Projector projector(
+                    problem.Q.data(), problem.A.data(), problem.b.data(), x_bar,
+                    face_hopper.get_Q_chol(),
                     problem.m, problem.n, config_
                 );
                 
                 std::vector<double> lambda;
-                sol.x = phase3.project_onto_face(optimal_face, lambda);
+                sol.x = projector.project_onto_face(optimal_face, lambda);
                 
                 auto phase3_end = Clock::now();
                 sol.phase3_time = std::chrono::duration<double>(phase3_end - phase3_start).count();

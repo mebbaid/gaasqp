@@ -7,14 +7,120 @@
 namespace geoqp {
 namespace internal {
 
-Phase1Solver::Phase1Solver(
+Initializer::Initializer(
     const double* Q, const double* A, const double* b,
     const std::vector<double>& x_bar,
     int m, int n,
     const Config& config
-) : Q_(Q), A_(A), b_(b), x_bar_(x_bar), m_(m), n_(n), config_(config) {}
+) : Q_(Q), A_(A), b_(b), x_bar_(x_bar), m_(m), n_(n), config_(config) {
+    // Detect if this is a box-constrained problem for fast path
+    detect_box_constraints();
+}
 
-double Phase1Solver::compute_q_weighted_distance_squared(
+void Initializer::detect_box_constraints() {
+    is_box_constrained_ = false;
+    box_lb_.clear();
+    box_ub_.clear();
+    
+    // Box constraints have form: x_i <= ub_i and -x_i <= -lb_i
+    // So we need m = 2n constraints, each with exactly one nonzero entry (+1 or -1)
+    
+    if (m_ != 2 * n_) {
+        return;  // Not box constraints
+    }
+    
+    box_lb_.resize(n_, -std::numeric_limits<double>::infinity());
+    box_ub_.resize(n_, std::numeric_limits<double>::infinity());
+    
+    // Check each constraint
+    for (int i = 0; i < m_; ++i) {
+        const double* a_row = A_ + i * n_;
+        
+        // Find the single nonzero entry
+        int nonzero_idx = -1;
+        double nonzero_val = 0.0;
+        bool is_single_nonzero = true;
+        
+        for (int j = 0; j < n_; ++j) {
+            if (std::abs(a_row[j]) > 1e-10) {
+                if (nonzero_idx >= 0) {
+                    is_single_nonzero = false;
+                    break;
+                }
+                nonzero_idx = j;
+                nonzero_val = a_row[j];
+            }
+        }
+        
+        if (!is_single_nonzero || nonzero_idx < 0) {
+            box_lb_.clear();
+            box_ub_.clear();
+            return;  // Not a box constraint
+        }
+        
+        // Check if coefficient is +1 or -1
+        if (std::abs(nonzero_val - 1.0) < 1e-10) {
+            // Upper bound: x_j <= b_i
+            box_ub_[nonzero_idx] = std::min(box_ub_[nonzero_idx], b_[i]);
+        } else if (std::abs(nonzero_val + 1.0) < 1e-10) {
+            // Lower bound: -x_j <= b_i => x_j >= -b_i
+            box_lb_[nonzero_idx] = std::max(box_lb_[nonzero_idx], -b_[i]);
+        } else {
+            box_lb_.clear();
+            box_ub_.clear();
+            return;  // Not a standard box constraint
+        }
+    }
+    
+    // Verify all bounds are finite
+    for (int j = 0; j < n_; ++j) {
+        if (!std::isfinite(box_lb_[j]) || !std::isfinite(box_ub_[j])) {
+            box_lb_.clear();
+            box_ub_.clear();
+            return;
+        }
+    }
+    
+    is_box_constrained_ = true;
+}
+
+std::vector<double> Initializer::find_good_vertex_box_fast() const {
+    // For box constraints, the farthest good vertex is easy to construct:
+    // For each dimension j, if x_bar[j] > midpoint, vertex[j] = lb[j], else ub[j]
+    // 
+    // But we also need it to be a "good" vertex:
+    //   a_i^T(x_bar - v) <= 0 for active constraints i
+    //
+    // For box constraints, if x_bar[j] > ub[j] and we're on the upper bound (v[j] = ub[j]):
+    //   a_j^T(x_bar - v) = x_bar[j] - ub[j] > 0  -- NOT good!
+    //
+    // So for a good vertex, we need:
+    //   - If x_bar[j] > ub[j], vertex should NOT be at ub[j] (go to lb[j])
+    //   - If x_bar[j] < lb[j], vertex should NOT be at lb[j] (go to ub[j])
+    //
+    // This naturally puts us on the "far side" from x_bar!
+    
+    std::vector<double> vertex(n_);
+    
+    for (int j = 0; j < n_; ++j) {
+        if (x_bar_[j] > box_ub_[j]) {
+            // x_bar violates upper bound - go to lower bound (far side, and good)
+            vertex[j] = box_lb_[j];
+        } else if (x_bar_[j] < box_lb_[j]) {
+            // x_bar violates lower bound - go to upper bound (far side, and good)
+            vertex[j] = box_ub_[j];
+        } else {
+            // x_bar is feasible in this dimension - go to the farther bound
+            double dist_to_lb = x_bar_[j] - box_lb_[j];
+            double dist_to_ub = box_ub_[j] - x_bar_[j];
+            vertex[j] = (dist_to_lb > dist_to_ub) ? box_lb_[j] : box_ub_[j];
+        }
+    }
+    
+    return vertex;
+}
+
+double Initializer::compute_q_weighted_distance_squared(
     const std::vector<double>& v) const {
     std::vector<double> diff(n_);
     for (int i = 0; i < n_; ++i) {
@@ -25,7 +131,7 @@ double Phase1Solver::compute_q_weighted_distance_squared(
     return LinearAlgebra::dot(diff.data(), Q_diff.data(), n_);
 }
 
-double Phase1Solver::compute_euclidean_distance_squared(
+double Initializer::compute_euclidean_distance_squared(
     const std::vector<double>& v) const {
     double dist_sq = 0.0;
     for (int i = 0; i < n_; ++i) {
@@ -35,7 +141,7 @@ double Phase1Solver::compute_euclidean_distance_squared(
     return dist_sq;
 }
 
-bool Phase1Solver::is_good_vertex(
+bool Initializer::is_good_vertex(
     const std::vector<double>& v,
     const std::vector<int>& active_set) const {
     // A vertex v is "good" if: a_i^T (x_bar - v) <= 0 for all active constraints i
@@ -53,7 +159,7 @@ bool Phase1Solver::is_good_vertex(
     return true;
 }
 
-std::vector<double> Phase1Solver::compute_vertex_from_active_set(
+std::vector<double> Initializer::compute_vertex_from_active_set(
     const std::vector<int>& active_indices) const {
     if (static_cast<int>(active_indices.size()) != n_) {
         return std::vector<double>();
@@ -87,13 +193,20 @@ std::vector<double> Phase1Solver::compute_vertex_from_active_set(
     return vertex;
 }
 
-std::vector<double> Phase1Solver::find_good_vertex(
+std::vector<double> Initializer::find_good_vertex(
     const std::vector<double>& initial_vertex,
     int& iterations,
     int& vertices_explored
 ) {
     iterations = 0;
     vertices_explored = 0;
+    
+    // Fast path for box constraints - O(n) instead of O(n^4)
+    if (is_box_constrained_) {
+        vertices_explored = 1;
+        iterations = 1;
+        return find_good_vertex_box_fast();
+    }
     
     Polytope polytope(A_, b_, m_, n_);
     
@@ -223,7 +336,7 @@ std::vector<double> Phase1Solver::find_good_vertex(
     return best_good_vertex;
 }
 
-bool Phase1Solver::is_direction_feasible(
+bool Initializer::is_direction_feasible(
     const std::vector<double>& v,
     const std::vector<double>& d,
     const std::vector<int>& active_set,
@@ -237,7 +350,7 @@ bool Phase1Solver::is_direction_feasible(
     return true;
 }
 
-int Phase1Solver::find_most_violated_constraint(
+int Initializer::find_most_violated_constraint(
     const std::vector<double>& v,
     const std::vector<double>& d,
     const std::vector<int>& active_set
@@ -255,7 +368,7 @@ int Phase1Solver::find_most_violated_constraint(
     return most_violated;
 }
 
-std::vector<double> Phase1Solver::pivot_to_neighbor(
+std::vector<double> Initializer::pivot_to_neighbor(
     const std::vector<double>& v,
     int constraint_to_drop
 ) {

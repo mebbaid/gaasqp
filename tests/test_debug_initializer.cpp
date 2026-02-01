@@ -1,5 +1,5 @@
 /**
- * Debug test for GeoQP Phase 1
+ * Debug test for GeoQP Initializer
  */
 #include <geoqp/geoqp.hpp>
 #include <iostream>

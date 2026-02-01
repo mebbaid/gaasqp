@@ -56,6 +56,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/ninja-1.13.2-h171cf75_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/openssl-3.6.1-h35e630c_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/osqp-eigen-0.11.0-h12c67fd_0.conda
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/qpoases-3.2.2-h5888daf_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/qpsolvers-eigen-0.2.0-h63051a3_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/rhash-1.4.6-hb9d3cd8_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/sysroot_linux-64-2.28-h4ee821c_9.conda
@@ -636,6 +637,16 @@ packages:
   license_family: BSD
   size: 38229
   timestamp: 1760090008563
+- conda: https://conda.anaconda.org/conda-forge/linux-64/qpoases-3.2.2-h5888daf_0.conda
+  sha256: 32851c0d1fd321ba6b0c3b7f15f9d8e33cd230825d2276eb5a7b3d866e4abd1b
+  md5: 56f2a22923b162a0c9da441600e148b1
+  depends:
+  - __glibc >=2.17,<3.0.a0
+  - libgcc >=13
+  - libstdcxx >=13
+  license: LGPL-2.1-or-later
+  size: 679363
+  timestamp: 1742462127423
 - conda: https://conda.anaconda.org/conda-forge/linux-64/qpsolvers-eigen-0.2.0-h63051a3_1.conda
   sha256: 53ed8bd36557c65bb95ac0d2cc28726235af992bc0c84c1568264c8b796abca7
   md5: 0e3864bb83869c2171fe4cbfa24a3ab2

@@ -5,48 +5,34 @@ name = "geoqp"
 platforms = ["linux-64"]
 version = "0.1.0"
 
-# =============================================================================
-# Tasks
-# =============================================================================
 
 [tasks]
-# Configure CMake build directory
 configure = { cmd = "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release", description = "Configure CMake build" }
-
-# Build the project
 build = { cmd = "cmake --build build -j$(nproc)", depends-on = ["configure"], description = "Build GeoQP library and examples" }
 
-# Build in debug mode
 configure-debug = { cmd = "cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug", description = "Configure CMake build (Debug)" }
 build-debug = { cmd = "cmake --build build -j$(nproc)", depends-on = ["configure-debug"], description = "Build in Debug mode" }
 
-# Clean build directory
 clean = { cmd = "rm -rf build", description = "Remove build directory" }
-
-# Rebuild from scratch
 rebuild = { cmd = "rm -rf build && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc)", description = "Clean and rebuild" }
 
-# Run tests
 test = { cmd = "cd build && ctest --output-on-failure", depends-on = ["build"], description = "Run all tests" }
 
-# Run examples
 run-simple = { cmd = "./build/examples/simple_example", depends-on = ["build"], description = "Run simple example" }
 run-mpc = { cmd = "./build/examples/mpc_example", depends-on = ["build"], description = "Run MPC example" }
 
-# Run benchmarks
 benchmark = { cmd = "./build/benchmarks/benchmark_osqp", depends-on = ["build"], description = "Run GeoQP vs OSQP benchmark" }
-benchmark-verbose = { cmd = "./build/benchmarks/benchmark_osqp 2>&1 | head -100", depends-on = ["build"], description = "Run benchmark with truncated output" }
+benchmark-qpoases = { cmd = "./build/benchmarks/benchmark_qpoases", depends-on = ["build"], description = "Run GeoQP vs qpOASES benchmark" }
 
-# Development workflow
+run-planar = { cmd = "./build/examples/planar_comparison", depends-on = ["build"], description = "Run 2D planar comparison" }
+
 dev = { cmd = "cmake --build build -j$(nproc) && cd build && ctest --output-on-failure", depends-on = ["configure"], description = "Build and test (fast iteration)" }
-
-# =============================================================================
-# Dependencies
-# =============================================================================
 
 [dependencies]
 qpsolvers-eigen = ">=0.2.0,<0.3"
+qpoases = ">=3.2,<4"
 eigen = ">=3.4.0,<4"
+
 cmake = ">=4.2.3,<5"
 cxx-compiler = ">=1.11.0,<2"
 ninja = ">=1.12,<2"

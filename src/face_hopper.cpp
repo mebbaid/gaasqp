@@ -9,7 +9,7 @@
 namespace geoqp {
 namespace internal {
 
-Phase2Solver::Phase2Solver(
+FaceHopper::FaceHopper(
     const double* Q, const double* A, const double* b,
     const std::vector<double>& x_bar,
     int m, int n,
@@ -25,7 +25,7 @@ Phase2Solver::Phase2Solver(
     }
 }
 
-double Phase2Solver::compute_intersection_parameter(
+double FaceHopper::compute_intersection_parameter(
     const std::vector<double>& v,
     int constraint_idx
 ) const {
@@ -58,7 +58,7 @@ double Phase2Solver::compute_intersection_parameter(
     return (b_[constraint_idx] - av) / ad;
 }
 
-std::vector<int> Phase2Solver::find_initial_face(
+std::vector<int> FaceHopper::find_initial_face(
     const std::vector<double>& v
 ) {
     // Ray: r(t) = v + t*(x_bar - v) for t in [0, 1]
@@ -146,11 +146,13 @@ std::vector<int> Phase2Solver::find_initial_face(
     return initial_face;
 }
 
-double Phase2Solver::compute_projection_distance_sq(
+double FaceHopper::compute_projection_distance_sq(
     const std::vector<int>& face
 ) const {
-    // Project x_bar onto face and return squared distance
-    // x* = x_bar - A_F^T (A_F A_F^T)^{-1} (A_F x_bar - b_F)
+    // Compute the Q-weighted projection of x_bar onto face and return squared distance
+    // We're minimizing (1/2) x^T Q x + g^T x subject to A_F x = b_F
+    // Since x_bar = -Q^{-1} g, the solution is:
+    //   x* = x_bar - Q^{-1} A_F^T (A_F Q^{-1} A_F^T)^{-1} (A_F x_bar - b_F)
     
     const int k = static_cast<int>(face.size());
     
@@ -181,40 +183,73 @@ double Phase2Solver::compute_projection_distance_sq(
     LinearAlgebra::matvec(A_F.data(), x_bar_.data(), Ax.data(), k, n_);
     
     // residual = A_F * x_bar - b_F
+    std::vector<double> residual(k);
     for (int i = 0; i < k; ++i) {
-        Ax[i] -= b_F[i];
+        residual[i] = Ax[i] - b_F[i];
     }
     
-    // Compute Gram matrix G = A_F * A_F^T (k x k)
-    std::vector<double> G(k * k);
-    for (int i = 0; i < k; ++i) {
-        const double* row_i = A_F.data() + i * n_;
-        for (int j = i; j < k; ++j) {
-            const double* row_j = A_F.data() + j * n_;
-            double sum = LinearAlgebra::dot(row_i, row_j, n_);
-            G[i * k + j] = sum;
-            G[j * k + i] = sum; // Symmetric
+    // Compute Q^{-1} A_F^T by solving Q * y_j = A_F[j,:] for each row j
+    // Q_inv_AT is n x k matrix where column j = Q^{-1} * A_F[j,:]^T
+    std::vector<double> Q_inv_AT(n_ * k);
+    
+    for (int j = 0; j < k; ++j) {
+        // Get j-th row of A_F as a column vector
+        std::vector<double> a_col(n_);
+        for (int i = 0; i < n_; ++i) {
+            a_col[i] = A_F[j * n_ + i];
+        }
+        
+        // Solve Q * y = a_col for y using pre-computed Cholesky if available
+        std::vector<double> y(n_);
+        
+        if (!Q_chol_.empty()) {
+            LinearAlgebra::solve_cholesky(Q_chol_.data(), a_col.data(), y.data(), n_);
+        } else {
+            // Fallback to general solve
+            std::vector<double> Q_copy(n_ * n_);
+            std::memcpy(Q_copy.data(), Q_, n_ * n_ * sizeof(double));
+            try {
+                LinearAlgebra::solve_linear_system(Q_copy.data(), a_col.data(), y.data(), n_);
+            } catch (...) {
+                return std::numeric_limits<double>::infinity(); // Singular - invalid face
+            }
+        }
+        
+        // Store as j-th column of Q_inv_AT
+        for (int i = 0; i < n_; ++i) {
+            Q_inv_AT[i * k + j] = y[i];
         }
     }
     
-    // Solve G * lambda = residual
+    // Compute Schur complement S = A_F * Q^{-1} * A_F^T (k x k)
+    std::vector<double> S(k * k);
+    for (int i = 0; i < k; ++i) {
+        for (int j = i; j < k; ++j) {
+            double sum = 0.0;
+            for (int l = 0; l < n_; ++l) {
+                sum += A_F[i * n_ + l] * Q_inv_AT[l * k + j];
+            }
+            S[i * k + j] = sum;
+            S[j * k + i] = sum; // Symmetric
+        }
+    }
+    
+    // Solve S * lambda = residual
     std::vector<double> lambda(k);
     try {
-        LinearAlgebra::solve_linear_system(G.data(), Ax.data(), lambda.data(), k);
+        LinearAlgebra::solve_linear_system(S.data(), residual.data(), lambda.data(), k);
     } catch (...) {
         return std::numeric_limits<double>::infinity(); // Singular - invalid face
     }
     
-    // Compute projection: x* = x_bar - A_F^T * lambda
+    // Compute projection: x* = x_bar - Q^{-1} A_F^T * lambda
     std::vector<double> x_star(n_);
-    std::memcpy(x_star.data(), x_bar_.data(), n_ * sizeof(double));
-    
-    for (int i = 0; i < k; ++i) {
-        const double lambda_i = lambda[i];
-        const double* a_row = A_F.data() + i * n_;
-        for (int j = 0; j < n_; ++j) {
-            x_star[j] -= a_row[j] * lambda_i;
+    for (int i = 0; i < n_; ++i) {
+        double correction = 0.0;
+        for (int j = 0; j < k; ++j) {
+            correction += Q_inv_AT[i * k + j] * lambda[j];
         }
+        x_star[i] = x_bar_[i] - correction;
     }
     
     // Check dual feasibility: all lambda >= 0
@@ -245,11 +280,12 @@ double Phase2Solver::compute_projection_distance_sq(
         }
     }
     
-    // Compute ||x* - x_bar||^2
+    // Compute ||x* - x_bar||^2 (Euclidean distance)
+    // The projection is computed using Q, but we compare faces by Euclidean distance to x_bar
     double dist_sq = 0.0;
-    for (int j = 0; j < n_; ++j) {
-        double d = x_star[j] - x_bar_[j];
-        dist_sq += d * d;
+    for (int i = 0; i < n_; ++i) {
+        double di = x_star[i] - x_bar_[i];
+        dist_sq += di * di;
     }
     
     if (config_.verbosity >= 3) {
@@ -261,7 +297,7 @@ double Phase2Solver::compute_projection_distance_sq(
     return dist_sq;
 }
 
-std::vector<std::vector<int>> Phase2Solver::get_neighbor_faces(
+std::vector<std::vector<int>> FaceHopper::get_neighbor_faces(
     const std::vector<int>& face
 ) const {
     std::vector<std::vector<int>> neighbors;
@@ -297,9 +333,10 @@ std::vector<std::vector<int>> Phase2Solver::get_neighbor_faces(
     return neighbors;
 }
 
-// Compute projection and lambdas for a face
+// Compute Q-weighted projection and lambdas for a face
 // Returns true if feasible, fills x_star and lambda
-bool Phase2Solver::compute_projection_and_lambda(
+// Uses the formula: x* = x_bar - Q^{-1} A^T (A Q^{-1} A^T)^{-1} (A x_bar - b)
+bool FaceHopper::compute_projection_and_lambda(
     const std::vector<int>& face,
     std::vector<double>& x_star,
     std::vector<double>& lambda
@@ -330,37 +367,70 @@ bool Phase2Solver::compute_projection_and_lambda(
         std::memcpy(A_F.data() + i * n_, A_ + idx * n_, n_ * sizeof(double));
     }
     
-    // Compute residual
-    std::vector<double> Ax(k);
-    LinearAlgebra::matvec(A_F.data(), x_bar_.data(), Ax.data(), k, n_);
-    for (int i = 0; i < k; ++i) Ax[i] -= b_F[i];
+    // Compute residual: A_F * x_bar - b_F
+    std::vector<double> residual(k);
+    LinearAlgebra::matvec(A_F.data(), x_bar_.data(), residual.data(), k, n_);
+    for (int i = 0; i < k; ++i) residual[i] -= b_F[i];
     
-    // Compute Gram matrix
-    std::vector<double> G(k * k);
-    for (int i = 0; i < k; ++i) {
-        const double* row_i = A_F.data() + i * n_;
-        for (int j = i; j < k; ++j) {
-            const double* row_j = A_F.data() + j * n_;
-            double sum = LinearAlgebra::dot(row_i, row_j, n_);
-            G[i * k + j] = sum;
-            G[j * k + i] = sum;
+    // Compute Q^{-1} A_F^T (n x k matrix)
+    // For each column j: solve Q * y = A_F[j,:] for y
+    // Use pre-computed Cholesky factorization if available
+    std::vector<double> Q_inv_AT(n_ * k);
+    
+    for (int j = 0; j < k; ++j) {
+        // Get j-th row of A_F as a column vector
+        std::vector<double> a_col(n_);
+        for (int i = 0; i < n_; ++i) {
+            a_col[i] = A_F[j * n_ + i];
+        }
+        
+        // Solve Q * y = a_col for y using Cholesky
+        std::vector<double> y(n_);
+        if (!Q_chol_.empty()) {
+            LinearAlgebra::solve_cholesky(Q_chol_.data(), a_col.data(), y.data(), n_);
+        } else {
+            std::vector<double> Q_copy(n_ * n_);
+            std::memcpy(Q_copy.data(), Q_, n_ * n_ * sizeof(double));
+            try {
+                LinearAlgebra::solve_linear_system(Q_copy.data(), a_col.data(), y.data(), n_);
+            } catch (...) {
+                return false;
+            }
+        }
+        
+        // Store as j-th column of Q_inv_AT
+        for (int i = 0; i < n_; ++i) {
+            Q_inv_AT[i * k + j] = y[i];
         }
     }
     
-    // Solve for lambda
+    // Compute Schur complement: S = A_F * Q^{-1} * A_F^T (k x k)
+    std::vector<double> S(k * k);
+    for (int i = 0; i < k; ++i) {
+        for (int j = i; j < k; ++j) {
+            double sum = 0.0;
+            for (int l = 0; l < n_; ++l) {
+                sum += A_F[i * n_ + l] * Q_inv_AT[l * k + j];
+            }
+            S[i * k + j] = sum;
+            S[j * k + i] = sum; // Symmetric
+        }
+    }
+    
+    // Solve S * lambda = residual
     try {
-        LinearAlgebra::solve_linear_system(G.data(), Ax.data(), lambda.data(), k);
+        LinearAlgebra::solve_linear_system(S.data(), residual.data(), lambda.data(), k);
     } catch (...) {
         return false;
     }
     
-    // Compute x_star = x_bar - A_F^T * lambda
-    for (int i = 0; i < k; ++i) {
-        const double lambda_i = lambda[i];
-        const double* a_row = A_F.data() + i * n_;
-        for (int j = 0; j < n_; ++j) {
-            x_star[j] -= a_row[j] * lambda_i;
+    // Compute x_star = x_bar - Q^{-1} A_F^T * lambda
+    for (int i = 0; i < n_; ++i) {
+        double correction = 0.0;
+        for (int j = 0; j < k; ++j) {
+            correction += Q_inv_AT[i * k + j] * lambda[j];
         }
+        x_star[i] = x_bar_[i] - correction;
     }
     
     // Check primal feasibility
@@ -375,7 +445,7 @@ bool Phase2Solver::compute_projection_and_lambda(
     return true;
 }
 
-std::vector<int> Phase2Solver::find_optimal_face(
+std::vector<int> FaceHopper::find_optimal_face(
     const std::vector<int>& initial_face,
     int& iterations
 ) {
