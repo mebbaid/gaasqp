@@ -38,7 +38,13 @@ namespace geoqp
         Status status;
         int iterations;
         int phase1_iterations;
+        int phase2_iterations;      // Face exploration iterations
+        int num_active_constraints; // Number of active constraints at solution
+        int vertices_explored;      // Number of vertices explored in Phase 1
         double solve_time;
+        double phase1_time;
+        double phase2_time;
+        double phase3_time;
     };
 
     struct Problem

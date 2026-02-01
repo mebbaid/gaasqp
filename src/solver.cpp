@@ -11,12 +11,19 @@ public:
     explicit SolverImpl(const Config& config) : config_(config) {}
     
     Solution solve(const Problem& problem) {
-        auto start_time = std::chrono::high_resolution_clock::now();
+        using Clock = std::chrono::high_resolution_clock;
+        auto start_time = Clock::now();
         
         Solution sol;
         sol.status = Status::SUCCESS;
         sol.iterations = 0;
         sol.phase1_iterations = 0;
+        sol.phase2_iterations = 0;
+        sol.vertices_explored = 0;
+        sol.num_active_constraints = 0;
+        sol.phase1_time = 0.0;
+        sol.phase2_time = 0.0;
+        sol.phase3_time = 0.0;
         
         try {
             // Validate problem
@@ -43,7 +50,7 @@ public:
                 sol.lambda.resize(problem.m, 0.0);
                 sol.objective_value = compute_objective(x_bar, problem.Q, problem.g, problem.n);
                 
-                auto end_time = std::chrono::high_resolution_clock::now();
+                auto end_time = Clock::now();
                 sol.solve_time = std::chrono::duration<double>(end_time - start_time).count();
                 return sol;
             }
@@ -61,62 +68,93 @@ public:
                 std::cout << "Initial vertex found\n";
             }
             
-            // Phase I: Find good vertex
+            // Phase I: Find good vertex (farthest from x_bar)
+            auto phase1_start = Clock::now();
+            
             internal::Phase1Solver phase1(
                 problem.Q.data(), problem.A.data(), problem.b.data(), x_bar,
                 problem.m, problem.n, config_
             );
             
             std::vector<double> good_vertex = phase1.find_good_vertex(
-                initial_vertex, sol.phase1_iterations
+                initial_vertex, sol.phase1_iterations, sol.vertices_explored
             );
             
+            auto phase1_end = Clock::now();
+            sol.phase1_time = std::chrono::duration<double>(phase1_end - phase1_start).count();
+            
             if (config_.verbosity >= 1) {
-                std::cout << "Good vertex found after " << sol.phase1_iterations << " iterations\n";
+                std::cout << "Phase I: Good vertex found after " << sol.phase1_iterations 
+                          << " iterations, " << sol.vertices_explored << " vertices explored\n";
             }
             
-            // Phase II: Find active face
+            // Phase II: Find initial face via ray tracing, then explore to find optimal face
+            auto phase2_start = Clock::now();
+            
             internal::Phase2Solver phase2(
-                problem.A.data(), problem.b.data(), x_bar,
+                problem.Q.data(), problem.A.data(), problem.b.data(), x_bar,
                 problem.m, problem.n, config_
             );
             
-            std::vector<int> active_face = phase2.find_active_face(good_vertex);
+            // Step 1: Ray trace to find initial blocking face
+            std::vector<int> initial_face = phase2.find_initial_face(good_vertex);
             
-            if (config_.verbosity >= 1) {
-                std::cout << "Active face identified with " << active_face.size() << " constraints\n";
+            if (config_.verbosity >= 2) {
+                std::cout << "Initial face has " << initial_face.size() << " constraints\n";
             }
             
-            // Special case: if no active face found, the good vertex itself might be optimal
-            // This can happen in low-dimensional cases
-            if (active_face.empty()) {
-                // Use the good vertex as the solution
-                sol.x = good_vertex;
+            // Step 2: Explore faces to find optimal one (closest projection to x_bar)
+            std::vector<int> optimal_face = phase2.find_optimal_face(
+                initial_face, sol.phase2_iterations
+            );
+            
+            auto phase2_end = Clock::now();
+            sol.phase2_time = std::chrono::duration<double>(phase2_end - phase2_start).count();
+            
+            if (config_.verbosity >= 1) {
+                std::cout << "Phase II: Optimal face found with " << optimal_face.size() 
+                          << " constraints after " << sol.phase2_iterations << " exploration iterations\n";
+            }
+            
+            // Special case: if no active face found, x_bar is the solution
+            if (optimal_face.empty()) {
+                sol.x = x_bar;
                 sol.lambda.resize(problem.m, 0.0);
                 sol.objective_value = compute_objective(sol.x, problem.Q, problem.g, problem.n);
                 sol.active_set.clear();
+                sol.num_active_constraints = 0;
                 
                 if (config_.verbosity >= 1) {
-                    std::cout << "No active face found - using good vertex as solution\n";
+                    std::cout << "No active face - x_bar is optimal\n";
                 }
             } else {
-                // Phase III: Project onto face
+                // Phase III: Project x_bar onto optimal face
+                auto phase3_start = Clock::now();
+                
                 internal::Phase3Solver phase3(
                     problem.A.data(), problem.b.data(), x_bar,
                     problem.m, problem.n, config_
                 );
                 
                 std::vector<double> lambda;
-                sol.x = phase3.project_onto_face(active_face, lambda);
+                sol.x = phase3.project_onto_face(optimal_face, lambda);
+                
+                auto phase3_end = Clock::now();
+                sol.phase3_time = std::chrono::duration<double>(phase3_end - phase3_start).count();
                 
                 // Prepare full lambda vector
                 sol.lambda.resize(problem.m, 0.0);
-                for (size_t i = 0; i < active_face.size(); ++i) {
-                    sol.lambda[active_face[i]] = lambda[i];
+                for (size_t i = 0; i < optimal_face.size(); ++i) {
+                    sol.lambda[optimal_face[i]] = lambda[i];
                 }
                 
-                sol.active_set = active_face;
+                sol.active_set = optimal_face;
+                sol.num_active_constraints = static_cast<int>(optimal_face.size());
                 sol.objective_value = compute_objective(sol.x, problem.Q, problem.g, problem.n);
+                
+                if (config_.verbosity >= 1) {
+                    std::cout << "Phase III: Projection complete\n";
+                }
             }
             
             // Check KKT conditions if requested
@@ -131,7 +169,6 @@ public:
                     if (config_.verbosity >= 1) {
                         std::cout << "Warning: KKT conditions not satisfied to tolerance\n";
                     }
-                    // Could implement fallback to active-set refinement here
                 }
             }
             
@@ -156,7 +193,7 @@ public:
             }
         }
         
-        auto end_time = std::chrono::high_resolution_clock::now();
+        auto end_time = Clock::now();
         sol.solve_time = std::chrono::duration<double>(end_time - start_time).count();
         
         return sol;

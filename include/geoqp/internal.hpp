@@ -65,7 +65,8 @@ namespace geoqp
 
             std::vector<double> find_good_vertex(
                 const std::vector<double> &initial_vertex,
-                int &iterations);
+                int &iterations,
+                int &vertices_explored);
 
         private:
             bool is_direction_feasible(
@@ -83,9 +84,22 @@ namespace geoqp
                 const std::vector<double> &v,
                 int constraint_to_drop);
             
+            // Check if vertex is "good" (direction to x_bar is feasible)
+            bool is_good_vertex(
+                const std::vector<double> &v,
+                const std::vector<int> &active_set) const;
+            
             // Compute Q-weighted squared distance: (v - x_bar)^T Q (v - x_bar)
             double compute_q_weighted_distance_squared(
                 const std::vector<double> &v) const;
+            
+            // Compute Euclidean squared distance to x_bar
+            double compute_euclidean_distance_squared(
+                const std::vector<double> &v) const;
+            
+            // Compute vertex from active constraint set
+            std::vector<double> compute_vertex_from_active_set(
+                const std::vector<int> &active_indices) const;
 
             const double *Q_;
             const double *A_;
@@ -100,25 +114,49 @@ namespace geoqp
         {
         public:
             Phase2Solver(
-                const double *A, const double *b,
+                const double *Q, const double *A, const double *b,
                 const std::vector<double> &x_bar,
                 int m, int n,
                 const Config &config);
 
-            std::vector<int> find_active_face(
+            // Find initial blocking face from good vertex
+            std::vector<int> find_initial_face(
                 const std::vector<double> &v);
+            
+            // Explore faces to find optimal face (closest projection to x_bar)
+            std::vector<int> find_optimal_face(
+                const std::vector<int> &initial_face,
+                int &iterations);
 
         private:
             double compute_intersection_parameter(
                 const std::vector<double> &v,
                 int constraint_idx) const;
+            
+            // Compute squared distance from x_bar to its projection on a face
+            double compute_projection_distance_sq(
+                const std::vector<int> &face) const;
+            
+            // Compute projection and lambdas for a face
+            bool compute_projection_and_lambda(
+                const std::vector<int> &face,
+                std::vector<double> &x_star,
+                std::vector<double> &lambda) const;
+            
+            // Get neighboring faces by adding/dropping constraints
+            std::vector<std::vector<int>> get_neighbor_faces(
+                const std::vector<int> &face) const;
 
+            const double *Q_;
             const double *A_;
             const double *b_;
             std::vector<double> x_bar_;
             int m_;
             int n_;
             Config config_;
+            
+            // Cached Cholesky factorization of Q for projections
+            std::vector<double> Q_chol_;
         };
 
         class Phase3Solver
