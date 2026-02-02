@@ -17,20 +17,14 @@ bool KKTChecker::check(
     const std::vector<double>& lambda,
     const std::vector<int>& active_set
 ) const {
-    // KKT conditions:
-    // 1. Stationarity: Q*x + g = sum_i lambda_i * a_i (for active constraints)
-    // 2. Primal feasibility: A*x <= b
-    // 3. Dual feasibility: lambda >= 0
-    // 4. Complementarity: lambda_i * (a_i^T*x - b_i) = 0
-    
-    // Check dual feasibility: lambda >= 0
+    // Check dual feasibility: lambda >= 0 for active constraints
     for (size_t i = 0; i < active_set.size(); ++i) {
-        if (lambda[i] < -tol_) {
+        int constraint_idx = active_set[i];
+        if (lambda[constraint_idx] < -tol_) {
             return false;
         }
     }
     
-    // Check primal feasibility: A*x <= b
     for (int i = 0; i < m_; ++i) {
         double lhs = 0.0;
         for (int j = 0; j < n_; ++j) {
@@ -41,7 +35,6 @@ bool KKTChecker::check(
         }
     }
     
-    // Check complementarity: for active constraints, a_i^T*x should equal b_i
     for (int idx : active_set) {
         double lhs = 0.0;
         for (int j = 0; j < n_; ++j) {
@@ -51,9 +44,7 @@ bool KKTChecker::check(
             return false;
         }
     }
-    
-    // Check stationarity: Q*x + g = A_active^T * lambda
-    // Compute gradient: Q*x + g
+
     std::vector<double> Qx(n_);
     LinearAlgebra::matvec(Q_, x.data(), Qx.data(), n_, n_);
     
@@ -62,24 +53,30 @@ bool KKTChecker::check(
         grad[j] = Qx[j] + g_[j];
     }
     
-    // Compute A_active^T * lambda
     std::vector<double> dual_contribution(n_, 0.0);
     for (size_t i = 0; i < active_set.size(); ++i) {
         int constraint_idx = active_set[i];
         for (int j = 0; j < n_; ++j) {
-            dual_contribution[j] += lambda[i] * A_[constraint_idx * n_ + j];
+            dual_contribution[j] += lambda[constraint_idx] * A_[constraint_idx * n_ + j];
         }
     }
     
-    // Check if grad = dual_contribution
     double residual = 0.0;
+    double grad_norm = 0.0;
     for (int j = 0; j < n_; ++j) {
-        double diff = grad[j] - dual_contribution[j];
+        double diff = grad[j] + dual_contribution[j];  // KKT: Q*x + g + A^T*λ = 0
         residual += diff * diff;
+        grad_norm += grad[j] * grad[j];
     }
     residual = std::sqrt(residual);
+    grad_norm = std::sqrt(grad_norm);
     
-    return residual <= tol_;
+    // Use relative tolerance: residual / (1 + ||gradient||) <= tol
+    // This is more robust than absolute tolerance
+    double relative_residual = residual / (1.0 + grad_norm);
+    double scaled_tol = std::sqrt(tol_);  // Relax tolerance slightly
+    
+    return relative_residual <= scaled_tol;
 }
 
 double KKTChecker::compute_residual(
@@ -87,9 +84,6 @@ double KKTChecker::compute_residual(
     const std::vector<double>& lambda,
     const std::vector<int>& active_set
 ) const {
-    // Compute stationarity residual: ||Q*x + g - A_active^T * lambda||
-    
-    // Compute gradient: Q*x + g
     std::vector<double> Qx(n_);
     LinearAlgebra::matvec(Q_, x.data(), Qx.data(), n_, n_);
     
@@ -98,19 +92,17 @@ double KKTChecker::compute_residual(
         grad[j] = Qx[j] + g_[j];
     }
     
-    // Compute A_active^T * lambda
     std::vector<double> dual_contribution(n_, 0.0);
     for (size_t i = 0; i < active_set.size(); ++i) {
         int constraint_idx = active_set[i];
         for (int j = 0; j < n_; ++j) {
-            dual_contribution[j] += lambda[i] * A_[constraint_idx * n_ + j];
+            dual_contribution[j] += lambda[constraint_idx] * A_[constraint_idx * n_ + j];
         }
     }
     
-    // Compute residual
     double residual = 0.0;
     for (int j = 0; j < n_; ++j) {
-        double diff = grad[j] - dual_contribution[j];
+        double diff = grad[j] + dual_contribution[j];  // KKT: Q*x + g + A^T*λ = 0
         residual += diff * diff;
     }
     

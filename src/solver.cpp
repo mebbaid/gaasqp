@@ -167,8 +167,10 @@ public:
                 );
                 
                 if (!kkt.check(sol.x, sol.lambda, sol.active_set)) {
+                    double residual = kkt.compute_residual(sol.x, sol.lambda, sol.active_set);
                     if (config_.verbosity >= 1) {
-                        std::cout << "Warning: KKT conditions not satisfied to tolerance\n";
+                        std::cout << "Warning: KKT conditions not satisfied (residual: " 
+                                  << residual << ")\n";
                     }
                 }
             }
