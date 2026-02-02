@@ -26,7 +26,9 @@ namespace geoqp
         int max_iterations = 1000;
         bool warm_start = false;
         bool check_optimality = true;
-        int verbosity = 0;
+    int verbosity = 0;
+    // Timing verbosity: 0 = off, 1 = print aggregate timings
+    int timing_verbosity = 0;
     };
 
     struct Solution

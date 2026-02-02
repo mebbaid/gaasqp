@@ -1,5 +1,5 @@
 [workspace]
-authors = ["mebbaid <mohamed.elobaid@iit.it>"]
+authors = ["mebbaid <mohamed.elobaid@kaust.edu.sa>"]
 channels = ["conda-forge"]
 name = "geoqp"
 platforms = ["linux-64"]

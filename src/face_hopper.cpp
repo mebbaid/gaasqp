@@ -5,9 +5,12 @@
 #include <set>
 #include <cstring>
 #include <iostream>
+#include <chrono>
 
 namespace geoqp {
 namespace internal {
+
+// We will use internal::Timer and aggregate timings into timing_stats_
 
 FaceHopper::FaceHopper(
     const double* Q, const double* A, const double* b,
@@ -52,6 +55,7 @@ double FaceHopper::compute_intersection_parameter(
     const std::vector<double>& v,
     int constraint_idx
 ) const {
+    Timer t;
     const double* a_row = A_ + constraint_idx * n_;
     double av = 0.0;
     double ad = 0.0;
@@ -69,16 +73,25 @@ double FaceHopper::compute_intersection_parameter(
     }
     
     if (std::abs(ad) < 1e-14) {
-        return (std::abs(av - b_[constraint_idx]) < 1e-10) ? 
-               0.0 : std::numeric_limits<double>::infinity();
+        double res = (std::abs(av - b_[constraint_idx]) < 1e-10) ? 0.0 : std::numeric_limits<double>::infinity();
+        if (config_.timing_verbosity > 0) {
+            timing_stats_.compute_intersection_total += t.elapsed_ms();
+            ++timing_stats_.compute_intersection_calls;
+        }
+        return res;
     }
-    
-    return (b_[constraint_idx] - av) / ad;
+    double out = (b_[constraint_idx] - av) / ad;
+    if (config_.timing_verbosity > 0) {
+        timing_stats_.compute_intersection_total += t.elapsed_ms();
+        ++timing_stats_.compute_intersection_calls;
+    }
+    return out;
 }
 
 std::vector<int> FaceHopper::find_initial_face(
     const std::vector<double>& v
 ) {
+    Timer t;
     std::vector<int> active_at_v;
     for (int i = 0; i < m_; ++i) {
         const double* a_row = A_ + i * n_;
@@ -98,6 +111,10 @@ std::vector<int> FaceHopper::find_initial_face(
     }
     
     if (!blocking_at_v.empty()) {
+        if (config_.timing_verbosity > 0) {
+            timing_stats_.find_initial_face_total += t.elapsed_ms();
+            ++timing_stats_.find_initial_face_calls;
+        }
         return blocking_at_v;
     }
     
@@ -121,11 +138,19 @@ std::vector<int> FaceHopper::find_initial_face(
         }
         
         if (x_bar_feasible) {
+            if (config_.timing_verbosity > 0) {
+                timing_stats_.find_initial_face_total += t.elapsed_ms();
+                ++timing_stats_.find_initial_face_calls;
+            }
             return std::vector<int>();
         }
     }
     
     if (!std::isfinite(t_min)) {
+        if (config_.timing_verbosity > 0) {
+            timing_stats_.find_initial_face_total += t.elapsed_ms();
+            ++timing_stats_.find_initial_face_calls;
+        }
         return std::vector<int>();
     }
     
@@ -139,6 +164,11 @@ std::vector<int> FaceHopper::find_initial_face(
         }
     }
     
+    if (config_.timing_verbosity > 0) {
+        timing_stats_.find_initial_face_total += t.elapsed_ms();
+        ++timing_stats_.find_initial_face_calls;
+    }
+
     return initial_face;
 }
 
@@ -147,6 +177,7 @@ bool FaceHopper::compute_projection_and_lambda(
     std::vector<double>& x_star,
     std::vector<double>& lambda
 ) const {
+    Timer t;
     const int k = static_cast<int>(face.size());
     x_star = x_bar_;
     lambda.resize(k);
@@ -156,8 +187,16 @@ bool FaceHopper::compute_projection_and_lambda(
             const double* a_row = A_ + i * n_;
             double ax = LinearAlgebra::dot(a_row, x_bar_.data(), n_);
             if (ax > b_[i] + config_.tolerance) {
+                if (config_.timing_verbosity > 0) {
+                    timing_stats_.compute_projection_total += t.elapsed_ms();
+                    ++timing_stats_.compute_projection_calls;
+                }
                 return false;
             }
+        }
+        if (config_.timing_verbosity > 0) {
+            timing_stats_.compute_projection_total += t.elapsed_ms();
+            ++timing_stats_.compute_projection_calls;
         }
         return true;
     }
@@ -201,6 +240,10 @@ bool FaceHopper::compute_projection_and_lambda(
                 try {
                     LinearAlgebra::solve_linear_system(Q_copy.data(), rhs.data(), col.data(), n_);
                 } catch (...) {
+                    if (config_.timing_verbosity > 0) {
+                        timing_stats_.compute_projection_total += t.elapsed_ms();
+                        ++timing_stats_.compute_projection_calls;
+                    }
                     return false;
                 }
             }
@@ -217,6 +260,10 @@ bool FaceHopper::compute_projection_and_lambda(
         try {
             LinearAlgebra::solve_linear_system(S.data(), residual.data(), lambda.data(), k);
         } catch (...) {
+            if (config_.timing_verbosity > 0) {
+                timing_stats_.compute_projection_total += t.elapsed_ms();
+                ++timing_stats_.compute_projection_calls;
+            }
             return false;
         }
         
@@ -233,10 +280,18 @@ bool FaceHopper::compute_projection_and_lambda(
             const double* a_row = A_ + i * n_;
             double ax = LinearAlgebra::dot(a_row, x_star.data(), n_);
             if (ax > b_[i] + config_.tolerance) {
+                if (config_.timing_verbosity > 0) {
+                    timing_stats_.compute_projection_total += t.elapsed_ms();
+                    ++timing_stats_.compute_projection_calls;
+                }
                 return false;
             }
         }
         
+        if (config_.timing_verbosity > 0) {
+            timing_stats_.compute_projection_total += t.elapsed_ms();
+            ++timing_stats_.compute_projection_calls;
+        }
         return true;
     }
     
@@ -302,6 +357,10 @@ bool FaceHopper::compute_projection_and_lambda(
     try {
         LinearAlgebra::solve_linear_system(S.data(), residual.data(), lambda.data(), k);
     } catch (...) {
+        if (config_.timing_verbosity > 0) {
+            timing_stats_.compute_projection_total += t.elapsed_ms();
+            ++timing_stats_.compute_projection_calls;
+        }
         return false;
     }
     
@@ -317,8 +376,17 @@ bool FaceHopper::compute_projection_and_lambda(
         const double* a_row = A_ + i * n_;
         double ax = LinearAlgebra::dot(a_row, x_star.data(), n_);
         if (ax > b_[i] + config_.tolerance) {
+            if (config_.timing_verbosity > 0) {
+                timing_stats_.compute_projection_total += t.elapsed_ms();
+                ++timing_stats_.compute_projection_calls;
+            }
             return false;
         }
+    }
+    
+    if (config_.timing_verbosity > 0) {
+        timing_stats_.compute_projection_total += t.elapsed_ms();
+        ++timing_stats_.compute_projection_calls;
     }
     
     return true;
@@ -328,9 +396,24 @@ std::vector<int> FaceHopper::find_optimal_face(
     const std::vector<int>& initial_face,
     int& iterations
 ) {
+    Timer t;
     iterations = 0;
     
     if (initial_face.empty()) {
+        if (config_.timing_verbosity > 0) {
+            timing_stats_.find_optimal_face_total += t.elapsed_ms();
+            ++timing_stats_.find_optimal_face_calls;
+            // print aggregate summary
+            std::cout << "FaceHopper timing summary:\n";
+            std::cout << "  compute_intersection: " << timing_stats_.compute_intersection_calls
+                      << " calls, " << timing_stats_.compute_intersection_total << " ms\n";
+            std::cout << "  find_initial_face: " << timing_stats_.find_initial_face_calls
+                      << " calls, " << timing_stats_.find_initial_face_total << " ms\n";
+            std::cout << "  compute_projection: " << timing_stats_.compute_projection_calls
+                      << " calls, " << timing_stats_.compute_projection_total << " ms\n";
+            std::cout << "  find_optimal_face: " << timing_stats_.find_optimal_face_calls
+                      << " calls, " << timing_stats_.find_optimal_face_total << " ms\n";
+        }
         return initial_face;
     }
     
@@ -409,6 +492,20 @@ std::vector<int> FaceHopper::find_optimal_face(
                 if (config_.verbosity >= 3) {
                     std::cout << "  Optimal face with " << current_face.size() << " constraints\n";
                 }
+                if (config_.timing_verbosity > 0) {
+                    timing_stats_.find_optimal_face_total += t.elapsed_ms();
+                    ++timing_stats_.find_optimal_face_calls;
+                    // print aggregate summary
+                    std::cout << "FaceHopper timing summary:\n";
+                    std::cout << "  compute_intersection: " << timing_stats_.compute_intersection_calls
+                              << " calls, " << timing_stats_.compute_intersection_total << " ms\n";
+                    std::cout << "  find_initial_face: " << timing_stats_.find_initial_face_calls
+                              << " calls, " << timing_stats_.find_initial_face_total << " ms\n";
+                    std::cout << "  compute_projection: " << timing_stats_.compute_projection_calls
+                              << " calls, " << timing_stats_.compute_projection_total << " ms\n";
+                    std::cout << "  find_optimal_face: " << timing_stats_.find_optimal_face_calls
+                              << " calls, " << timing_stats_.find_optimal_face_total << " ms\n";
+                }
                 return current_face;
             }
         } else {
@@ -429,6 +526,19 @@ std::vector<int> FaceHopper::find_optimal_face(
                 if (config_.verbosity >= 2) {
                     std::cout << "  Warning: no violated constraint but projection infeasible\n";
                 }
+                if (config_.timing_verbosity > 0) {
+                    timing_stats_.find_optimal_face_total += t.elapsed_ms();
+                    ++timing_stats_.find_optimal_face_calls;
+                    std::cout << "FaceHopper timing summary:\n";
+                    std::cout << "  compute_intersection: " << timing_stats_.compute_intersection_calls
+                              << " calls, " << timing_stats_.compute_intersection_total << " ms\n";
+                    std::cout << "  find_initial_face: " << timing_stats_.find_initial_face_calls
+                              << " calls, " << timing_stats_.find_initial_face_total << " ms\n";
+                    std::cout << "  compute_projection: " << timing_stats_.compute_projection_calls
+                              << " calls, " << timing_stats_.compute_projection_total << " ms\n";
+                    std::cout << "  find_optimal_face: " << timing_stats_.find_optimal_face_calls
+                              << " calls, " << timing_stats_.find_optimal_face_total << " ms\n";
+                }
                 return current_face;
             }
             
@@ -446,7 +556,20 @@ std::vector<int> FaceHopper::find_optimal_face(
     if (config_.verbosity >= 1) {
         std::cout << "Warning: Face exploration reached max iterations\n";
     }
-    
+    if (config_.timing_verbosity > 0) {
+        timing_stats_.find_optimal_face_total += t.elapsed_ms();
+        ++timing_stats_.find_optimal_face_calls;
+        std::cout << "FaceHopper timing summary:\n";
+        std::cout << "  compute_intersection: " << timing_stats_.compute_intersection_calls
+                  << " calls, " << timing_stats_.compute_intersection_total << " ms\n";
+        std::cout << "  find_initial_face: " << timing_stats_.find_initial_face_calls
+                  << " calls, " << timing_stats_.find_initial_face_total << " ms\n";
+        std::cout << "  compute_projection: " << timing_stats_.compute_projection_calls
+                  << " calls, " << timing_stats_.compute_projection_total << " ms\n";
+        std::cout << "  find_optimal_face: " << timing_stats_.find_optimal_face_calls
+                  << " calls, " << timing_stats_.find_optimal_face_total << " ms\n";
+    }
+
     return current_face;
 }
 

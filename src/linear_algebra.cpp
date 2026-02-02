@@ -73,29 +73,31 @@ void LinearAlgebra::cholesky(const double* A, double* L, int n) {
     }
 }
 
-void LinearAlgebra::solve_cholesky(const double* L, const double* b, double* x, int n) {
-    // Forward substitution: L * y = b
-    // Use pointer arithmetic and small unrolling for better cache locality
-    std::vector<double> y(n);
+void LinearAlgebra::forward_sub(const double* L, const double* b, double* x, int n) {
+    // Solve L * x = b where L is lower triangular
+    // This computes x directly (x[i] depends on x[0]...x[i-1])
     for (int i = 0; i < n; ++i) {
         const double* Li = L + i * n; // start of row i
         double sum = 0.0;
         int j = 0;
         // 4-way unrolling over strictly lower part of row i
         for (; j + 3 < i; j += 4) {
-            sum += Li[j]     * y[j]
-                 + Li[j + 1] * y[j + 1]
-                 + Li[j + 2] * y[j + 2]
-                 + Li[j + 3] * y[j + 3];
+            sum += Li[j]     * x[j]
+                 + Li[j + 1] * x[j + 1]
+                 + Li[j + 2] * x[j + 2]
+                 + Li[j + 3] * x[j + 3];
         }
         for (; j < i; ++j) {
-            sum += Li[j] * y[j];
+            sum += Li[j] * x[j];
         }
         const double Lii = Li[i];
-        y[i] = (b[i] - sum) / Lii;
+        x[i] = (b[i] - sum) / Lii;
     }
+}
 
-    // Backward substitution: L^T * x = y
+void LinearAlgebra::backward_sub(const double* L, const double* b, double* x, int n) {
+    // Solve L^T * x = b where L is lower triangular (so L^T is upper triangular)
+    // This accesses L column-wise to get L^T row-wise
     for (int i = n - 1; i >= 0; --i) {
         double sum = 0.0;
         int j = i + 1;
@@ -111,8 +113,17 @@ void LinearAlgebra::solve_cholesky(const double* L, const double* b, double* x, 
             sum += L[j * n + i] * x[j];
         }
         const double Lii = L[i * n + i];
-        x[i] = (y[i] - sum) / Lii;
+        x[i] = (b[i] - sum) / Lii;
     }
+}
+
+void LinearAlgebra::solve_cholesky(const double* L, const double* b, double* x, int n) {
+    // Solve (L * L^T) * x = b in two steps:
+    // 1. Forward substitution: L * y = b
+    // 2. Backward substitution: L^T * x = y
+    std::vector<double> y(n);
+    forward_sub(L, b, y.data(), n);
+    backward_sub(L, y.data(), x, n);
 }
 
 void LinearAlgebra::solve_pd_system(const double* Q, const double* b, double* x, int n) {

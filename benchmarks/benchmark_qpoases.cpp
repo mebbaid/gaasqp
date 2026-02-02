@@ -555,6 +555,69 @@ void runBenchmarkSuite(int seed = 42) {
     }
     
     //=========================================================================
+    // Test 4: MPC with Diagonal Q (structured, realistic for decoupled state costs)
+    //=========================================================================
+    std::cout << "\n\n### Test 4: MPC with Diagonal Q (structured) ###\n";
+    std::cout << std::string(100, '-') << "\n";
+    std::cout << std::setw(8) << "Horizon"
+              << std::setw(6) << "n"
+              << std::setw(12) << "GeoQP(ms)"
+              << std::setw(12) << "qpOASES(ms)"
+              << std::setw(10) << "Speedup"
+              << std::setw(10) << "Active"
+              << std::setw(15) << "Obj Diff" << "\n";
+    std::cout << std::string(100, '-') << "\n";
+    
+    std::uniform_real_distribution<> weight_dist(0.5, 2.0);
+    for (int horizon : {5, 10, 20, 30, 50}) {
+        int n = 2 * horizon;
+        QPProblem prob;
+        prob.n = n;
+        prob.m = 2 * n;  // box constraints
+        prob.name = "Diagonal Q MPC (horizon=" + std::to_string(horizon) + ")";
+        
+        // Build diagonal H matrix with random weights
+        prob.H.resize(n * n, 0.0);
+        for (int i = 0; i < n; ++i) {
+            prob.H[i * n + i] = weight_dist(rng);
+        }
+        
+        // Moderate gradient, tight box
+        std::normal_distribution<> dist(0.0, 1.0);
+        prob.g.resize(n);
+        for (int i = 0; i < n; ++i) {
+            prob.g[i] = dist(rng) * 5.0;
+        }
+        
+        // Box constraints: -1 <= x <= 1
+        prob.A.resize(2 * n * n, 0.0);
+        prob.lb.resize(2 * n);
+        prob.ub.resize(2 * n);
+        for (int i = 0; i < n; ++i) {
+            prob.A[i * n + i] = 1.0;
+            prob.A[(n + i) * n + i] = -1.0;
+            prob.lb[i] = -1e20;
+            prob.ub[i] = 1.0;
+            prob.lb[n + i] = -1e20;
+            prob.ub[n + i] = 1.0;
+        }
+        
+        auto g = solveGeoQP(prob);
+        auto q = solveQPOASES(prob);
+        
+        double speedup = q.solve_time_ms / g.solve_time_ms;
+        double obj_diff = std::abs(g.obj_value - q.obj_value);
+        
+        std::cout << std::setw(8) << horizon
+                  << std::setw(6) << prob.n
+                  << std::setw(12) << std::fixed << std::setprecision(3) << g.solve_time_ms
+                  << std::setw(12) << q.solve_time_ms
+                  << std::setw(9) << std::setprecision(2) << speedup << "x"
+                  << std::setw(10) << g.active_constraints
+                  << std::setw(15) << std::scientific << std::setprecision(2) << obj_diff << "\n";
+    }
+    
+    //=========================================================================
     // Detailed Examples
     //=========================================================================
     std::cout << "\n\n### Detailed Problem Analysis ###\n";

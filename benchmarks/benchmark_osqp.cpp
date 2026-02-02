@@ -309,6 +309,24 @@ int main()
         for (int t = 0; t < trials; ++t) {
             Eigen::MatrixXd H = randomPD(n, rng);
             Eigen::VectorXd g = Eigen::VectorXd::Random(n);
+            
+            // Scale gradient to make unconstrained minimum more likely to be infeasible
+            // With probability ~0.1, keep small gradient (feasible x_bar)
+            // With probability ~0.9, use much larger gradient to push x_bar outside box [-2, 2]
+            std::bernoulli_distribution make_infeasible(0.9);
+            if (make_infeasible(rng)) {
+                // Random(n) gives values in [-1,1], typical H condition ~10
+                // So x_bar ~ H^{-1}g has magnitude ~ ||g||/lambda_min ~ ||g||/0.1
+                // To push outside box of size 2, need ||g|| >> 0.2
+                // Scale by 5-15x to reliably push outside
+                std::uniform_real_distribution<> scale_dist(15.0, 25.0);
+                double scale = scale_dist(rng);
+                g *= scale;
+            } else {
+                // Keep gradient small to ensure x_bar is inside box
+                g *= 0.3;
+            }
+            
             Eigen::MatrixXd A;
             Eigen::VectorXd lb, ub;
             generateBoxConstraints(n, A, lb, ub);
@@ -438,6 +456,80 @@ int main()
         std::cout << "  GeoQP avg: " << std::fixed << std::setprecision(3) << (geoqp_total/trials) << " ms\n";
         std::cout << "  OSQP avg:  " << (osqp_total/trials) << " ms\n";
         std::cout << "  Speedup: " << std::setprecision(1) << (osqp_total/geoqp_total) << "x\n";
+    }
+    
+    // Test 4: MPC with diagonal Q (structured, realistic for decoupled state costs)
+    std::cout << "\nTest 4: MPC with diagonal Q (structured)\n";
+    std::cout << std::string(130, '-') << "\n";
+    std::cout << std::setw(8) << "Horizon" 
+              << std::setw(6) << "n"
+              << std::setw(10) << "GeoQP" 
+              << std::setw(10) << "OSQP"
+              << std::setw(10) << "Speedup"
+              << std::setw(8) << "Active"
+              << std::setw(8) << "P1 it"
+              << std::setw(8) << "P2 it"
+              << std::setw(8) << "Verts"
+              << std::setw(10) << "P1 ms"
+              << std::setw(10) << "P2 ms"
+              << std::setw(10) << "P3 ms"
+              << std::setw(12) << "Obj Diff"
+              << "\n";
+    std::cout << std::string(130, '-') << "\n";
+    
+    for (int horizon : horizons) {
+        const int n = 2 * horizon;  // 2 inputs per time step
+        
+        // Build diagonal Q: simple quadratic cost on each control input
+        Eigen::MatrixXd H = Eigen::MatrixXd::Zero(n, n);
+        std::uniform_real_distribution<> weight_dist(0.5, 2.0);
+        for (int i = 0; i < n; ++i) {
+            H(i, i) = weight_dist(rng);
+        }
+        
+        Eigen::VectorXd g = Eigen::VectorXd::Random(n) * 5.0;  // Moderate gradient
+        Eigen::MatrixXd A;
+        Eigen::VectorXd lb, ub;
+        generateBoxConstraints(n, A, lb, ub, 1.0);  // Tight box constraints
+        
+        const int trials = 5;
+        double geoqp_total = 0, osqp_total = 0, obj_diff_total = 0;
+        int active_total = 0, p1_total = 0, p2_total = 0, verts_total = 0;
+        double p1_time = 0, p2_time = 0, p3_time = 0;
+        bool all_success = true;
+        
+        for (int t = 0; t < trials; ++t) {
+            auto gr = solveGeoQP(H, g, A, lb, ub);
+            auto or_ = solveOSQP(H, g, A, lb, ub);
+            
+            geoqp_total += gr.solve_time_ms;
+            osqp_total += or_.solve_time_ms;
+            obj_diff_total += std::abs(gr.obj_value - or_.obj_value);
+            active_total += gr.num_active;
+            p1_total += gr.phase1_iters;
+            p2_total += gr.phase2_iters;
+            verts_total += gr.vertices_explored;
+            p1_time += gr.phase1_time_ms;
+            p2_time += gr.phase2_time_ms;
+            p3_time += gr.phase3_time_ms;
+            all_success = all_success && gr.success && or_.success;
+        }
+        
+        std::cout << std::setw(8) << horizon
+                  << std::setw(6) << n
+                  << std::setw(10) << std::fixed << std::setprecision(3) << (geoqp_total/trials)
+                  << std::setw(10) << (osqp_total/trials)
+                  << std::setw(10) << std::setprecision(2) << (osqp_total/geoqp_total)
+                  << std::setw(8) << (active_total/trials)
+                  << std::setw(8) << (p1_total/trials)
+                  << std::setw(8) << (p2_total/trials)
+                  << std::setw(8) << (verts_total/trials)
+                  << std::setw(10) << std::setprecision(3) << (p1_time/trials)
+                  << std::setw(10) << (p2_time/trials)
+                  << std::setw(10) << (p3_time/trials)
+                  << std::setw(12) << std::scientific << std::setprecision(1) << (obj_diff_total/trials)
+                  << (all_success ? "" : " FAIL")
+                  << "\n";
     }
     
     std::cout << "\nBenchmark complete.\n";

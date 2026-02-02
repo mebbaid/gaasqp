@@ -55,10 +55,11 @@ int main() {
     for (int h : horizons) {
         geoqp::Problem prob = makeMPCProblem(h);
         
-        geoqp::Config config;
-        config.tolerance = 1e-8;
-        config.max_iterations = 1000;
-        config.verbosity = 2;  // Show timing breakdown
+    geoqp::Config config;
+    config.tolerance = 1e-8;
+    config.max_iterations = 1000;
+    config.verbosity = 2;  // Show timing breakdown
+    config.timing_verbosity = 1; // Print aggregate timing summary from FaceHopper
         
         std::cout << "\n--- Horizon " << h << " (n=" << 2*h << ") ---\n";
         

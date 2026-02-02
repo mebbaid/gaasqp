@@ -44,6 +44,17 @@ namespace geoqp
                 const double *A, const double *b, double *x,
                 int n);
             static void cholesky(const double *A, double *L, int n);
+            
+            // Forward substitution: solve L * x = b where L is lower triangular
+            static void forward_sub(
+                const double *L, const double *b, double *x,
+                int n);
+            
+            // Backward substitution: solve L^T * x = b where L is lower triangular
+            static void backward_sub(
+                const double *L, const double *b, double *x,
+                int n);
+            
             static void solve_cholesky(
                 const double *L, const double *b, double *x,
                 int n);
@@ -200,6 +211,21 @@ namespace geoqp
             
             std::vector<double> Q_chol_;
             bool has_diagonal_constraints_ = false;
+            
+            // Timing stats (aggregate)
+            struct TimingStats {
+                double compute_intersection_total = 0.0;
+                int compute_intersection_calls = 0;
+
+                double find_initial_face_total = 0.0;
+                int find_initial_face_calls = 0;
+
+                double compute_projection_total = 0.0;
+                int compute_projection_calls = 0;
+
+                double find_optimal_face_total = 0.0;
+                int find_optimal_face_calls = 0;
+            } mutable timing_stats_;
         };
 
         /**
