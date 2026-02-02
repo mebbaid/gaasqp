@@ -15,13 +15,36 @@ FaceHopper::FaceHopper(
     int m, int n,
     const Config& config
 ) : Q_(Q), A_(A), b_(b), x_bar_(x_bar), m_(m), n_(n), config_(config) {
-    // Pre-compute Cholesky factorization of Q for fast projections
     Q_chol_.resize(n_ * n_);
     try {
         LinearAlgebra::cholesky(Q_, Q_chol_.data(), n_);
     } catch (...) {
-        // If Cholesky fails, we'll use general solver
         Q_chol_.clear();
+    }
+    
+    // Detect diagonal/box constraints (common in MPC)
+    has_diagonal_constraints_ = true;
+    for (int i = 0; i < m_ && has_diagonal_constraints_; ++i) {
+        const double* a_row = A_ + i * n_;
+        int nonzero_count = 0;
+        int nonzero_idx = -1;
+        for (int j = 0; j < n_; ++j) {
+            if (std::abs(a_row[j]) > 1e-10) {
+                nonzero_count++;
+                nonzero_idx = j;
+                if (std::abs(std::abs(a_row[j]) - 1.0) > 1e-10) {
+                    has_diagonal_constraints_ = false;
+                    break;
+                }
+            }
+        }
+        if (nonzero_count != 1) {
+            has_diagonal_constraints_ = false;
+        }
+    }
+    
+    if (has_diagonal_constraints_ && config_.verbosity >= 2) {
+        std::cout << "  Detected diagonal/box constraints - using fast path\n";
     }
 }
 
@@ -29,15 +52,10 @@ double FaceHopper::compute_intersection_parameter(
     const std::vector<double>& v,
     int constraint_idx
 ) const {
-    // Compute t where ray r(t) = v + t*(x_bar - v) hits constraint i
-    // <a_i, v + t*(x_bar - v)> = b_i
-    // t = (b_i - <a_i, v>) / <a_i, x_bar - v>
-    
     const double* a_row = A_ + constraint_idx * n_;
-    double av = 0.0;  // <a_i, v>
-    double ad = 0.0;  // <a_i, x_bar - v>
+    double av = 0.0;
+    double ad = 0.0;
     
-    // Unrolled for performance
     int j = 0;
     for (; j + 3 < n_; j += 4) {
         av += a_row[j] * v[j] + a_row[j+1] * v[j+1] +
@@ -61,11 +79,6 @@ double FaceHopper::compute_intersection_parameter(
 std::vector<int> FaceHopper::find_initial_face(
     const std::vector<double>& v
 ) {
-    // Ray: r(t) = v + t*(x_bar - v) for t in [0, 1]
-    // Find first blocking face (smallest t >= 0 where we hit a constraint)
-    // Note: t=0 means v is already on the constraint
-    
-    // First, collect constraints that v is on (t ≈ 0)
     std::vector<int> active_at_v;
     for (int i = 0; i < m_; ++i) {
         const double* a_row = A_ + i * n_;
@@ -75,39 +88,28 @@ std::vector<int> FaceHopper::find_initial_face(
         }
     }
     
-    // If v is on constraints and x_bar violates them, those are the blocking constraints
     std::vector<int> blocking_at_v;
     for (int i : active_at_v) {
         const double* a_row = A_ + i * n_;
         double a_xbar = LinearAlgebra::dot(a_row, x_bar_.data(), n_);
         if (a_xbar > b_[i] + 1e-8) {
-            // x_bar violates this constraint - it's blocking immediately
             blocking_at_v.push_back(i);
         }
     }
     
     if (!blocking_at_v.empty()) {
-        // The initial face is the constraints that v is on and x_bar violates
         return blocking_at_v;
     }
     
-    // Otherwise, find first blocking constraint along the ray (t > 0)
     double t_min = std::numeric_limits<double>::infinity();
-    
-    // Single pass to find minimum t
     for (int i = 0; i < m_; ++i) {
         double t = compute_intersection_parameter(v, i);
-        // We want positive t (moving from v toward x_bar)
-        // t should be in (0, inf) - if t > 1, x_bar is feasible for this constraint
         if (t > 1e-10 && t < t_min) {
             t_min = t;
         }
     }
     
-    // If t_min > 1, then x_bar is feasible (no blocking before reaching x_bar)
-    // But we should have checked this earlier! Let's verify x_bar feasibility
     if (t_min > 1.0 + 1e-8) {
-        // Check if x_bar is actually feasible
         bool x_bar_feasible = true;
         for (int i = 0; i < m_; ++i) {
             const double* a_row = A_ + i * n_;
@@ -119,22 +121,16 @@ std::vector<int> FaceHopper::find_initial_face(
         }
         
         if (x_bar_feasible) {
-            return std::vector<int>(); // x_bar is optimal
+            return std::vector<int>();
         }
-        
-        // x_bar is not feasible but t_min > 1 - this means v is not a good starting point
-        // Fall through to use t_min anyway (clamp to t <= something reasonable)
     }
     
     if (!std::isfinite(t_min)) {
-        // No intersection found at all - this shouldn't happen if v is in the polytope
         return std::vector<int>();
     }
     
-    // Collect all constraints at t_min (handles degeneracy)
     std::vector<int> initial_face;
     initial_face.reserve(n_);
-    
     const double tol = 1e-8;
     for (int i = 0; i < m_; ++i) {
         double t = compute_intersection_parameter(v, i);
@@ -146,201 +142,6 @@ std::vector<int> FaceHopper::find_initial_face(
     return initial_face;
 }
 
-double FaceHopper::compute_projection_distance_sq(
-    const std::vector<int>& face
-) const {
-    // Compute the Q-weighted projection of x_bar onto face and return squared distance
-    // We're minimizing (1/2) x^T Q x + g^T x subject to A_F x = b_F
-    // Since x_bar = -Q^{-1} g, the solution is:
-    //   x* = x_bar - Q^{-1} A_F^T (A_F Q^{-1} A_F^T)^{-1} (A_F x_bar - b_F)
-    
-    const int k = static_cast<int>(face.size());
-    
-    if (k == 0) {
-        // Empty face means projection to x_bar - only valid if x_bar is feasible
-        for (int i = 0; i < m_; ++i) {
-            const double* a_row = A_ + i * n_;
-            double ax = LinearAlgebra::dot(a_row, x_bar_.data(), n_);
-            if (ax > b_[i] + config_.tolerance) {
-                return std::numeric_limits<double>::infinity(); // x_bar infeasible
-            }
-        }
-        return 0.0; // x_bar is feasible and optimal
-    }
-    
-    // Build A_F (k x n) and b_F (k)
-    std::vector<double> A_F(k * n_);
-    std::vector<double> b_F(k);
-    
-    for (int i = 0; i < k; ++i) {
-        const int idx = face[i];
-        b_F[i] = b_[idx];
-        std::memcpy(A_F.data() + i * n_, A_ + idx * n_, n_ * sizeof(double));
-    }
-    
-    // Compute A_F * x_bar
-    std::vector<double> Ax(k);
-    LinearAlgebra::matvec(A_F.data(), x_bar_.data(), Ax.data(), k, n_);
-    
-    // residual = A_F * x_bar - b_F
-    std::vector<double> residual(k);
-    for (int i = 0; i < k; ++i) {
-        residual[i] = Ax[i] - b_F[i];
-    }
-    
-    // Compute Q^{-1} A_F^T by solving Q * y_j = A_F[j,:] for each row j
-    // Q_inv_AT is n x k matrix where column j = Q^{-1} * A_F[j,:]^T
-    std::vector<double> Q_inv_AT(n_ * k);
-    
-    for (int j = 0; j < k; ++j) {
-        // Get j-th row of A_F as a column vector
-        std::vector<double> a_col(n_);
-        for (int i = 0; i < n_; ++i) {
-            a_col[i] = A_F[j * n_ + i];
-        }
-        
-        // Solve Q * y = a_col for y using pre-computed Cholesky if available
-        std::vector<double> y(n_);
-        
-        if (!Q_chol_.empty()) {
-            LinearAlgebra::solve_cholesky(Q_chol_.data(), a_col.data(), y.data(), n_);
-        } else {
-            // Fallback to general solve
-            std::vector<double> Q_copy(n_ * n_);
-            std::memcpy(Q_copy.data(), Q_, n_ * n_ * sizeof(double));
-            try {
-                LinearAlgebra::solve_linear_system(Q_copy.data(), a_col.data(), y.data(), n_);
-            } catch (...) {
-                return std::numeric_limits<double>::infinity(); // Singular - invalid face
-            }
-        }
-        
-        // Store as j-th column of Q_inv_AT
-        for (int i = 0; i < n_; ++i) {
-            Q_inv_AT[i * k + j] = y[i];
-        }
-    }
-    
-    // Compute Schur complement S = A_F * Q^{-1} * A_F^T (k x k)
-    std::vector<double> S(k * k);
-    for (int i = 0; i < k; ++i) {
-        for (int j = i; j < k; ++j) {
-            double sum = 0.0;
-            for (int l = 0; l < n_; ++l) {
-                sum += A_F[i * n_ + l] * Q_inv_AT[l * k + j];
-            }
-            S[i * k + j] = sum;
-            S[j * k + i] = sum; // Symmetric
-        }
-    }
-    
-    // Solve S * lambda = residual
-    std::vector<double> lambda(k);
-    try {
-        LinearAlgebra::solve_linear_system(S.data(), residual.data(), lambda.data(), k);
-    } catch (...) {
-        return std::numeric_limits<double>::infinity(); // Singular - invalid face
-    }
-    
-    // Compute projection: x* = x_bar - Q^{-1} A_F^T * lambda
-    std::vector<double> x_star(n_);
-    for (int i = 0; i < n_; ++i) {
-        double correction = 0.0;
-        for (int j = 0; j < k; ++j) {
-            correction += Q_inv_AT[i * k + j] * lambda[j];
-        }
-        x_star[i] = x_bar_[i] - correction;
-    }
-    
-    // Check dual feasibility: all lambda >= 0
-    for (int i = 0; i < k; ++i) {
-        if (lambda[i] < -config_.tolerance) {
-            return std::numeric_limits<double>::infinity(); // Not optimal face
-        }
-    }
-    
-    // Check primal feasibility of x_star
-    int max_violation_idx = -1;
-    double max_violation = 0.0;
-    for (int i = 0; i < m_; ++i) {
-        const double* a_row = A_ + i * n_;
-        double ax = LinearAlgebra::dot(a_row, x_star.data(), n_);
-        double violation = ax - b_[i];
-        if (violation > max_violation) {
-            max_violation = violation;
-            max_violation_idx = i;
-        }
-        if (ax > b_[i] + config_.tolerance) {
-            if (config_.verbosity >= 3) {
-                std::cout << "  Face {";
-                for (int idx : face) std::cout << idx << " ";
-                std::cout << "}: violates constraint " << i << " by " << violation << "\n";
-            }
-            return std::numeric_limits<double>::infinity(); // Infeasible projection
-        }
-    }
-    
-    // Compute Q-weighted distance: (x* - x_bar)^T Q (x* - x_bar)
-    // This is the correct metric for comparing faces when Q ≠ I
-    double dist_sq = 0.0;
-    for (int i = 0; i < n_; ++i) {
-        double diff_i = x_star[i] - x_bar_[i];
-        // Compute (Q * diff)[i] component
-        double Qdiff_i = 0.0;
-        for (int k = 0; k < n_; ++k) {
-            Qdiff_i += Q_[i * n_ + k] * (x_star[k] - x_bar_[k]);
-        }
-        dist_sq += diff_i * Qdiff_i;
-    }
-    
-    if (config_.verbosity >= 3) {
-        std::cout << "  Face {";
-        for (int idx : face) std::cout << idx << " ";
-        std::cout << "}: feasible, dist_sq=" << dist_sq << "\n";
-    }
-    
-    return dist_sq;
-}
-
-std::vector<std::vector<int>> FaceHopper::get_neighbor_faces(
-    const std::vector<int>& face
-) const {
-    std::vector<std::vector<int>> neighbors;
-    const int k = static_cast<int>(face.size());
-    
-    // Create set for fast lookup
-    std::set<int> face_set(face.begin(), face.end());
-    
-    // Neighbors by dropping one constraint (if k > 0)
-    if (k > 0) {
-        for (int i = 0; i < k; ++i) {
-            std::vector<int> neighbor;
-            neighbor.reserve(k - 1);
-            for (int j = 0; j < k; ++j) {
-                if (i != j) neighbor.push_back(face[j]);
-            }
-            neighbors.push_back(std::move(neighbor));
-        }
-    }
-    
-    // Neighbors by adding one constraint (if k < n)
-    if (k < n_) {
-        for (int c = 0; c < m_; ++c) {
-            if (face_set.find(c) == face_set.end()) {
-                std::vector<int> neighbor = face;
-                neighbor.push_back(c);
-                std::sort(neighbor.begin(), neighbor.end());
-                neighbors.push_back(std::move(neighbor));
-            }
-        }
-    }
-    
-    return neighbors;
-}
-
-// Compute Q-weighted projection and lambdas for a face
-// Returns true if feasible, fills x_star and lambda
-// Uses the formula: x* = x_bar - Q^{-1} A^T (A Q^{-1} A^T)^{-1} (A x_bar - b)
 bool FaceHopper::compute_projection_and_lambda(
     const std::vector<int>& face,
     std::vector<double>& x_star,
@@ -351,7 +152,6 @@ bool FaceHopper::compute_projection_and_lambda(
     lambda.resize(k);
     
     if (k == 0) {
-        // Empty face - check if x_bar is feasible
         for (int i = 0; i < m_; ++i) {
             const double* a_row = A_ + i * n_;
             double ax = LinearAlgebra::dot(a_row, x_bar_.data(), n_);
@@ -362,7 +162,85 @@ bool FaceHopper::compute_projection_and_lambda(
         return true;
     }
     
-    // Build A_F and b_F
+    // Fast path for diagonal/box constraints
+    if (has_diagonal_constraints_) {
+        
+        std::vector<int> constrained_vars(k);
+        std::vector<double> signs(k);
+        std::vector<double> bounds(k);
+        
+        for (int i = 0; i < k; ++i) {
+            const int idx = face[i];
+            const double* a_row = A_ + idx * n_;
+            bounds[i] = b_[idx];
+            for (int j = 0; j < n_; ++j) {
+                if (std::abs(a_row[j]) > 1e-10) {
+                    constrained_vars[i] = j;
+                    signs[i] = a_row[j];
+                    break;
+                }
+            }
+        }
+        
+        std::vector<double> residual(k);
+        for (int i = 0; i < k; ++i) {
+            residual[i] = signs[i] * x_bar_[constrained_vars[i]] - bounds[i];
+        }
+        
+        std::vector<double> Q_inv_columns(n_ * k);
+        for (int j = 0; j < k; ++j) {
+            std::vector<double> rhs(n_, 0.0);
+            rhs[constrained_vars[j]] = signs[j];
+            
+            std::vector<double> col(n_);
+            if (!Q_chol_.empty()) {
+                LinearAlgebra::solve_cholesky(Q_chol_.data(), rhs.data(), col.data(), n_);
+            } else {
+                std::vector<double> Q_copy(n_ * n_);
+                std::memcpy(Q_copy.data(), Q_, n_ * n_ * sizeof(double));
+                try {
+                    LinearAlgebra::solve_linear_system(Q_copy.data(), rhs.data(), col.data(), n_);
+                } catch (...) {
+                    return false;
+                }
+            }
+            std::memcpy(Q_inv_columns.data() + j * n_, col.data(), n_ * sizeof(double));
+        }
+        
+        std::vector<double> S(k * k);
+        for (int i = 0; i < k; ++i) {
+            for (int j = 0; j < k; ++j) {
+                S[i * k + j] = Q_inv_columns[j * n_ + constrained_vars[i]] * signs[i];
+            }
+        }
+        
+        try {
+            LinearAlgebra::solve_linear_system(S.data(), residual.data(), lambda.data(), k);
+        } catch (...) {
+            return false;
+        }
+        
+        x_star = x_bar_;
+        for (int i = 0; i < n_; ++i) {
+            double correction = 0.0;
+            for (int j = 0; j < k; ++j) {
+                correction += Q_inv_columns[j * n_ + i] * lambda[j];
+            }
+            x_star[i] -= correction;
+        }
+        
+        for (int i = 0; i < m_; ++i) {
+            const double* a_row = A_ + i * n_;
+            double ax = LinearAlgebra::dot(a_row, x_star.data(), n_);
+            if (ax > b_[i] + config_.tolerance) {
+                return false;
+            }
+        }
+        
+        return true;
+    }
+    
+    // General path for arbitrary constraints
     std::vector<double> A_F(k * n_);
     std::vector<double> b_F(k);
     
@@ -409,7 +287,6 @@ bool FaceHopper::compute_projection_and_lambda(
         }
     }
     
-    // Compute Schur complement: S = A_F * Q^{-1} * A_F^T (k x k)
     std::vector<double> S(k * k);
     for (int i = 0; i < k; ++i) {
         for (int j = i; j < k; ++j) {
@@ -418,18 +295,16 @@ bool FaceHopper::compute_projection_and_lambda(
                 sum += A_F[i * n_ + l] * Q_inv_AT[l * k + j];
             }
             S[i * k + j] = sum;
-            S[j * k + i] = sum; // Symmetric
+            S[j * k + i] = sum;
         }
     }
     
-    // Solve S * lambda = residual
     try {
         LinearAlgebra::solve_linear_system(S.data(), residual.data(), lambda.data(), k);
     } catch (...) {
         return false;
     }
     
-    // Compute x_star = x_bar - Q^{-1} A_F^T * lambda
     for (int i = 0; i < n_; ++i) {
         double correction = 0.0;
         for (int j = 0; j < k; ++j) {
@@ -438,7 +313,6 @@ bool FaceHopper::compute_projection_and_lambda(
         x_star[i] = x_bar_[i] - correction;
     }
     
-    // Check primal feasibility
     for (int i = 0; i < m_; ++i) {
         const double* a_row = A_ + i * n_;
         double ax = LinearAlgebra::dot(a_row, x_star.data(), n_);
@@ -470,12 +344,10 @@ std::vector<int> FaceHopper::find_optimal_face(
         bool feasible = compute_projection_and_lambda(current_face, x_star, lambda);
         
         if (feasible) {
-            // Check if any lambda is negative - only those constraints can potentially be dropped
             bool improved = false;
             
             for (size_t i = 0; i < current_face.size(); ++i) {
                 if (lambda[i] < -config_.tolerance) {
-                    // Try dropping this constraint
                     std::vector<int> smaller_face;
                     for (size_t j = 0; j < current_face.size(); ++j) {
                         if (i != j) smaller_face.push_back(current_face[j]);
@@ -483,23 +355,48 @@ std::vector<int> FaceHopper::find_optimal_face(
                     
                     std::vector<double> x2, lambda2;
                     if (compute_projection_and_lambda(smaller_face, x2, lambda2)) {
-                        // Check if Q-weighted distance is smaller: (x - x_bar)^T Q (x - x_bar)
-                        // This is equivalent to comparing objective values since
-                        // f(x) = (1/2)(x - x_bar)^T Q (x - x_bar) + const
-                        double d1 = 0.0, d2 = 0.0;
-                        for (int j = 0; j < n_; ++j) {
-                            double diff1 = x_star[j] - x_bar_[j];
-                            double diff2 = x2[j] - x_bar_[j];
-                            // Q-weighted: sum_k Q[j,k] * diff * diff_k
-                            for (int k = 0; k < n_; ++k) {
-                                double diff1_k = x_star[k] - x_bar_[k];
-                                double diff2_k = x2[k] - x_bar_[k];
-                                d1 += diff1 * Q_[j * n_ + k] * diff1_k;
-                                d2 += diff2 * Q_[j * n_ + k] * diff2_k;
+                        // Early dual feasibility check
+                        bool dual_feasible = true;
+                        for (double l : lambda2) {
+                            if (l < -config_.tolerance) {
+                                dual_feasible = false;
+                                break;
                             }
                         }
                         
-                        if (d2 < d1 - config_.tolerance) {
+                        if (!dual_feasible) {
+                            continue;
+                        }
+                        
+                        // Compute Q-weighted distance with early exit
+                        double d1 = 0.0, d2 = 0.0;
+                        bool early_exit = false;
+                        
+                        // Precompute differences once
+                        std::vector<double> diff1(n_), diff2(n_);
+                        for (int j = 0; j < n_; ++j) {
+                            diff1[j] = x_star[j] - x_bar_[j];
+                            diff2[j] = x2[j] - x_bar_[j];
+                        }
+                        
+                        // Compute Q-weighted norms incrementally
+                        for (int j = 0; j < n_ && !early_exit; ++j) {
+                            const double* Q_row = Q_ + j * n_;
+                            double row_contrib1 = 0.0, row_contrib2 = 0.0;
+                            for (int k = 0; k < n_; ++k) {
+                                row_contrib1 += Q_row[k] * diff1[k];
+                                row_contrib2 += Q_row[k] * diff2[k];
+                            }
+                            d1 += diff1[j] * row_contrib1;
+                            d2 += diff2[j] * row_contrib2;
+                            
+                            // Early exit if d2 clearly worse
+                            if (j % 10 == 9 && d2 > d1 * 1.1) {
+                                early_exit = true;
+                            }
+                        }
+                        
+                        if (!early_exit && d2 < d1 - config_.tolerance) {
                             current_face = std::move(smaller_face);
                             improved = true;
                             break;
@@ -509,14 +406,12 @@ std::vector<int> FaceHopper::find_optimal_face(
             }
             
             if (!improved) {
-                // All lambdas >= 0 or no improvement found - optimal
                 if (config_.verbosity >= 3) {
                     std::cout << "  Optimal face with " << current_face.size() << " constraints\n";
                 }
                 return current_face;
             }
         } else {
-            // Infeasible projection - add all violated constraints
             std::set<int> face_set(current_face.begin(), current_face.end());
             std::vector<int> violated;
             

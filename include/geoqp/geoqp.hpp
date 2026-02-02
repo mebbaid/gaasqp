@@ -53,16 +53,16 @@ namespace geoqp
         int m;
 
         // (1/2) x^T Q x + g^T x
-        std::vector<double> Q; // n x n symmetric positive definite (row-major)
-        std::vector<double> g; // n vector
+        std::vector<double> Q; 
+        std::vector<double> g; 
 
         // A x <= b
-        std::vector<double> A; // m x n matrix (row-major)
-        std::vector<double> b; // m vector
+        std::vector<double> A; 
+        std::vector<double> b; 
 
         // Optional: bounds on variables
-        std::vector<double> lb; // Lower bounds (size n, -inf if empty)
-        std::vector<double> ub; // Upper bounds (size n, +inf if empty)
+        std::vector<double> lb; 
+        std::vector<double> ub; 
     };
 
     class SolverImpl;

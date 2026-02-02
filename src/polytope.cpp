@@ -42,10 +42,8 @@ std::vector<double> Polytope::find_initial_vertex() const {
     // Check if origin is feasible
     bool origin_feasible = true;
     for (int i = 0; i < m_; ++i) {
-        double lhs = 0.0;
-        for (int j = 0; j < n_; ++j) {
-            lhs += A_[i * n_ + j] * x[j];
-        }
+        const double* a_row = A_ + i * n_;
+        double lhs = LinearAlgebra::dot(a_row, x.data(), n_);
         if (lhs > b_[i] + 1e-10) {
             origin_feasible = false;
             break;
@@ -74,10 +72,8 @@ std::vector<double> Polytope::find_initial_vertex() const {
         std::vector<double> direction(n_, 0.0);
         
         for (int i = 0; i < m_; ++i) {
-            double lhs = 0.0;
-            for (int j = 0; j < n_; ++j) {
-                lhs += A_[i * n_ + j] * point[j];
-            }
+            const double* a_row = A_ + i * n_;
+            double lhs = LinearAlgebra::dot(a_row, point.data(), n_);
             double violation = lhs - b_[i];
             
             if (violation > max_violation) {
@@ -87,7 +83,7 @@ std::vector<double> Polytope::find_initial_vertex() const {
             if (violation > 1e-8) {
                 // Move in direction that reduces this constraint
                 for (int j = 0; j < n_; ++j) {
-                    direction[j] -= A_[i * n_ + j] * violation;
+                    direction[j] -= a_row[j] * violation;
                 }
             }
         }
@@ -118,11 +114,10 @@ std::vector<double> Polytope::find_initial_vertex() const {
     
     // Identify constraints that are nearly active
     std::vector<std::pair<double, int>> distances;
+    distances.reserve(m_);
     for (int i = 0; i < m_; ++i) {
-        double lhs = 0.0;
-        for (int j = 0; j < n_; ++j) {
-            lhs += A_[i * n_ + j] * vertex[j];
-        }
+        const double* a_row = A_ + i * n_;
+        double lhs = LinearAlgebra::dot(a_row, vertex.data(), n_);
         double dist = b_[i] - lhs;
         if (dist >= -1e-8) {
             distances.push_back({dist, i});
@@ -163,10 +158,8 @@ std::vector<double> Polytope::find_initial_vertex() const {
     
     // Verify vertex is feasible
     for (int i = 0; i < m_; ++i) {
-        double lhs = 0.0;
-        for (int j = 0; j < n_; ++j) {
-            lhs += A_[i * n_ + j] * vertex[j];
-        }
+        const double* a_row = A_ + i * n_;
+        double lhs = LinearAlgebra::dot(a_row, vertex.data(), n_);
         if (lhs > b_[i] + 1e-6) {
             // Not feasible - return the point we had
             return point;
@@ -192,11 +185,11 @@ std::vector<int> Polytope::get_active_constraints(
     double tol
 ) const {
     std::vector<int> active;
+    active.reserve(n_); // Expect at least n active constraints at a vertex
+    
     for (int i = 0; i < m_; ++i) {
-        double lhs = 0.0;
-        for (int j = 0; j < n_; ++j) {
-            lhs += A_[i * n_ + j] * x[j];
-        }
+        const double* a_row = A_ + i * n_;
+        double lhs = LinearAlgebra::dot(a_row, x.data(), n_);
         if (std::abs(lhs - b_[i]) <= tol) {
             active.push_back(i);
         }
@@ -261,10 +254,8 @@ std::vector<std::vector<double>> Polytope::get_neighbors(
                         // Check if feasible
                         bool feasible = true;
                         for (int j = 0; j < m_; ++j) {
-                            double lhs = 0.0;
-                            for (int k = 0; k < n_; ++k) {
-                                lhs += A_[j * n_ + k] * new_vertex[k];
-                            }
+                            const double* a_row = A_ + j * n_;
+                            double lhs = LinearAlgebra::dot(a_row, new_vertex.data(), n_);
                             if (lhs > b_[j] + 1e-8) {
                                 feasible = false;
                                 break;

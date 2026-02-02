@@ -13,7 +13,6 @@ Initializer::Initializer(
     int m, int n,
     const Config& config
 ) : Q_(Q), A_(A), b_(b), x_bar_(x_bar), m_(m), n_(n), config_(config) {
-    // Detect if this is a box-constrained problem for fast path
     detect_box_constraints();
 }
 
@@ -26,17 +25,14 @@ void Initializer::detect_box_constraints() {
     // So we need m = 2n constraints, each with exactly one nonzero entry (+1 or -1)
     
     if (m_ != 2 * n_) {
-        return;  // Not box constraints
+        return;  
     }
     
     box_lb_.resize(n_, -std::numeric_limits<double>::infinity());
     box_ub_.resize(n_, std::numeric_limits<double>::infinity());
     
-    // Check each constraint
     for (int i = 0; i < m_; ++i) {
-        const double* a_row = A_ + i * n_;
-        
-        // Find the single nonzero entry
+        const double* a_row = A_ + i * n_;        
         int nonzero_idx = -1;
         double nonzero_val = 0.0;
         bool is_single_nonzero = true;
@@ -55,10 +51,9 @@ void Initializer::detect_box_constraints() {
         if (!is_single_nonzero || nonzero_idx < 0) {
             box_lb_.clear();
             box_ub_.clear();
-            return;  // Not a box constraint
+            return;  
         }
         
-        // Check if coefficient is +1 or -1
         if (std::abs(nonzero_val - 1.0) < 1e-10) {
             // Upper bound: x_j <= b_i
             box_ub_[nonzero_idx] = std::min(box_ub_[nonzero_idx], b_[i]);
@@ -68,11 +63,10 @@ void Initializer::detect_box_constraints() {
         } else {
             box_lb_.clear();
             box_ub_.clear();
-            return;  // Not a standard box constraint
+            return;  
         }
     }
     
-    // Verify all bounds are finite
     for (int j = 0; j < n_; ++j) {
         if (!std::isfinite(box_lb_[j]) || !std::isfinite(box_ub_[j])) {
             box_lb_.clear();
@@ -104,10 +98,8 @@ std::vector<double> Initializer::find_good_vertex_box_fast() const {
     
     for (int j = 0; j < n_; ++j) {
         if (x_bar_[j] > box_ub_[j]) {
-            // x_bar violates upper bound - go to lower bound (far side, and good)
             vertex[j] = box_lb_[j];
         } else if (x_bar_[j] < box_lb_[j]) {
-            // x_bar violates lower bound - go to upper bound (far side, and good)
             vertex[j] = box_ub_[j];
         } else {
             // x_bar is feasible in this dimension - go to the farther bound
@@ -145,7 +137,6 @@ bool Initializer::is_good_vertex(
     const std::vector<double>& v,
     const std::vector<int>& active_set) const {
     // A vertex v is "good" if: a_i^T (x_bar - v) <= 0 for all active constraints i
-    // This means the ray from v toward x_bar doesn't immediately leave the polytope
     for (int idx : active_set) {
         const double* a_row = A_ + idx * n_;
         double dot = 0.0;
@@ -210,7 +201,6 @@ std::vector<double> Initializer::find_good_vertex(
     
     Polytope polytope(A_, b_, m_, n_);
     
-    // Get initial vertex's active set
     std::vector<int> current_active = polytope.get_active_constraints(initial_vertex, 1e-8);
     std::vector<double> current_vertex = initial_vertex;
     vertices_explored = 1;

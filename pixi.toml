@@ -5,29 +5,6 @@ name = "geoqp"
 platforms = ["linux-64"]
 version = "0.1.0"
 
-
-[tasks]
-configure = { cmd = "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release", description = "Configure CMake build" }
-build = { cmd = "cmake --build build -j$(nproc)", depends-on = ["configure"], description = "Build GeoQP library and examples" }
-
-configure-debug = { cmd = "cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug", description = "Configure CMake build (Debug)" }
-build-debug = { cmd = "cmake --build build -j$(nproc)", depends-on = ["configure-debug"], description = "Build in Debug mode" }
-
-clean = { cmd = "rm -rf build", description = "Remove build directory" }
-rebuild = { cmd = "rm -rf build && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j$(nproc)", description = "Clean and rebuild" }
-
-test = { cmd = "cd build && ctest --output-on-failure", depends-on = ["build"], description = "Run all tests" }
-
-run-simple = { cmd = "./build/examples/simple_example", depends-on = ["build"], description = "Run simple example" }
-run-mpc = { cmd = "./build/examples/mpc_example", depends-on = ["build"], description = "Run MPC example" }
-
-benchmark = { cmd = "./build/benchmarks/benchmark_osqp", depends-on = ["build"], description = "Run GeoQP vs OSQP benchmark" }
-benchmark-qpoases = { cmd = "./build/benchmarks/benchmark_qpoases", depends-on = ["build"], description = "Run GeoQP vs qpOASES benchmark" }
-
-run-planar = { cmd = "./build/examples/planar_comparison", depends-on = ["build"], description = "Run 2D planar comparison" }
-
-dev = { cmd = "cmake --build build -j$(nproc) && cd build && ctest --output-on-failure", depends-on = ["configure"], description = "Build and test (fast iteration)" }
-
 [dependencies]
 qpsolvers-eigen = ">=0.2.0,<0.3"
 qpoases = ">=3.2,<4"
@@ -37,3 +14,17 @@ cmake = ">=4.2.3,<5"
 cxx-compiler = ">=1.11.0,<2"
 ninja = ">=1.12,<2"
 gtest = ">=1.14,<2"
+valgrind = ">=3.26.0,<4"
+
+
+[tasks]
+configure = { cmd = "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release" }
+build = { cmd = "cmake --build build -j$(nproc)", depends-on = ["configure"] }
+configure-debug = { cmd = "cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug" }
+build-debug = { cmd = "cmake --build build-debug -j$(nproc)", depends-on = ["configure-debug"] }
+benchmark-osqp = { cmd = "./build/benchmarks/benchmark_osqp", depends-on = ["build"] }
+benchmark-qpoases = { cmd = "./build/benchmarks/benchmark_qpoases", depends-on = ["build"] }
+example = { cmd = "./build/examples/simple_example", depends-on = ["build"] }
+valgrind = { cmd = "valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes ./build-debug/examples/simple_example", depends-on = ["build-debug"] }
+
+
