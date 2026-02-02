@@ -125,42 +125,96 @@ QPProblem makePolytopeQP(int n, int m, std::mt19937& rng) {
     return p;
 }
 
-// Problem 3: MPC-like QP (structured with box constraints on controls)
+// Problem 3: Realistic MPC-like QP with state propagation (similar to OSQP benchmark)
 QPProblem makeMPCQP(int horizon, std::mt19937& rng) {
-    int n = 2 * horizon;  // 2 control inputs per timestep
+    const int n_states = 4;   // Number of states
+    const int n_inputs = 2;   // Number of control inputs
+    const int n = n_inputs * horizon;  // Total decision variables
+    
     QPProblem p;
     p.n = n;
-    p.m = 2 * n;  // box constraints
+    p.m = n;  // box constraints: -1 <= u <= 1
     p.name = "MPC QP (horizon=" + std::to_string(horizon) + ", n=" + std::to_string(n) + ")";
     
-    // Block-diagonal Hessian (typical for MPC)
-    p.H.resize(n * n, 0.0);
-    for (int t = 0; t < horizon; ++t) {
-        // 2x2 block for each timestep
-        int idx = 2 * t;
-        p.H[idx * n + idx] = 1.0 + 0.1 * t;         // Increasing weight
-        p.H[(idx+1) * n + (idx+1)] = 1.0 + 0.1 * t;
-        p.H[idx * n + (idx+1)] = 0.1;               // Small coupling
-        p.H[(idx+1) * n + idx] = 0.1;
+    // Build state propagation matrix Su: x = Su * u
+    // where x is the state trajectory and u is the input trajectory
+    std::vector<double> Su(n_states * horizon * n, 0.0);
+    for (int k = 0; k < horizon; ++k) {
+        for (int j = 0; j <= k; ++j) {
+            double decay = std::pow(0.9, k - j);  // State decay over time
+            for (int i = 0; i < n_states; ++i) {
+                for (int l = 0; l < n_inputs; ++l) {
+                    // Simple dynamics: each state responds to corresponding input
+                    if (i % n_inputs == l) {
+                        Su[(k * n_states + i) * n + (j * n_inputs + l)] = decay * 0.05;
+                    }
+                }
+            }
+        }
     }
     
-    // Gradient pushes solution outside bounds
+    // State cost matrix Q (penalize state deviations)
+    std::vector<double> Q(n_states * horizon * n_states * horizon, 0.0);
+    for (int i = 0; i < n_states * horizon; ++i) {
+        Q[i * n_states * horizon + i] = 1.0;  // Identity matrix
+    }
+    
+    // Input cost matrix R (penalize large inputs)
+    std::vector<double> R(n * n, 0.0);
+    for (int i = 0; i < n; ++i) {
+        R[i * n + i] = 0.1;  // Small regularization
+    }
+    
+    // Compute Hessian: H = Su^T * Q * Su + R
+    // First: temp = Q * Su (intermediate result)
+    std::vector<double> temp(n_states * horizon * n, 0.0);
+    for (int i = 0; i < n_states * horizon; ++i) {
+        for (int j = 0; j < n; ++j) {
+            double sum = 0.0;
+            for (int k = 0; k < n_states * horizon; ++k) {
+                sum += Q[i * n_states * horizon + k] * Su[k * n + j];
+            }
+            temp[i * n + j] = sum;
+        }
+    }
+    
+    // Second: H = Su^T * temp + R
+    p.H.resize(n * n, 0.0);
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < n; ++j) {
+            double sum = 0.0;
+            for (int k = 0; k < n_states * horizon; ++k) {
+                sum += Su[k * n + i] * temp[k * n + j];
+            }
+            p.H[i * n + j] = sum + R[i * n + j];
+        }
+    }
+    
+    // Symmetrize H to avoid numerical issues
+    for (int i = 0; i < n; ++i) {
+        for (int j = i + 1; j < n; ++j) {
+            double avg = 0.5 * (p.H[i * n + j] + p.H[j * n + i]);
+            p.H[i * n + j] = avg;
+            p.H[j * n + i] = avg;
+        }
+    }
+    
+    // Gradient (random to push solution to constraints)
     std::normal_distribution<> dist(0.0, 1.0);
     p.g.resize(n);
-    for (int i = 0; i < n; ++i) p.g[i] = dist(rng) * 3.0;
+    for (int i = 0; i < n; ++i) {
+        p.g[i] = dist(rng);
+    }
     
-    // Box constraints: -1 <= u <= 1
-    p.A.resize(2 * n * n, 0.0);
-    p.lb.resize(2 * n);
-    p.ub.resize(2 * n);
+    // Box constraints on inputs: -1 <= u <= 1
+    p.A.resize(n * n, 0.0);
+    p.lb.resize(n);
+    p.ub.resize(n);
     
     for (int i = 0; i < n; ++i) {
-        p.A[i * n + i] = 1.0;
-        p.A[(n + i) * n + i] = -1.0;
-        p.lb[i] = -1e20;
+        p.A[i * n + i] = 1.0;  // Identity constraint matrix
+        p.lb[i] = -1.0;
         p.ub[i] = 1.0;
-        p.lb[n + i] = -1e20;
-        p.ub[n + i] = 1.0;
     }
     
     return p;
@@ -237,18 +291,40 @@ SolverResult solveGeoQP(const QPProblem& prob, int verbosity = 0) {
     
     geoqp::Problem gp;
     gp.n = prob.n;
-    gp.m = prob.m;
     gp.Q = prob.H;
     gp.g = prob.g;
     
     // Convert to Ax <= b form
-    gp.A.resize(prob.m * prob.n);
-    gp.b.resize(prob.m);
+    // Count actual constraints (skip infinite bounds)
+    int num_constraints = 0;
     for (int i = 0; i < prob.m; ++i) {
-        for (int j = 0; j < prob.n; ++j) {
-            gp.A[i * prob.n + j] = prob.A[i * prob.n + j];
+        if (prob.ub[i] < 1e19) num_constraints++;  // Has upper bound
+        if (prob.lb[i] > -1e19) num_constraints++; // Has lower bound
+    }
+    
+    gp.m = num_constraints;
+    gp.A.resize(num_constraints * prob.n);
+    gp.b.resize(num_constraints);
+    
+    int row = 0;
+    for (int i = 0; i < prob.m; ++i) {
+        // Upper bound: A_i * x <= ub_i
+        if (prob.ub[i] < 1e19) {
+            for (int j = 0; j < prob.n; ++j) {
+                gp.A[row * prob.n + j] = prob.A[i * prob.n + j];
+            }
+            gp.b[row] = prob.ub[i];
+            row++;
         }
-        gp.b[i] = prob.ub[i];
+        
+        // Lower bound: -A_i * x <= -lb_i (i.e., A_i * x >= lb_i)
+        if (prob.lb[i] > -1e19) {
+            for (int j = 0; j < prob.n; ++j) {
+                gp.A[row * prob.n + j] = -prob.A[i * prob.n + j];
+            }
+            gp.b[row] = -prob.lb[i];
+            row++;
+        }
     }
     
     geoqp::Config config;
@@ -275,9 +351,17 @@ SolverResult solveGeoQP(const QPProblem& prob, int verbosity = 0) {
             for (int j = 0; j < prob.n; ++j) {
                 ax += prob.A[i * prob.n + j] * result.solution[j];
             }
-            double violation = ax - prob.ub[i];
-            if (violation > max_violation) {
-                max_violation = violation;
+            
+            // Check upper bound
+            if (prob.ub[i] < 1e19) {
+                double violation = ax - prob.ub[i];
+                if (violation > max_violation) max_violation = violation;
+            }
+            
+            // Check lower bound
+            if (prob.lb[i] > -1e19) {
+                double violation = prob.lb[i] - ax;
+                if (violation > max_violation) max_violation = violation;
             }
         }
         if (max_violation > 1e-6) {

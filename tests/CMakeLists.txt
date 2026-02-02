@@ -21,8 +21,12 @@ target_link_libraries(test_utilities PRIVATE geoqp::geoqp GTest::gtest_main)
 add_executable(test_integration test_integration.cpp)
 target_link_libraries(test_integration PRIVATE geoqp::geoqp GTest::gtest_main)
 
+add_executable(test_schur_complement test_schur_complement.cpp)
+target_link_libraries(test_schur_complement PRIVATE geoqp::geoqp GTest::gtest_main)
+
 # Register tests
 include(GoogleTest)
 gtest_discover_tests(test_linear_algebra)
 gtest_discover_tests(test_utilities)
 gtest_discover_tests(test_integration)
+gtest_discover_tests(test_schur_complement)

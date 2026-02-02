@@ -167,6 +167,79 @@ namespace geoqp
         };
 
         /**
+         * @brief Cache for precomputed constraint vectors z_i = L_Q^{-1} * a_i
+         * 
+         * Avoids recomputing expensive forward solves for the same constraint.
+         * Each z_i is computed once and reused across iterations.
+         */
+        class ConstraintCache {
+        public:
+            ConstraintCache(int m, int n) : m_(m), n_(n), cache_(m) {}
+            
+            // Get or compute z_i = L_Q^{-1} * a_i for constraint i
+            const std::vector<double>& get_z(
+                int constraint_idx,
+                const double* A,
+                const double* L_Q);
+            
+            void clear() {
+                for (auto& entry : cache_) {
+                    entry.computed = false;
+                }
+            }
+            
+        private:
+            struct Entry {
+                std::vector<double> z;
+                bool computed = false;
+            };
+            
+            int m_, n_;
+            std::vector<Entry> cache_;
+        };
+
+        /**
+         * @brief Manages incremental Cholesky updates for Schur complement S = A_F Q^{-1} A_F^T
+         * 
+         * Maintains L_S (Cholesky factor of S) and active constraint mapping.
+         * Supports O(k²) add/remove operations instead of O(k³) refactorization.
+         */
+        class SchurComplementManager {
+        public:
+            SchurComplementManager() : k_(0) {}
+            
+            // Initialize from scratch for given active set
+            bool initialize(
+                const std::vector<int>& face,
+                const double* A,
+                const double* L_Q,
+                int n,
+                ConstraintCache& cache);
+            
+            // Add constraint: extend L_S from k×k to (k+1)×(k+1)
+            bool add_constraint(
+                int constraint_idx,
+                const double* A,
+                const double* L_Q,
+                int n,
+                ConstraintCache& cache);
+            
+            // Remove constraint at face_index: shrink L_S from k×k to (k-1)×(k-1)
+            bool remove_constraint(int face_index);
+            
+            // Solve S * lambda = rhs using cached L_S
+            bool solve(const std::vector<double>& rhs, std::vector<double>& lambda) const;
+            
+            const std::vector<int>& get_active_constraints() const { return active_constraints_; }
+            int size() const { return k_; }
+            
+        private:
+            std::vector<double> L_S_;               // Cholesky factor (k×k)
+            std::vector<int> active_constraints_;   // Maps face index to constraint index
+            int k_;                                  // Current active set size
+        };
+
+        /**
          * @brief FaceHopper - explores faces to find the optimal one
          * 
          * Starting from an initial face (found via ray tracing from a good vertex),
@@ -200,6 +273,18 @@ namespace geoqp
                 const std::vector<int> &face,
                 std::vector<double> &x_star,
                 std::vector<double> &lambda) const;
+            
+            // Cached version using SchurComplementManager (O(k²) instead of O(k³))
+            bool compute_projection_cached(
+                const std::vector<int> &face,
+                std::vector<double> &x_star,
+                std::vector<double> &lambda) const;
+            
+            // Stateful cached face hopping (maintains Schur complement across iterations)
+            std::vector<int> find_optimal_face_cached(
+                const std::vector<int> &initial_face,
+                int &iterations,
+                Timer &t) const;
 
             const double *Q_;
             const double *A_;
@@ -211,6 +296,10 @@ namespace geoqp
             
             std::vector<double> Q_chol_;
             bool has_diagonal_constraints_ = false;
+            
+            // Caching infrastructure for incremental updates
+            mutable ConstraintCache constraint_cache_;
+            mutable SchurComplementManager schur_manager_;
             
             // Timing stats (aggregate)
             struct TimingStats {
@@ -226,6 +315,42 @@ namespace geoqp
                 double find_optimal_face_total = 0.0;
                 int find_optimal_face_calls = 0;
             } mutable timing_stats_;
+        };
+
+        /**
+         * @brief ProjectionSolver - shared KKT projection solver
+         * 
+         * Implements the core projection algorithm used by both FaceHopper and Projector.
+         * Solves: minimize (1/2) x^T Q x + g^T x subject to A_active * x = b_active
+         */
+        class ProjectionSolver
+        {
+        public:
+            /**
+             * @brief Solve the projection problem
+             * @param active_set Indices of active constraints
+             * @param Q Hessian matrix (n x n)
+             * @param A Constraint matrix (m x n)
+             * @param b Constraint bounds (m)
+             * @param x_bar Unconstrained minimum
+             * @param Q_chol Cholesky factorization of Q (if available)
+             * @param m Total number of constraints
+             * @param n Problem dimension
+             * @param x_star_out Output: projected point
+             * @param lambda_out Output: Lagrange multipliers
+             * @return true if successful, false on numerical failure
+             */
+            static bool solve(
+                const std::vector<int> &active_set,
+                const double *Q,
+                const double *A,
+                const double *b,
+                const std::vector<double> &x_bar,
+                const std::vector<double> &Q_chol,
+                int m,
+                int n,
+                std::vector<double> &x_star_out,
+                std::vector<double> &lambda_out);
         };
 
         /**

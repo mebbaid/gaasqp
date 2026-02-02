@@ -17,7 +17,8 @@ FaceHopper::FaceHopper(
     const std::vector<double>& x_bar,
     int m, int n,
     const Config& config
-) : Q_(Q), A_(A), b_(b), x_bar_(x_bar), m_(m), n_(n), config_(config) {
+) : Q_(Q), A_(A), b_(b), x_bar_(x_bar), m_(m), n_(n), config_(config),
+    constraint_cache_(m, n) {  // Initialize cache
     Q_chol_.resize(n_ * n_);
     try {
         LinearAlgebra::cholesky(Q_, Q_chol_.data(), n_);
@@ -48,6 +49,10 @@ FaceHopper::FaceHopper(
     
     if (has_diagonal_constraints_ && config_.verbosity >= 2) {
         std::cout << "  Detected diagonal/box constraints - using fast path\n";
+    }
+    
+    if (config_.use_caching && !Q_chol_.empty() && config_.verbosity >= 2) {
+        std::cout << "  Incremental Schur complement caching enabled\n";
     }
 }
 
@@ -178,6 +183,33 @@ bool FaceHopper::compute_projection_and_lambda(
     std::vector<double>& lambda
 ) const {
     Timer t;
+    
+    // Use cached path if enabled and Q_chol is available
+    if (config_.use_caching && !Q_chol_.empty() && !has_diagonal_constraints_) {
+        bool success = compute_projection_cached(face, x_star, lambda);
+        
+        // Verify feasibility
+        if (success) {
+            for (int i = 0; i < m_; ++i) {
+                const double* a_row = A_ + i * n_;
+                double ax = LinearAlgebra::dot(a_row, x_star.data(), n_);
+                if (ax > b_[i] + config_.tolerance) {
+                    success = false;
+                    break;
+                }
+            }
+        }
+        
+        if (config_.timing_verbosity > 0) {
+            timing_stats_.compute_projection_total += t.elapsed_ms();
+            ++timing_stats_.compute_projection_calls;
+        }
+        
+        if (success) return true;
+        // Fall through to original path if cached version fails
+    }
+    
+    // Original implementation follows...
     const int k = static_cast<int>(face.size());
     x_star = x_bar_;
     lambda.resize(k);
@@ -295,68 +327,13 @@ bool FaceHopper::compute_projection_and_lambda(
         return true;
     }
     
-    // General path for arbitrary constraints
-    std::vector<double> A_F(k * n_);
-    std::vector<double> b_F(k);
+    // General path for arbitrary constraints - use shared solver
+    bool success = ProjectionSolver::solve(
+        face, Q_, A_, b_, x_bar_, Q_chol_,
+        m_, n_, x_star, lambda
+    );
     
-    for (int i = 0; i < k; ++i) {
-        const int idx = face[i];
-        b_F[i] = b_[idx];
-        std::memcpy(A_F.data() + i * n_, A_ + idx * n_, n_ * sizeof(double));
-    }
-    
-    // Compute residual: A_F * x_bar - b_F
-    std::vector<double> residual(k);
-    LinearAlgebra::matvec(A_F.data(), x_bar_.data(), residual.data(), k, n_);
-    for (int i = 0; i < k; ++i) residual[i] -= b_F[i];
-    
-    // Compute Q^{-1} A_F^T (n x k matrix)
-    // For each column j: solve Q * y = A_F[j,:] for y
-    // Use pre-computed Cholesky factorization if available
-    std::vector<double> Q_inv_AT(n_ * k);
-    
-    for (int j = 0; j < k; ++j) {
-        // Get j-th row of A_F as a column vector
-        std::vector<double> a_col(n_);
-        for (int i = 0; i < n_; ++i) {
-            a_col[i] = A_F[j * n_ + i];
-        }
-        
-        // Solve Q * y = a_col for y using Cholesky
-        std::vector<double> y(n_);
-        if (!Q_chol_.empty()) {
-            LinearAlgebra::solve_cholesky(Q_chol_.data(), a_col.data(), y.data(), n_);
-        } else {
-            std::vector<double> Q_copy(n_ * n_);
-            std::memcpy(Q_copy.data(), Q_, n_ * n_ * sizeof(double));
-            try {
-                LinearAlgebra::solve_linear_system(Q_copy.data(), a_col.data(), y.data(), n_);
-            } catch (...) {
-                return false;
-            }
-        }
-        
-        // Store as j-th column of Q_inv_AT
-        for (int i = 0; i < n_; ++i) {
-            Q_inv_AT[i * k + j] = y[i];
-        }
-    }
-    
-    std::vector<double> S(k * k);
-    for (int i = 0; i < k; ++i) {
-        for (int j = i; j < k; ++j) {
-            double sum = 0.0;
-            for (int l = 0; l < n_; ++l) {
-                sum += A_F[i * n_ + l] * Q_inv_AT[l * k + j];
-            }
-            S[i * k + j] = sum;
-            S[j * k + i] = sum;
-        }
-    }
-    
-    try {
-        LinearAlgebra::solve_linear_system(S.data(), residual.data(), lambda.data(), k);
-    } catch (...) {
+    if (!success) {
         if (config_.timing_verbosity > 0) {
             timing_stats_.compute_projection_total += t.elapsed_ms();
             ++timing_stats_.compute_projection_calls;
@@ -364,14 +341,7 @@ bool FaceHopper::compute_projection_and_lambda(
         return false;
     }
     
-    for (int i = 0; i < n_; ++i) {
-        double correction = 0.0;
-        for (int j = 0; j < k; ++j) {
-            correction += Q_inv_AT[i * k + j] * lambda[j];
-        }
-        x_star[i] = x_bar_[i] - correction;
-    }
-    
+    // Verify feasibility
     for (int i = 0; i < m_; ++i) {
         const double* a_row = A_ + i * n_;
         double ax = LinearAlgebra::dot(a_row, x_star.data(), n_);
@@ -392,6 +362,209 @@ bool FaceHopper::compute_projection_and_lambda(
     return true;
 }
 
+bool FaceHopper::compute_projection_cached(
+    const std::vector<int>& face,
+    std::vector<double>& x_star,
+    std::vector<double>& lambda
+) const {
+    const int k = static_cast<int>(face.size());
+    
+    // Handle empty face
+    if (k == 0) {
+        x_star = x_bar_;
+        lambda.clear();
+        return true;
+    }
+    
+    // Build residual: A_F * x_bar - b_F
+    std::vector<double> residual(k);
+    for (int i = 0; i < k; ++i) {
+        const int idx = face[i];
+        const double* a_row = A_ + idx * n_;
+        residual[i] = LinearAlgebra::dot(a_row, x_bar_.data(), n_) - b_[idx];
+    }
+    
+    // Initialize Schur manager if needed
+    if (!schur_manager_.initialize(face, A_, Q_chol_.data(), n_, constraint_cache_)) {
+        return false;
+    }
+    
+    // Solve S * lambda = residual using cached factorization
+    if (!schur_manager_.solve(residual, lambda)) {
+        return false;
+    }
+    
+    // Compute x_star = x_bar - Q^{-1} A_F^T lambda
+    // Use cached z vectors: x_star = x_bar - sum_j(lambda[j] * L_Q^{-T} * z[j])
+    std::vector<double> w(n_, 0.0);
+    for (int j = 0; j < k; ++j) {
+        const auto& z_j = constraint_cache_.get_z(face[j], A_, Q_chol_.data());
+        for (int i = 0; i < n_; ++i) {
+            w[i] += lambda[j] * z_j[i];
+        }
+    }
+    
+    // Solve L_Q^T * correction = w
+    std::vector<double> correction(n_);
+    LinearAlgebra::backward_sub(Q_chol_.data(), w.data(), correction.data(), n_);
+    
+    // Apply correction
+    x_star.resize(n_);
+    for (int i = 0; i < n_; ++i) {
+        x_star[i] = x_bar_[i] - correction[i];
+    }
+    
+    return true;
+}
+
+std::vector<int> FaceHopper::find_optimal_face_cached(
+    const std::vector<int>& initial_face,
+    int& iterations,
+    Timer& t
+) const {
+    iterations = 0;
+    const int max_iter = config_.max_iterations;
+    
+    // Initialize Schur manager with initial face
+    if (!schur_manager_.initialize(initial_face, A_, Q_chol_.data(), n_, constraint_cache_)) {
+        // Fall back to non-cached if initialization fails
+        return initial_face;
+    }
+    
+    while (iterations < max_iter) {
+        iterations++;
+        const auto& current_face = schur_manager_.get_active_constraints();
+        const int k = schur_manager_.size();
+        
+        // Compute residual: A_F * x_bar - b_F  
+        std::vector<double> residual(k);
+        for (int i = 0; i < k; ++i) {
+            const int idx = current_face[i];
+            const double* a_row = A_ + idx * n_;
+            residual[i] = LinearAlgebra::dot(a_row, x_bar_.data(), n_) - b_[idx];
+        }
+        
+        // Solve for lambda using cached Schur complement
+        std::vector<double> lambda;
+        if (!schur_manager_.solve(residual, lambda)) {
+            break; // Numerical failure
+        }
+        
+        // Compute x_star using cached z vectors
+        std::vector<double> w(n_, 0.0);
+        for (int j = 0; j < k; ++j) {
+            const auto& z_j = constraint_cache_.get_z(current_face[j], A_, Q_chol_.data());
+            for (int i = 0; i < n_; ++i) {
+                w[i] += lambda[j] * z_j[i];
+            }
+        }
+        
+        std::vector<double> correction(n_);
+        LinearAlgebra::backward_sub(Q_chol_.data(), w.data(), correction.data(), n_);
+        
+        std::vector<double> x_star(n_);
+        for (int i = 0; i < n_; ++i) {
+            x_star[i] = x_bar_[i] - correction[i];
+        }
+        
+        // Check primal feasibility
+        bool primal_feasible = true;
+        int most_violated = -1;
+        double max_violation = 0.0;
+        
+        std::set<int> active_set(current_face.begin(), current_face.end());
+        for (int i = 0; i < m_; ++i) {
+            if (active_set.count(i)) continue;
+            
+            const double* a_row = A_ + i * n_;
+            double ax = LinearAlgebra::dot(a_row, x_star.data(), n_);
+            double violation = ax - b_[i];
+            
+            if (violation > max_violation + config_.tolerance) {
+                max_violation = violation;
+                most_violated = i;
+                primal_feasible = false;
+            }
+        }
+        
+        if (!primal_feasible && most_violated >= 0) {
+            // Collect all significantly violated constraints
+            std::vector<int> to_add;
+            for (int i = 0; i < m_; ++i) {
+                if (active_set.count(i)) continue;
+                
+                const double* a_row = A_ + i * n_;
+                double ax = LinearAlgebra::dot(a_row, x_star.data(), n_);
+                if (ax > b_[i] + config_.tolerance) {
+                    to_add.push_back(i);
+                }
+            }
+            
+            // Add all violated constraints incrementally
+            bool all_added = true;
+            for (int c : to_add) {
+                if (!schur_manager_.add_constraint(c, A_, Q_chol_.data(), n_, constraint_cache_)) {
+                    all_added = false;
+                    break;
+                }
+            }
+            
+            if (!all_added) break; // Numerical failure
+            continue;
+        }
+        
+        // Primal feasible - check dual feasibility
+        int drop_idx = -1;
+        double min_lambda = -config_.tolerance;
+        for (int i = 0; i < k; ++i) {
+            if (lambda[i] < min_lambda) {
+                min_lambda = lambda[i];
+                drop_idx = i;
+            }
+        }
+        
+        if (drop_idx >= 0) {
+            // Remove constraint with negative multiplier incrementally
+            if (!schur_manager_.remove_constraint(drop_idx)) {
+                break; // Numerical failure
+            }
+            continue;
+        }
+        
+        // Both primal and dual feasible - optimal!
+        if (config_.timing_verbosity > 0) {
+            timing_stats_.find_optimal_face_total += t.elapsed_ms();
+            ++timing_stats_.find_optimal_face_calls;
+            std::cout << "FaceHopper timing summary:\n";
+            std::cout << "  compute_intersection: " << timing_stats_.compute_intersection_calls
+                      << " calls, " << timing_stats_.compute_intersection_total << " ms\n";
+            std::cout << "  find_initial_face: " << timing_stats_.find_initial_face_calls
+                      << " calls, " << timing_stats_.find_initial_face_total << " ms\n";
+            std::cout << "  compute_projection: " << timing_stats_.compute_projection_calls
+                      << " calls, " << timing_stats_.compute_projection_total << " ms\n";
+            std::cout << "  find_optimal_face: " << timing_stats_.find_optimal_face_calls
+                      << " calls, " << timing_stats_.find_optimal_face_total << " ms\n";
+        }
+        return schur_manager_.get_active_constraints();
+    }
+    
+    // Max iterations or numerical failure
+    if (config_.timing_verbosity > 0) {
+        timing_stats_.find_optimal_face_total += t.elapsed_ms();
+        ++timing_stats_.find_optimal_face_calls;
+        std::cout << "FaceHopper timing summary:\n";
+        std::cout << "  compute_intersection: " << timing_stats_.compute_intersection_calls
+                  << " calls, " << timing_stats_.compute_intersection_total << " ms\n";
+        std::cout << "  find_initial_face: " << timing_stats_.find_initial_face_calls
+                  << " calls, " << timing_stats_.find_initial_face_total << " ms\n";
+        std::cout << "  compute_projection: " << timing_stats_.compute_projection_calls
+                  << " calls, " << timing_stats_.compute_projection_total << " ms\n";
+        std::cout << "  find_optimal_face: " << timing_stats_.find_optimal_face_calls
+                  << " calls, " << timing_stats_.find_optimal_face_total << " ms\n";
+    }
+    return schur_manager_.get_active_constraints();
+}
+
 std::vector<int> FaceHopper::find_optimal_face(
     const std::vector<int>& initial_face,
     int& iterations
@@ -403,7 +576,6 @@ std::vector<int> FaceHopper::find_optimal_face(
         if (config_.timing_verbosity > 0) {
             timing_stats_.find_optimal_face_total += t.elapsed_ms();
             ++timing_stats_.find_optimal_face_calls;
-            // print aggregate summary
             std::cout << "FaceHopper timing summary:\n";
             std::cout << "  compute_intersection: " << timing_stats_.compute_intersection_calls
                       << " calls, " << timing_stats_.compute_intersection_total << " ms\n";
@@ -417,6 +589,12 @@ std::vector<int> FaceHopper::find_optimal_face(
         return initial_face;
     }
     
+    // Use stateful caching if enabled
+    if (config_.use_caching && !Q_chol_.empty() && !has_diagonal_constraints_) {
+        return find_optimal_face_cached(initial_face, iterations, t);
+    }
+    
+    // Original implementation
     std::vector<int> current_face = initial_face;
     const int max_iter = config_.max_iterations;
     
