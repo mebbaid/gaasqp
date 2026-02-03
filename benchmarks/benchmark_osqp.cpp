@@ -61,7 +61,8 @@ struct OSQPResult {
 
 GeoQPResult solveGeoQP(const Eigen::MatrixXd& H, const Eigen::VectorXd& g,
                        const Eigen::MatrixXd& A, const Eigen::VectorXd& lb,
-                       const Eigen::VectorXd& ub)
+                       const Eigen::VectorXd& ub,
+                       geoqp::FaceHoppingStrategy strategy = geoqp::FaceHoppingStrategy::STANDARD)
 {
     GeoQPResult result;
     int n = H.rows();
@@ -91,7 +92,9 @@ GeoQPResult solveGeoQP(const Eigen::MatrixXd& H, const Eigen::VectorXd& g,
         problem.b[m + i] = -lb(i);
     }
     
-    geoqp::Solver solver;
+    geoqp::Config config;
+    config.face_hopping_strategy = strategy;
+    geoqp::Solver solver(config);
     auto start = Clock::now();
     geoqp::Solution sol = solver.solve(problem);
     auto end = Clock::now();
@@ -530,6 +533,116 @@ int main()
                   << std::setw(12) << std::scientific << std::setprecision(1) << (obj_diff_total/trials)
                   << (all_success ? "" : " FAIL")
                   << "\n";
+    }
+    
+    // Test 5: Face Hopping Strategy Comparison on MPC problems
+    std::cout << "\n\n";
+    std::cout << "╔════════════════════════════════════════════════════════════════╗\n";
+    std::cout << "║     Face Hopping Strategy Comparison (MPC Problems)           ║\n";
+    std::cout << "╚════════════════════════════════════════════════════════════════╝\n";
+    
+    std::vector<std::pair<geoqp::FaceHoppingStrategy, std::string>> strategies = {
+        {geoqp::FaceHoppingStrategy::STANDARD, "Standard"},
+        {geoqp::FaceHoppingStrategy::BATCH, "Batch"},
+        {geoqp::FaceHoppingStrategy::SENSITIVITY, "Sensitivity"},
+        {geoqp::FaceHoppingStrategy::NEIGHBORS, "Neighbors"}
+    };
+    
+    std::vector<int> strategy_horizons = {10, 20, 50};
+    for (int horizon : strategy_horizons) {
+        std::cout << "\n=== MPC Problem: Horizon = " << horizon << " (n = " << 2*horizon << ") ===\n";
+        
+        Eigen::MatrixXd H, A;
+        Eigen::VectorXd g, lb, ub;
+        generateMPCProblem(horizon, 4, 2, H, g, A, lb, ub);
+        
+        std::cout << std::string(120, '=') << "\n";
+        std::cout << std::setw(15) << "Strategy" 
+                  << std::setw(12) << "GeoQP (ms)"
+                  << std::setw(12) << "OSQP (ms)"
+                  << std::setw(10) << "Speedup"
+                  << std::setw(10) << "Phase2 ms"
+                  << std::setw(8) << "P2 Iter"
+                  << std::setw(8) << "Active"
+                  << std::setw(15) << "Objective"
+                  << "\n";
+        std::cout << std::string(120, '-') << "\n";
+        
+        // Solve with OSQP once (reference)
+        const int trials = 3;
+        double osqp_time = 0;
+        double osqp_obj = 0;
+        for (int t = 0; t < trials; ++t) {
+            auto or_ = solveOSQP(H, g, A, lb, ub);
+            osqp_time += or_.solve_time_ms;
+            osqp_obj += or_.obj_value;
+        }
+        osqp_time /= trials;
+        osqp_obj /= trials;
+        
+        // Test each GeoQP strategy
+        for (const auto& [strategy, name] : strategies) {
+            double geoqp_time = 0, phase2_time = 0, obj_value = 0;
+            int phase2_iters = 0, active_cons = 0;
+            
+            for (int t = 0; t < trials; ++t) {
+                auto gr = solveGeoQP(H, g, A, lb, ub, strategy);
+                geoqp_time += gr.solve_time_ms;
+                phase2_time += gr.phase2_time_ms;
+                phase2_iters += gr.phase2_iters;
+                active_cons += gr.num_active;
+                obj_value += gr.obj_value;
+            }
+            
+            geoqp_time /= trials;
+            phase2_time /= trials;
+            obj_value /= trials;
+            phase2_iters /= trials;
+            active_cons /= trials;
+            
+            double speedup = osqp_time / geoqp_time;
+            
+            std::cout << std::setw(15) << name
+                      << std::setw(12) << std::fixed << std::setprecision(3) << geoqp_time
+                      << std::setw(12) << osqp_time
+                      << std::setw(10) << std::setprecision(2) << speedup
+                      << std::setw(10) << std::setprecision(3) << phase2_time
+                      << std::setw(8) << phase2_iters
+                      << std::setw(8) << active_cons
+                      << std::setw(15) << std::scientific << std::setprecision(6) << obj_value
+                      << "\n";
+        }
+        std::cout << std::string(120, '=') << "\n";
+        
+        // Show Phase 2 speedups relative to Standard
+        std::cout << "\nPhase II Time Comparison (vs Standard):\n";
+        double standard_phase2 = 0;
+        for (int t = 0; t < trials; ++t) {
+            auto gr = solveGeoQP(H, g, A, lb, ub, geoqp::FaceHoppingStrategy::STANDARD);
+            standard_phase2 += gr.phase2_time_ms;
+        }
+        standard_phase2 /= trials;
+        
+        for (size_t i = 1; i < strategies.size(); ++i) {
+            double strat_phase2 = 0;
+            for (int t = 0; t < trials; ++t) {
+                auto gr = solveGeoQP(H, g, A, lb, ub, strategies[i].first);
+                strat_phase2 += gr.phase2_time_ms;
+            }
+            strat_phase2 /= trials;
+            
+            double improvement = standard_phase2 / strat_phase2;
+            std::cout << "  " << std::setw(15) << std::left << strategies[i].second << ": " 
+                      << std::fixed << std::setprecision(2) << improvement << "x";
+            if (improvement > 1.05) {
+                std::cout << " ✓ FASTER";
+            } else if (improvement < 0.95) {
+                std::cout << " ✗ SLOWER";
+            } else {
+                std::cout << " ~ SAME";
+            }
+            std::cout << "\n";
+        }
     }
     
     std::cout << "\nBenchmark complete.\n";

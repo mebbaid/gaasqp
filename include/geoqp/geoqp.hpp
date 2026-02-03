@@ -19,6 +19,14 @@ namespace geoqp
         INVALID_INPUT = 5
     };
 
+    enum class FaceHoppingStrategy
+    {
+        STANDARD = 0,      // Standard Dantzig pivoting (drop most negative lambda)
+        BATCH = 1,         // Batch deactivation (drop all negative lambdas at once)
+        SENSITIVITY = 2,   // Sensitivity analysis (drop constraint with best improvement)
+        NEIGHBORS = 3      // Face neighbor exploration (evaluate all adjacent faces)
+    };
+
     struct Config
     {
         double tolerance = 1e-8;
@@ -31,6 +39,8 @@ namespace geoqp
         int timing_verbosity = 0;
         // Use incremental Schur complement caching (faster for large k)
         bool use_caching = true;
+        // Face hopping strategy for Phase II
+        FaceHoppingStrategy face_hopping_strategy = FaceHoppingStrategy::STANDARD;
     };
 
     struct Solution

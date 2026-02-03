@@ -230,6 +230,12 @@ namespace geoqp
             // Solve S * lambda = rhs using cached L_S
             bool solve(const std::vector<double>& rhs, std::vector<double>& lambda) const;
             
+            // Get diagonal of L_S (for sensitivity analysis)
+            double get_L_diagonal(int i) const {
+                if (i >= k_) return 0.0;
+                return L_S_[i * k_ + i];
+            }
+            
             const std::vector<int>& get_active_constraints() const { return active_constraints_; }
             int size() const { return k_; }
             
@@ -412,6 +418,52 @@ namespace geoqp
             int n_;
             double tol_;
         };
+
+        // Face hopping strategy implementations (in hopping_strategy.cpp)
+        std::vector<int> hopping_strategy_batch(
+            const std::vector<int>& initial_face,
+            int& iterations,
+            Timer& t,
+            const double* Q,
+            const double* A,
+            const double* b,
+            const std::vector<double>& x_bar,
+            int m,
+            int n,
+            const Config& config,
+            ConstraintCache& constraint_cache,
+            SchurComplementManager& schur_manager,
+            const double* Q_chol);
+
+        std::vector<int> hopping_strategy_sensitivity(
+            const std::vector<int>& initial_face,
+            int& iterations,
+            Timer& t,
+            const double* Q,
+            const double* A,
+            const double* b,
+            const std::vector<double>& x_bar,
+            int m,
+            int n,
+            const Config& config,
+            ConstraintCache& constraint_cache,
+            SchurComplementManager& schur_manager,
+            const double* Q_chol);
+
+        std::vector<int> hopping_strategy_neighbors(
+            const std::vector<int>& initial_face,
+            int& iterations,
+            Timer& t,
+            const double* Q,
+            const double* A,
+            const double* b,
+            const std::vector<double>& x_bar,
+            int m,
+            int n,
+            const Config& config,
+            ConstraintCache& constraint_cache,
+            SchurComplementManager& schur_manager,
+            const double* Q_chol);
 
     } // namespace internal
 } // namespace geoqp

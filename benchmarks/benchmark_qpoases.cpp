@@ -286,7 +286,8 @@ struct SolverResult {
 };
 
 // Solve with GeoQP
-SolverResult solveGeoQP(const QPProblem& prob, int verbosity = 0) {
+SolverResult solveGeoQP(const QPProblem& prob, int verbosity = 0, 
+                        geoqp::FaceHoppingStrategy strategy = geoqp::FaceHoppingStrategy::STANDARD) {
     SolverResult result;
     
     geoqp::Problem gp;
@@ -329,6 +330,7 @@ SolverResult solveGeoQP(const QPProblem& prob, int verbosity = 0) {
     
     geoqp::Config config;
     config.verbosity = verbosity;
+    config.face_hopping_strategy = strategy;
     
     geoqp::Solver solver(config);
     
@@ -699,6 +701,82 @@ void runBenchmarkSuite(int seed = 42) {
                   << std::setw(9) << std::setprecision(2) << speedup << "x"
                   << std::setw(10) << g.active_constraints
                   << std::setw(15) << std::scientific << std::setprecision(2) << obj_diff << "\n";
+    }
+    
+    //=========================================================================
+    // Face Hopping Strategy Comparison
+    //=========================================================================
+    std::cout << "\n\n";
+    std::cout << "╔════════════════════════════════════════════════════════════════╗\n";
+    std::cout << "║     Face Hopping Strategy Comparison (MPC Problems)           ║\n";
+    std::cout << "╚════════════════════════════════════════════════════════════════╝\n";
+    
+    std::vector<std::pair<geoqp::FaceHoppingStrategy, std::string>> strategies = {
+        {geoqp::FaceHoppingStrategy::STANDARD, "Standard"},
+        {geoqp::FaceHoppingStrategy::BATCH, "Batch"},
+        {geoqp::FaceHoppingStrategy::SENSITIVITY, "Sensitivity"},
+        {geoqp::FaceHoppingStrategy::NEIGHBORS, "Neighbors"}
+    };
+    
+    std::vector<int> strategy_horizons = {10, 20, 50};
+    for (int horizon : strategy_horizons) {
+        std::cout << "\n=== MPC Problem: Horizon = " << horizon << " ===\n";
+        
+        auto prob = makeMPCQP(horizon, rng);
+        
+        std::cout << std::string(110, '=') << "\n";
+        std::cout << std::setw(15) << "Strategy" 
+                  << std::setw(12) << "GeoQP (ms)"
+                  << std::setw(12) << "qpOASES (ms)"
+                  << std::setw(10) << "Speedup"
+                  << std::setw(10) << "Iter"
+                  << std::setw(10) << "Active"
+                  << std::setw(18) << "Objective"
+                  << "\n";
+        std::cout << std::string(110, '-') << "\n";
+        
+        // Solve with qpOASES once (reference)
+        const int trials = 3;
+        double qpoases_time = 0;
+        double qpoases_obj = 0;
+        for (int t = 0; t < trials; ++t) {
+            auto q = solveQPOASES(prob);
+            qpoases_time += q.solve_time_ms;
+            qpoases_obj += q.obj_value;
+        }
+        qpoases_time /= trials;
+        qpoases_obj /= trials;
+        
+        // Test each GeoQP strategy
+        for (const auto& [strategy, name] : strategies) {
+            double geoqp_time = 0, obj_value = 0;
+            int iterations = 0, active_cons = 0;
+            
+            for (int t = 0; t < trials; ++t) {
+                auto g = solveGeoQP(prob, 0, strategy);
+                geoqp_time += g.solve_time_ms;
+                iterations += g.iterations;
+                active_cons += g.active_constraints;
+                obj_value += g.obj_value;
+            }
+            
+            geoqp_time /= trials;
+            obj_value /= trials;
+            iterations /= trials;
+            active_cons /= trials;
+            
+            double speedup = qpoases_time / geoqp_time;
+            
+            std::cout << std::setw(15) << name
+                      << std::setw(12) << std::fixed << std::setprecision(3) << geoqp_time
+                      << std::setw(12) << qpoases_time
+                      << std::setw(10) << std::setprecision(2) << speedup
+                      << std::setw(10) << iterations
+                      << std::setw(10) << active_cons
+                      << std::setw(18) << std::scientific << std::setprecision(6) << obj_value
+                      << "\n";
+        }
+        std::cout << std::string(110, '=') << "\n";
     }
     
     //=========================================================================

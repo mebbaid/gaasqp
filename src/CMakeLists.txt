@@ -4,6 +4,7 @@ set(GEOQP_SOURCES
     polytope.cpp
     initializer.cpp
     face_hopper.cpp
+    hopping_strategy.cpp
     projection_solver.cpp
     projector.cpp
     kkt_checker.cpp

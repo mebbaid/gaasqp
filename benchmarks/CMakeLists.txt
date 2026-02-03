@@ -35,3 +35,11 @@ else()
     message(STATUS "qpOASES not found - skipping active set benchmark")
     message(STATUS "To enable: pixi add qpoases")
 endif()
+
+# Face hopping strategy comparison (always build - no dependencies)
+add_executable(compare_face_hopping compare_face_hopping.cpp)
+target_link_libraries(compare_face_hopping PRIVATE geoqp)
+target_compile_features(compare_face_hopping PRIVATE cxx_std_17)
+
+install(TARGETS compare_face_hopping
+    RUNTIME DESTINATION bin)

@@ -588,10 +588,26 @@ std::vector<int> FaceHopper::find_optimal_face(
         }
         return initial_face;
     }
-    
     // Use stateful caching if enabled
     if (config_.use_caching && !Q_chol_.empty() && !has_diagonal_constraints_) {
-        return find_optimal_face_cached(initial_face, iterations, t);
+        // Dispatch to appropriate strategy
+        switch (config_.face_hopping_strategy) {
+            case FaceHoppingStrategy::BATCH:
+                return hopping_strategy_batch(initial_face, iterations, t,
+                    Q_, A_, b_, x_bar_, m_, n_, config_,
+                    constraint_cache_, schur_manager_, Q_chol_.data());
+            case FaceHoppingStrategy::SENSITIVITY:
+                return hopping_strategy_sensitivity(initial_face, iterations, t,
+                    Q_, A_, b_, x_bar_, m_, n_, config_,
+                    constraint_cache_, schur_manager_, Q_chol_.data());
+            case FaceHoppingStrategy::NEIGHBORS:
+                return hopping_strategy_neighbors(initial_face, iterations, t,
+                    Q_, A_, b_, x_bar_, m_, n_, config_,
+                    constraint_cache_, schur_manager_, Q_chol_.data());
+            case FaceHoppingStrategy::STANDARD:
+            default:
+                return find_optimal_face_cached(initial_face, iterations, t);
+        }
     }
     
     // Original implementation
