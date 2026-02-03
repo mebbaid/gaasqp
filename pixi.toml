@@ -28,6 +28,7 @@ benchmark-osqp = { cmd = "./build/benchmarks/benchmark_osqp", depends-on = ["bui
 benchmark-qpoases = { cmd = "./build/benchmarks/benchmark_qpoases", depends-on = ["build"] }
 benchmark-lipm = { cmd = "./build/benchmarks/benchmark_lipm_walking", depends-on = ["build"] }
 example = { cmd = "./build/examples/simple_example", depends-on = ["build"] }
+test = { cmd = "cd build && ctest --output-on-failure", depends-on = ["build"], description = "Run all tests" }
 
 [target.linux-64.tasks]
 valgrind = { cmd = "valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes ./build-debug/examples/simple_example", depends-on = ["build-debug"] }
