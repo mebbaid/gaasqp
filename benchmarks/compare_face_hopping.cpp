@@ -232,9 +232,9 @@ int main() {
     
     std::cout << "\nStrategy Descriptions:\n";
     std::cout << "  Standard (Dantzig):   Drop constraint with most negative lambda (classic)\n";
-    std::cout << "  Batch Deactivation:   Drop ALL negative lambda constraints in one iteration\n";
-    std::cout << "  Sensitivity:          Drop constraint with best predicted improvement\n";
-    std::cout << "  Face Neighbors:       Evaluate all adjacent faces, pick best one\n";
+    std::cout << "  Batch Deactivation:   Drop top-K constraints by sensitivity (adaptive, max 10)\n";
+    std::cout << "  Sensitivity:          Drop constraint with best predicted improvement (greedy)\n";
+    std::cout << "  Face Neighbors:       Analytical lookahead using Schur diagonal\n";
     std::cout << "\n";
     
     return 0;

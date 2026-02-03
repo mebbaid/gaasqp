@@ -88,8 +88,21 @@ namespace geoqp
         explicit Solver(const Config &config);
         ~Solver();
 
+        // Original API (involves vector copies)
         Solution solve(const Problem &problem);
         Solution solve(const Problem &problem, const Solution &warm_start);
+
+        // Zero-Copy API for MPC hot-starting
+        // Call setup() once with problem structure (Q, A matrices)
+        // Then call solve_hotstart() repeatedly with only changing data (g, b vectors)
+        void setup(int n, int m, const double* Q, const double* A);
+        Solution solve_hotstart(const double* g, const double* b);
+        
+        // Check if solver has been set up
+        bool is_setup() const;
+        
+        // Clear setup state
+        void clear_setup();
 
         const Config &config() const;
         void set_config(const Config &config);

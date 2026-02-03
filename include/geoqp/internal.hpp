@@ -269,6 +269,9 @@ namespace geoqp
                 int &iterations);
             
             const std::vector<double>& get_Q_chol() const { return Q_chol_; }
+            
+            // Inject precomputed Cholesky factorization (for zero-copy API)
+            void set_Q_chol(const std::vector<double>& Q_chol) { Q_chol_ = Q_chol; }
 
         private:
             double compute_intersection_parameter(

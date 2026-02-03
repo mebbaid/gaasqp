@@ -10,9 +10,9 @@ namespace internal {
  * @brief Helper functions for face hopping strategies
  * 
  * These implement different geometric active set methods:
- * - Batch: Drop all negative lambda constraints at once
- * - Sensitivity: Drop constraint with best predicted improvement
- * - Neighbors: Evaluate all adjacent faces and pick the best
+ * - Batch: Drop top-K constraints by sensitivity (adaptive batching)
+ * - Sensitivity: Drop single constraint with best predicted improvement
+ * - Neighbors: Analytical lookahead using Schur complement diagonal
  */
 
 namespace {
@@ -172,30 +172,65 @@ std::vector<int> hopping_strategy_batch(
             continue;
         }
         
-        // BATCH DEACTIVATION: Drop ALL constraints with negative lambda
-        std::vector<int> to_drop;
+        // BATCH DEACTIVATION: Drop top constraints by sensitivity
+        // Compute sensitivities for all negative lambda constraints
+        struct ConstraintSensitivity {
+            int index;
+            double sensitivity;
+            double lambda;
+        };
+        
+        std::vector<ConstraintSensitivity> candidates;
         for (int i = 0; i < k; ++i) {
             if (lambda[i] < -config.tolerance) {
-                to_drop.push_back(i);
+                double L_ii = schur_manager.get_L_diagonal(i);
+                if (L_ii < 1e-12) continue;
+                
+                // Predicted objective improvement
+                double sensitivity = (lambda[i] * lambda[i]) / (2.0 * L_ii * L_ii);
+                candidates.push_back({i, sensitivity, lambda[i]});
             }
         }
         
-        if (!to_drop.empty()) {
-            // Remove in reverse order to maintain indices
-            std::sort(to_drop.rbegin(), to_drop.rend());
-            bool all_removed = true;
-            for (int idx : to_drop) {
-                if (!schur_manager.remove_constraint(idx)) {
-                    all_removed = false;
-                    break;
+        if (!candidates.empty()) {
+            // Sort by sensitivity (descending - best improvements first)
+            std::sort(candidates.begin(), candidates.end(),
+                     [](const ConstraintSensitivity& a, const ConstraintSensitivity& b) {
+                         return a.sensitivity > b.sensitivity;
+                     });
+            
+            // Strategy: Drop top N constraints or all above threshold
+            const int max_batch_size = 10;  // Safety limit
+            double max_sensitivity = candidates[0].sensitivity;
+            double threshold = 0.5 * max_sensitivity;
+            
+            std::vector<int> to_drop;
+            for (const auto& cand : candidates) {
+                // Drop if: (1) in top max_batch_size AND (2) above threshold
+                if (to_drop.size() < max_batch_size && cand.sensitivity >= threshold) {
+                    to_drop.push_back(cand.index);
                 }
             }
-            if (!all_removed) break;
             
-            if (config.verbosity >= 3) {
-                std::cout << "  [BATCH] Dropped " << to_drop.size() << " constraints\n";
+            if (!to_drop.empty()) {
+                // Remove in reverse order to maintain indices
+                std::sort(to_drop.rbegin(), to_drop.rend());
+                bool all_removed = true;
+                for (int idx : to_drop) {
+                    if (!schur_manager.remove_constraint(idx)) {
+                        all_removed = false;
+                        break;
+                    }
+                }
+                if (!all_removed) break;
+                
+                if (config.verbosity >= 3) {
+                    std::cout << "  [BATCH] Dropped " << to_drop.size() 
+                              << " of " << candidates.size() << " negative constraints"
+                              << " (max sens: " << max_sensitivity << ")\n";
+                }
+                continue;
             }
-            continue;
         }
         
         // Optimal!
