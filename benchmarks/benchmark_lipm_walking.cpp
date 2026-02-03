@@ -657,10 +657,7 @@ int main() {
         {geoqp::FaceHoppingStrategy::SENSITIVITY, "GeoQP-Sensitivity"},
         {geoqp::FaceHoppingStrategy::NEIGHBORS, "GeoQP-Neighbors"}
     };
-    
-    // WARM START: Initialize solvers ONCE outside the loop
-    std::cout << "Initializing solvers (warm-start setup)...\n";
-    
+        
     // Initialize GeoQP solvers (one per strategy) using unique_ptr since Solver is not copyable
     std::vector<std::unique_ptr<geoqp::Solver>> geoqp_solvers;
     for (const auto& [strategy, name] : geoqp_strategies) {
@@ -678,7 +675,6 @@ int main() {
     DenseQP initial_qp = buildDenseQP(mpc_problem);
     
     // ZERO-COPY SETUP: Call setup() on each GeoQP solver to cache Q and A matrices
-    std::cout << "Setting up GeoQP solvers with problem structure (ZERO-COPY)...\n";
     for (auto& solver : geoqp_solvers) {
         solver->setup(initial_qp.n, initial_qp.m, initial_qp.H.data(), initial_qp.A.data());
     }
@@ -730,18 +726,15 @@ int main() {
     qpoases_options.printLevel = qpOASES::PL_NONE;
     qpoases_solver.setOptions(qpoases_options);
     
-    std::cout << "Warm-start setup complete.\n\n";
     
     // Run benchmark over multiple MPC iterations
     std::vector<std::vector<BenchmarkResult>> all_results;
     
     for (int step = 0; step < num_steps; ++step) {
-        std::cout << "Step " << step << "..." << std::flush;
         
         mpc_problem.initial_state = state;
         phase.updateIneqVector(mpc_problem, support_foot_pos);
         
-        std::cout << " building QP..." << std::flush;
         DenseQP qp = buildDenseQP(mpc_problem);
         
         // Normalize constraints for qpOASES (SUGGESTION 2)
@@ -760,7 +753,6 @@ int main() {
             }
         }
         
-        std::cout << " solving (warm-start)..." << std::flush;
         std::vector<BenchmarkResult> step_results;
         
         // Test each GeoQP strategy (warm start)
@@ -773,9 +765,7 @@ int main() {
         
         // Test qpOASES (warm start)
         step_results.push_back(solveWithQpOASESWarmStart(qp, qpoases_solver, step == 0));
-        
-        std::cout << " done\n";
-        
+                
         all_results.push_back(step_results);
         
         // Integrate for next step (using first input from GeoQP-Standard)
@@ -881,19 +871,6 @@ int main() {
         std::cout << "\n";
     }
     
-    std::cout << "\nBenchmark complete.\n";
-    std::cout << "\n=== Summary (WARM-START + ZERO-COPY) ===\n";
-    std::cout << "This benchmark uses warm-starting AND zero-copy API (realistic MPC practice).\n";
-    std::cout << "Key findings:\n";
-    std::cout << "  • GeoQP: FASTEST! (0.039-0.064ms avg, 10/10 success)\n";
-    std::cout << "           Zero-copy API eliminates vector allocation overhead\n";
-    std::cout << "           3-4x faster than OSQP on this problem!\n";
-    std::cout << "  • OSQP:  Robust but slower (0.14ms avg, 10/10 success)\n";
-    std::cout << "           Warm-starting provides ~6x speedup vs cold-start\n";
-    std::cout << "  • qpOASES: Fast when succeeds (0.15ms) but low success (3/10)\n";
-    std::cout << "             Needs better constraint normalization\n";
-    std::cout << "\nConclusion: With zero-copy API, GeoQP wins convincingly!\n";
-    std::cout << "The external reviewer was right - we were measuring memory allocation, not algorithms.\n\n";
-    
+
     return 0;
 }
