@@ -1,16 +1,7 @@
 /**
  * @file benchmark_osqp.cpp
  * @brief Benchmark comparing GeoQP vs OSQP with detailed diagnostics
- * 
- * NOTE: This benchmark tests GENERAL QP performance where each trial solves
- * a DIFFERENT random problem. The vector-copy overhead is unavoidable here.
- * 
- * For MPC HOT-START performance (same structure, changing g/b), see:
- * - benchmark_lipm_walking.cpp (uses zero-copy API, 3-4x faster)
- * 
- * The zero-copy API (setup() + solve_hotstart()) is NOT beneficial here because:
- * - Each trial has different H and A matrices
- * - We're measuring single-shot solve performance, not MPC loops
+ * Code written with the help of Claude Sonnet 
  */
 
 #include <geoqp/geoqp.hpp>

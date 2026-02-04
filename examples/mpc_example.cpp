@@ -2,16 +2,6 @@
  * @file mpc_example.cpp
  * @brief Model Predictive Control (MPC) example using GeoQP
  * 
- * This demonstrates solving a linear MPC problem for a 2D double integrator
- * (position control with velocity states and acceleration inputs).
- * 
- * Uses the "condensed" MPC formulation where:
- * - Decision variables are only the control inputs u_0, ..., u_{N-1}
- * - States are implicitly computed from dynamics
- * - This results in a smaller, dense QP suitable for GeoQP
- * 
- * The system moves a point mass from (-2, -2) to (2, 2) while respecting
- * acceleration limits of +/- 2 m/s^2.
  */
 
 #include <geoqp/geoqp.hpp>
@@ -337,67 +327,109 @@ int main()
     
     std::cout << "QP: " << problem.n << " vars, " << problem.m << " constraints\n\n";
     
-    // Configure solver
+    // Configure solver with different strategies
     geoqp::Config config;
     config.verbosity = 0;
     config.tolerance = 1e-8;
     
-    geoqp::Solver solver(config);
+    // Test with different hopping strategies
+    std::vector<std::string> strategy_names = {"standard", "batch", "sensitivity", "neighbors"};
+    std::vector<geoqp::FaceHoppingStrategy> strategies = {
+        geoqp::FaceHoppingStrategy::STANDARD,
+        geoqp::FaceHoppingStrategy::BATCH,
+        geoqp::FaceHoppingStrategy::SENSITIVITY,
+        geoqp::FaceHoppingStrategy::NEIGHBORS
+    };
     
-    // Simulation
-    const int n_steps = 50;
-    double total_time = 0.0;
+    std::cout << "Testing different hopping strategies:\n\n";
     
-    std::cout << "Step |   x       y      vx      vy   | Error  | Time (ms)\n";
-    std::cout << "-----+-------------------------------+--------+----------\n";
-    
-    for (int step = 0; step < n_steps; ++step) {
-        // Rebuild QP with current state
-        buildCondensedQP(Sx, Su, Q_diag, R_diag, x_current, x_ref, problem.Q, problem.g);
+    for (size_t s = 0; s < strategies.size(); ++s) {
+        config.face_hopping_strategy = strategies[s];
+        geoqp::Solver solver(config);
         
-        // Solve
-        auto t_start = std::chrono::high_resolution_clock::now();
-        geoqp::Solution sol = solver.solve(problem);
-        auto t_end = std::chrono::high_resolution_clock::now();
+        // Reset state
+        x_current = {-2.0, -2.0, 0.0, 0.0};
         
-        double solve_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
-        total_time += solve_ms;
+        // Setup zero-copy API (Q and A don't change, only g and b change)
+        solver.setup(problem.n, problem.m, problem.Q.data(), problem.A.data());
         
-        if (sol.status != geoqp::Status::SUCCESS) {
-            std::cerr << "Solver failed at step " << step << "\n";
-            return 1;
+        const int n_steps = 50;
+        double total_time = 0.0;
+        int total_iters = 0;
+        
+        if (s == 0) {
+            std::cout << "Strategy: " << strategy_names[s] << "\n";
+            std::cout << "Step |   x       y      vx      vy   | Error  | Time (ms)\n";
+            std::cout << "-----+-------------------------------+--------+----------\n";
         }
         
-        // Extract first control input
-        std::vector<double> u = {sol.x[0], sol.x[1]};
-        
-        // Print
-        double error = computeError(x_current, x_ref);
-        std::cout << std::setw(4) << step << " | "
-                  << std::fixed << std::setprecision(3)
-                  << std::setw(6) << x_current[0] << " "
-                  << std::setw(6) << x_current[1] << " "
-                  << std::setw(6) << x_current[2] << " "
-                  << std::setw(6) << x_current[3] << " | "
-                  << std::setw(6) << error << " | "
-                  << std::setw(8) << std::setprecision(3) << solve_ms << "\n";
-        
-        // Check convergence
-        if (error < 0.01) {
-            std::cout << "\nConverged at step " << step << "!\n";
-            break;
+        for (int step = 0; step < n_steps; ++step) {
+            // Update only g and b (zero-copy hot-start)
+            buildCondensedQP(Sx, Su, Q_diag, R_diag, x_current, x_ref, problem.Q, problem.g);
+            buildInputConstraints(u_min, u_max, problem.A, problem.b);
+            
+            // Solve with zero-copy API
+            auto t_start = std::chrono::high_resolution_clock::now();
+            geoqp::Solution sol = solver.solve_hotstart(problem.g.data(), problem.b.data());
+            auto t_end = std::chrono::high_resolution_clock::now();
+            
+            double solve_ms = std::chrono::duration<double, std::milli>(t_end - t_start).count();
+            total_time += solve_ms;
+            total_iters += sol.iterations;
+            
+            if (sol.status != geoqp::Status::SUCCESS) {
+                std::cerr << "Solver failed at step " << step << "\n";
+                return 1;
+            }
+            
+            // Extract first control input
+            std::vector<double> u = {sol.x[0], sol.x[1]};
+            
+            // Print only for first strategy
+            if (s == 0) {
+                double error = computeError(x_current, x_ref);
+                std::cout << std::setw(4) << step << " | "
+                          << std::fixed << std::setprecision(3)
+                          << std::setw(6) << x_current[0] << " "
+                          << std::setw(6) << x_current[1] << " "
+                          << std::setw(6) << x_current[2] << " "
+                          << std::setw(6) << x_current[3] << " | "
+                          << std::setw(6) << error << " | "
+                          << std::setw(8) << std::setprecision(3) << solve_ms << "\n";
+            }
+            
+            // Check convergence
+            double error = computeError(x_current, x_ref);
+            if (error < 0.01) {
+                if (s == 0) {
+                    std::cout << "\nConverged at step " << step << "!\n\n";
+                }
+                break;
+            }
+            
+            // Simulate
+            x_current = simulate(A_dyn, B_dyn, x_current, u);
         }
         
-        // Simulate
-        x_current = simulate(A_dyn, B_dyn, x_current, u);
+        // Print summary for this strategy
+        if (s == 0) {
+            std::cout << "\n=== Performance Comparison ===\n";
+            std::cout << "Strategy       | Avg Time (ms) | Total Time (ms) | Avg Iters\n";
+            std::cout << "---------------+---------------+-----------------+----------\n";
+        }
+        
+        std::cout << std::setw(14) << std::left << strategy_names[s] << " | "
+                  << std::fixed << std::setprecision(4) << std::setw(13) << (total_time / n_steps) << " | "
+                  << std::setw(15) << total_time << " | "
+                  << std::setw(8) << std::setprecision(2) << (double(total_iters) / n_steps) << "\n";
+        
+        solver.clear_setup();
     }
     
     std::cout << "\n=== Results ===\n";
     std::cout << "Final position: [" << std::fixed << std::setprecision(4) 
               << x_current[0] << ", " << x_current[1] << "]\n";
     std::cout << "Final error: " << computeError(x_current, x_ref) << "\n";
-    std::cout << "Total solve time: " << std::setprecision(2) << total_time << " ms\n";
-    std::cout << "Average solve time: " << (total_time / n_steps) << " ms\n";
     
     return 0;
 }

@@ -1,12 +1,7 @@
 /**
  * @file benchmark_qpoases.cpp
  * @brief Comprehensive benchmark comparing GeoQP vs qpOASES (active set method)
- * 
- * This benchmark compares two geometrically-inspired approaches:
- * - GeoQP: Our novel geometric active set method
- * - qpOASES: Classic parametric active set method
- * 
- * We show solution trajectories and verify correctness across problem types.
+ * Code written with the help of Claude Sonnet
  */
 
 #include <geoqp/geoqp.hpp>

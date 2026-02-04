@@ -8,14 +8,8 @@
  * Tests GeoQP (with different face hopping strategies) vs OSQP vs qpOASES
  * on a realistic humanoid walking MPC problem.
  * 
- * Known Issues:
- * - GeoQP fails on steps 1-2 due to singular matrix in Phase III when computing
- *   Lagrange multipliers. This indicates degenerate/redundant constraints in those
- *   specific walking phases. GeoQP needs improved degeneracy handling.
- * - qpOASES has limited success rate (~3/10) on this problem, likely due to
- *   numerical sensitivity in the constraint configuration.
- * - OSQP shows high variance in solve times (0.18-6.8ms) as it's an iterative solver
- *   and some problem instances require more iterations than others.
+ * Code written with the help of Claude Sonnet 
+ * 
  */
 
 #include <geoqp/geoqp.hpp>
