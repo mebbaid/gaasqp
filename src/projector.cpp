@@ -1,4 +1,5 @@
 #include "geoqp/internal.hpp"
+#include "geoqp/compiler_hints.hpp"
 #include <cmath>
 #include <algorithm>
 #include <stdexcept>

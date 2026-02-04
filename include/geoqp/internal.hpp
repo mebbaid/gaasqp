@@ -291,6 +291,14 @@ namespace geoqp
 
             mutable ConstraintCache constraint_cache_;
             mutable SchurComplementManager schur_manager_;
+            
+            // Pre-allocated workspaces for zero-allocation hot paths
+            mutable std::vector<double> ws_residual_;
+            mutable std::vector<double> ws_w_;
+            mutable std::vector<double> ws_correction_;
+            mutable std::vector<double> ws_x_star_;
+            mutable std::vector<double> ws_lambda_;
+            
             struct TimingStats
             {
                 double compute_intersection_total = 0.0;

@@ -1,4 +1,5 @@
 #include "geoqp/internal.hpp"
+#include "geoqp/compiler_hints.hpp"
 #include <algorithm>
 #include <set>
 #include <iostream>
@@ -6,96 +7,126 @@
 namespace geoqp {
 namespace internal {
 
-/**
- * @brief Helper functions for face hopping strategies
- * 
- * These implement different geometric active set methods:
- * - Batch: Drop top-K constraints by sensitivity (adaptive batching)
- * - Sensitivity: Drop single constraint with best predicted improvement
- * - Neighbors: Analytical lookahead using Schur complement diagonal
- */
-
 namespace {
 
-// Helper: Compute Q-weighted distance ||x - x_bar||_Q^2
 double compute_q_distance(
     const std::vector<double>& x,
     const std::vector<double>& x_bar,
-    const double* Q,
+    const double* GEOQP_RESTRICT Q,
     int n
 ) {
-    std::vector<double> diff(n);
-    for (int i = 0; i < n; ++i) {
-        diff[i] = x[i] - x_bar[i];
-    }
+    const double *GEOQP_RESTRICT x_ptr = x.data();
+    const double *GEOQP_RESTRICT xbar_ptr = x_bar.data();
     
     double distance = 0.0;
+    
     for (int i = 0; i < n; ++i) {
-        const double* Q_row = Q + i * n;
-        double row_contrib = 0.0;
-        for (int j = 0; j < n; ++j) {
-            row_contrib += Q_row[j] * diff[j];
+        const double *GEOQP_RESTRICT Q_row = Q + i * n;
+        const double diff_i = x_ptr[i] - xbar_ptr[i];
+        
+        double sum0 = 0.0;
+        double sum1 = 0.0;
+        double sum2 = 0.0;
+        double sum3 = 0.0;
+        
+        int j = 0;
+        for (; j + 3 < n; j += 4) {
+            double diff_j0 = x_ptr[j] - xbar_ptr[j];
+            double diff_j1 = x_ptr[j + 1] - xbar_ptr[j + 1];
+            double diff_j2 = x_ptr[j + 2] - xbar_ptr[j + 2];
+            double diff_j3 = x_ptr[j + 3] - xbar_ptr[j + 3];
+            
+            sum0 += Q_row[j] * diff_j0;
+            sum1 += Q_row[j + 1] * diff_j1;
+            sum2 += Q_row[j + 2] * diff_j2;
+            sum3 += Q_row[j + 3] * diff_j3;
         }
-        distance += diff[i] * row_contrib;
+        
+        double row_contrib = (sum0 + sum1) + (sum2 + sum3);
+        
+        for (; j < n; ++j) {
+            row_contrib += Q_row[j] * (x_ptr[j] - xbar_ptr[j]);
+        }
+        
+        distance += diff_i * row_contrib;
     }
     
     return distance;
 }
 
-// Helper: Compute projection and x_star using Schur manager
 bool compute_projection_with_schur(
     const SchurComplementManager& schur_manager,
     ConstraintCache& constraint_cache,
     const std::vector<double>& x_bar,
-    const double* A,
-    const double* b,
-    const double* Q_chol,
+    const double* GEOQP_RESTRICT A,
+    const double* GEOQP_RESTRICT b,
+    const double* GEOQP_RESTRICT Q_chol,
     int n,
     std::vector<double>& x_star,
-    std::vector<double>& lambda
+    std::vector<double>& lambda,
+    std::vector<double>& ws_residual,  
+    std::vector<double>& ws_w,         
+    std::vector<double>& ws_correction 
 ) {
     const auto& current_face = schur_manager.get_active_constraints();
     const int k = schur_manager.size();
     
-    // Compute residual: A_F * x_bar - b_F
-    std::vector<double> residual(k);
+    if (static_cast<int>(ws_residual.size()) < k) ws_residual.resize(k);
+    if (static_cast<int>(ws_w.size()) < n) ws_w.resize(n);
+    if (static_cast<int>(ws_correction.size()) < n) ws_correction.resize(n);
+    
+    const double *GEOQP_RESTRICT xbar_ptr = x_bar.data();
+    
     for (int i = 0; i < k; ++i) {
         const int idx = current_face[i];
-        const double* a_row = A + idx * n;
-        residual[i] = LinearAlgebra::dot(a_row, x_bar.data(), n) - b[idx];
+        const double *GEOQP_RESTRICT a_row = A + idx * n;
+        ws_residual[i] = LinearAlgebra::dot(a_row, xbar_ptr, n) - b[idx];
     }
     
-    // Solve for lambda
-    if (!schur_manager.solve(residual, lambda)) {
+    if (!schur_manager.solve(ws_residual, lambda)) {
         return false;
     }
     
-    // Compute x_star = x_bar - Q^{-1} A_F^T lambda
-    std::vector<double> w(n, 0.0);
+    std::fill(ws_w.begin(), ws_w.begin() + n, 0.0);
+    
+    double *GEOQP_RESTRICT w_ptr = ws_w.data();
+    const double *GEOQP_RESTRICT lambda_ptr = lambda.data();
+    
     for (int j = 0; j < k; ++j) {
         const auto& z_j = constraint_cache.get_z(current_face[j], A, Q_chol);
-        for (int i = 0; i < n; ++i) {
-            w[i] += lambda[j] * z_j[i];
+        const double *GEOQP_RESTRICT z_ptr = z_j.data();
+        const double lambda_j = lambda_ptr[j];
+        
+        int i = 0;
+        for (; i + 3 < n; i += 4) {
+            w_ptr[i] += lambda_j * z_ptr[i];
+            w_ptr[i + 1] += lambda_j * z_ptr[i + 1];
+            w_ptr[i + 2] += lambda_j * z_ptr[i + 2];
+            w_ptr[i + 3] += lambda_j * z_ptr[i + 3];
+        }
+        for (; i < n; ++i) {
+            w_ptr[i] += lambda_j * z_ptr[i];
         }
     }
     
-    std::vector<double> correction(n);
-    LinearAlgebra::backward_sub(Q_chol, w.data(), correction.data(), n);
+    LinearAlgebra::backward_sub(Q_chol, w_ptr, ws_correction.data(), n);
     
     x_star.resize(n);
+    double *GEOQP_RESTRICT xstar_ptr = x_star.data();
+    const double *GEOQP_RESTRICT corr_ptr = ws_correction.data();
+    
     for (int i = 0; i < n; ++i) {
-        x_star[i] = x_bar[i] - correction[i];
+        xstar_ptr[i] = xbar_ptr[i] - corr_ptr[i];
     }
     
     return true;
 }
 
-// Helper: Check primal feasibility and collect violated constraints
 bool check_primal_feasibility(
     const std::vector<double>& x_star,
     const std::vector<int>& current_face,
-    const double* A,
-    const double* b,
+    const double* GEOQP_RESTRICT A,
+    const double* GEOQP_RESTRICT b,
     int m,
     int n,
     double tolerance,
@@ -104,11 +135,32 @@ bool check_primal_feasibility(
     to_add.clear();
     std::set<int> active_set(current_face.begin(), current_face.end());
     
+    const double *GEOQP_RESTRICT x_ptr = x_star.data();
+    
     for (int i = 0; i < m; ++i) {
         if (active_set.count(i)) continue;
         
-        const double* a_row = A + i * n;
-        double ax = LinearAlgebra::dot(a_row, x_star.data(), n);
+        const double *GEOQP_RESTRICT a_row = A + i * n;
+        
+        double sum0 = 0.0;
+        double sum1 = 0.0;
+        double sum2 = 0.0;
+        double sum3 = 0.0;
+        
+        int j = 0;
+        for (; j + 3 < n; j += 4) {
+            sum0 += a_row[j] * x_ptr[j];
+            sum1 += a_row[j + 1] * x_ptr[j + 1];
+            sum2 += a_row[j + 2] * x_ptr[j + 2];
+            sum3 += a_row[j + 3] * x_ptr[j + 3];
+        }
+        
+        double ax = (sum0 + sum1) + (sum2 + sum3);
+        
+        for (; j < n; ++j) {
+            ax += a_row[j] * x_ptr[j];
+        }
+        
         if (ax > b[i] + tolerance) {
             to_add.push_back(i);
         }
@@ -119,7 +171,6 @@ bool check_primal_feasibility(
 
 } // anonymous namespace
 
-// Strategy 1: Batch Deactivation
 std::vector<int> hopping_strategy_batch(
     const std::vector<int>& initial_face,
     int& iterations,
@@ -142,25 +193,27 @@ std::vector<int> hopping_strategy_batch(
         return initial_face;
     }
     
+    std::vector<double> ws_residual(m);
+    std::vector<double> ws_w(n);
+    std::vector<double> ws_correction(n);
+    
     while (iterations < max_iter) {
         iterations++;
         const auto& current_face = schur_manager.get_active_constraints();
         const int k = schur_manager.size();
         
-        // Compute projection
         std::vector<double> x_star, lambda;
         if (!compute_projection_with_schur(schur_manager, constraint_cache, x_bar,
-                                          A, b, Q_chol, n, x_star, lambda)) {
+                                          A, b, Q_chol, n, x_star, lambda,
+                                          ws_residual, ws_w, ws_correction)) {
             break;
         }
         
-        // Check primal feasibility
         std::vector<int> to_add;
         bool primal_feasible = check_primal_feasibility(x_star, current_face, A, b,
                                                         m, n, config.tolerance, to_add);
         
         if (!primal_feasible) {
-            // Add all violated constraints
             bool all_added = true;
             for (int c : to_add) {
                 if (!schur_manager.add_constraint(c, A, Q_chol, n, constraint_cache)) {
@@ -172,8 +225,6 @@ std::vector<int> hopping_strategy_batch(
             continue;
         }
         
-        // BATCH DEACTIVATION: Drop top constraints by sensitivity
-        // Compute sensitivities for all negative lambda constraints
         struct ConstraintSensitivity {
             int index;
             double sensitivity;
@@ -186,34 +237,29 @@ std::vector<int> hopping_strategy_batch(
                 double L_ii = schur_manager.get_L_diagonal(i);
                 if (L_ii < 1e-12) continue;
                 
-                // Predicted objective improvement
                 double sensitivity = (lambda[i] * lambda[i]) / (2.0 * L_ii * L_ii);
                 candidates.push_back({i, sensitivity, lambda[i]});
             }
         }
         
         if (!candidates.empty()) {
-            // Sort by sensitivity (descending - best improvements first)
             std::sort(candidates.begin(), candidates.end(),
                      [](const ConstraintSensitivity& a, const ConstraintSensitivity& b) {
                          return a.sensitivity > b.sensitivity;
                      });
             
-            // Strategy: Drop top N constraints or all above threshold
             const int max_batch_size = 10;  // Safety limit
             double max_sensitivity = candidates[0].sensitivity;
             double threshold = 0.5 * max_sensitivity;
             
             std::vector<int> to_drop;
             for (const auto& cand : candidates) {
-                // Drop if: (1) in top max_batch_size AND (2) above threshold
                 if (to_drop.size() < max_batch_size && cand.sensitivity >= threshold) {
                     to_drop.push_back(cand.index);
                 }
             }
             
             if (!to_drop.empty()) {
-                // Remove in reverse order to maintain indices
                 std::sort(to_drop.rbegin(), to_drop.rend());
                 bool all_removed = true;
                 for (int idx : to_drop) {
@@ -233,7 +279,6 @@ std::vector<int> hopping_strategy_batch(
             }
         }
         
-        // Optimal!
         if (config.verbosity >= 3) {
             std::cout << "  [BATCH] Optimal face with " << current_face.size() << " constraints\n";
         }
@@ -243,7 +288,6 @@ std::vector<int> hopping_strategy_batch(
     return schur_manager.get_active_constraints();
 }
 
-// Strategy 2: Sensitivity Analysis
 std::vector<int> hopping_strategy_sensitivity(
     const std::vector<int>& initial_face,
     int& iterations,
@@ -266,19 +310,22 @@ std::vector<int> hopping_strategy_sensitivity(
         return initial_face;
     }
     
+    std::vector<double> ws_residual(m);
+    std::vector<double> ws_w(n);
+    std::vector<double> ws_correction(n);
+    
     while (iterations < max_iter) {
         iterations++;
         const auto& current_face = schur_manager.get_active_constraints();
         const int k = schur_manager.size();
         
-        // Compute projection
         std::vector<double> x_star, lambda;
         if (!compute_projection_with_schur(schur_manager, constraint_cache, x_bar,
-                                          A, b, Q_chol, n, x_star, lambda)) {
+                                          A, b, Q_chol, n, x_star, lambda,
+                                          ws_residual, ws_w, ws_correction)) {
             break;
         }
         
-        // Check primal feasibility
         std::vector<int> to_add;
         bool primal_feasible = check_primal_feasibility(x_star, current_face, A, b,
                                                         m, n, config.tolerance, to_add);
@@ -295,20 +342,13 @@ std::vector<int> hopping_strategy_sensitivity(
             continue;
         }
         
-        // SENSITIVITY ANALYSIS: Drop constraint with best improvement
-        // Exact: Δf = -lambda[i]^2 / (2 * [S^-1]_ii)
-        // Approximation: Δf ≈ -lambda[i]^2 / (2 * L_ii^2)
-        // where L_ii is diagonal of Cholesky factor of Schur complement
         int best_drop_idx = -1;
         double best_sensitivity = 0.0;
         
         for (int i = 0; i < k; ++i) {
             if (lambda[i] < -config.tolerance) {
-                // Get diagonal of Schur Cholesky factor
                 double L_ii = schur_manager.get_L_diagonal(i);
-                if (L_ii < 1e-12) continue; // Avoid division by near-zero
-                
-                // Predicted objective improvement: Δf ≈ lambda^2 / (2 * L_ii^2)
+                if (L_ii < 1e-12) continue; 
                 double sensitivity = (lambda[i] * lambda[i]) / (2.0 * L_ii * L_ii);
                 
                 if (sensitivity > best_sensitivity) {
@@ -330,7 +370,6 @@ std::vector<int> hopping_strategy_sensitivity(
             continue;
         }
         
-        // Optimal!
         if (config.verbosity >= 3) {
             std::cout << "  [SENSITIVITY] Optimal face with " << current_face.size() << " constraints\n";
         }
@@ -340,7 +379,6 @@ std::vector<int> hopping_strategy_sensitivity(
     return schur_manager.get_active_constraints();
 }
 
-// Strategy 3: Face Neighbor Exploration
 std::vector<int> hopping_strategy_neighbors(
     const std::vector<int>& initial_face,
     int& iterations,
@@ -363,19 +401,22 @@ std::vector<int> hopping_strategy_neighbors(
         return initial_face;
     }
     
+    std::vector<double> ws_residual(m);
+    std::vector<double> ws_w(n);
+    std::vector<double> ws_correction(n);
+    
     while (iterations < max_iter) {
         iterations++;
         const auto& current_face = schur_manager.get_active_constraints();
         const int k = schur_manager.size();
         
-        // Compute projection
         std::vector<double> x_star, lambda;
         if (!compute_projection_with_schur(schur_manager, constraint_cache, x_bar,
-                                          A, b, Q_chol, n, x_star, lambda)) {
+                                          A, b, Q_chol, n, x_star, lambda,
+                                          ws_residual, ws_w, ws_correction)) {
             break;
         }
         
-        // Check primal feasibility
         std::vector<int> to_add;
         bool primal_feasible = check_primal_feasibility(x_star, current_face, A, b,
                                                         m, n, config.tolerance, to_add);
@@ -392,24 +433,18 @@ std::vector<int> hopping_strategy_neighbors(
             continue;
         }
         
-        // ANALYTICAL NEIGHBOR EVALUATION
-        // For dropping constraint i, the new objective improvement is:
-        // Δf_i = lambda[i]^2 / (2 * [S^-1]_ii) ≈ lambda[i]^2 / (2 * L_ii^2)
-        // This is the steepest descent direction in the dual space.
-        
+
         int best_drop_idx = -1;
         double best_improvement = 0.0;
         
         for (int i = 0; i < k; ++i) {
             if (lambda[i] >= -config.tolerance) {
-                continue; // Only drop negative lambda constraints
+                continue; 
             }
             
-            // Get diagonal of Schur Cholesky factor
             double L_ii = schur_manager.get_L_diagonal(i);
             if (L_ii < 1e-12) continue;
             
-            // Predicted objective improvement when dropping constraint i
             double improvement = (lambda[i] * lambda[i]) / (2.0 * L_ii * L_ii);
             
             if (improvement > best_improvement) {
@@ -430,7 +465,6 @@ std::vector<int> hopping_strategy_neighbors(
             continue;
         }
         
-        // Optimal!
         if (config.verbosity >= 3) {
             std::cout << "  [NEIGHBORS] Optimal face with " << current_face.size() << " constraints\n";
         }
