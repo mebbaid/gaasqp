@@ -56,6 +56,9 @@ namespace geoqp
             static void solve_cholesky(
                 const double *L, const double *b, double *x,
                 int n);
+            static void solve_cholesky(
+                const double *L, const double *b, double *x,
+                double *workspace, int n);
             static void solve_pd_system(
                 const double *Q, const double *b, double *x,
                 int n);
@@ -162,7 +165,6 @@ namespace geoqp
         public:
             ConstraintCache(int m, int n) : m_(m), n_(n), cache_(m) {}
 
-            // Get or compute z_i = L_Q^{-1} * a_i for constraint i
             const std::vector<double> &get_z(
                 int constraint_idx,
                 const double *A,

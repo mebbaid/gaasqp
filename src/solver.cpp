@@ -9,7 +9,7 @@ namespace geoqp
 
     namespace
     {
-        bool is_feasible_ptr(const double *GEOQP_RESTRICT x, const double *GEOQP_RESTRICT A, 
+        bool is_feasible_ptr(const double *GEOQP_RESTRICT x, const double *GEOQP_RESTRICT A,
                              const double *GEOQP_RESTRICT b, int m, int n, double tol)
         {
             for (int i = 0; i < m; ++i)
@@ -336,22 +336,24 @@ namespace geoqp
             ws_x_bar_.resize(n);
             ws_neg_g_.resize(n);
             ws_lambda_.resize(m);
+            ws_cholesky_temp_.resize(n);
 
             std::vector<double> dummy_b(m, 0.0);
             std::vector<double> dummy_x_bar(n, 0.0);
-            
+
             cached_polytope_ = std::make_unique<internal::Polytope>(A, dummy_b.data(), m, n);
             cached_initializer_ = std::make_unique<internal::Initializer>(
                 Q, A, dummy_b.data(), dummy_x_bar, m, n, config_);
             cached_face_hopper_ = std::make_unique<internal::FaceHopper>(
                 Q, A, dummy_b.data(), dummy_x_bar, m, n, config_);
-            
-            if (has_Q_chol_) {
+
+            if (has_Q_chol_)
+            {
                 cached_face_hopper_->set_Q_chol(Q_chol_);
             }
-            
+
             cached_projector_ = std::make_unique<internal::Projector>(
-                Q, A, dummy_b.data(), dummy_x_bar, 
+                Q, A, dummy_b.data(), dummy_x_bar,
                 has_Q_chol_ ? Q_chol_ : std::vector<double>(), m, n, config_);
 
             last_solution_.x.clear();
@@ -374,7 +376,8 @@ namespace geoqp
             ws_x_bar_.clear();
             ws_neg_g_.clear();
             ws_lambda_.clear();
-            
+            ws_cholesky_temp_.clear();
+
             cached_polytope_.reset();
             cached_initializer_.reset();
             cached_face_hopper_.reset();
@@ -412,8 +415,8 @@ namespace geoqp
                     {
                         ws_neg_g_[i] = -g[i];
                     }
-                    internal::LinearAlgebra::solve_cholesky(Q_chol_.data(), ws_neg_g_.data(), 
-                                                           ws_x_bar_.data(), setup_n_);
+                    internal::LinearAlgebra::solve_cholesky(Q_chol_.data(), ws_neg_g_.data(),
+                                                            ws_x_bar_.data(), ws_cholesky_temp_.data(), setup_n_);
                 }
                 else
                 {
@@ -585,11 +588,12 @@ namespace geoqp
         std::vector<double> Q_chol_;
         bool has_Q_chol_ = false;
         Solution last_solution_;
-        
+
         std::vector<double> ws_x_bar_;
         std::vector<double> ws_neg_g_;
         std::vector<double> ws_lambda_;
-        
+        std::vector<double> ws_cholesky_temp_;
+
         std::unique_ptr<internal::Polytope> cached_polytope_;
         std::unique_ptr<internal::Initializer> cached_initializer_;
         std::unique_ptr<internal::FaceHopper> cached_face_hopper_;

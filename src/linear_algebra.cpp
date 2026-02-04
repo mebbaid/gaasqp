@@ -123,7 +123,7 @@ namespace geoqp
         {
             for (int i = 0; i < n; ++i)
             {
-                const double *GEOQP_RESTRICT Li = L + i * n; 
+                const double *GEOQP_RESTRICT Li = L + i * n;
 
                 double sum0 = 0.0;
                 double sum1 = 0.0;
@@ -188,6 +188,13 @@ namespace geoqp
             std::vector<double> y(n);
             forward_sub(L, b, y.data(), n);
             backward_sub(L, y.data(), x, n);
+        }
+
+        void LinearAlgebra::solve_cholesky(const double *GEOQP_RESTRICT L, const double *GEOQP_RESTRICT b,
+                                           double *GEOQP_RESTRICT x, double *GEOQP_RESTRICT workspace, int n)
+        {
+            forward_sub(L, b, workspace, n);
+            backward_sub(L, workspace, x, n);
         }
 
         void LinearAlgebra::solve_pd_system(const double *GEOQP_RESTRICT Q, const double *GEOQP_RESTRICT b,
@@ -266,7 +273,7 @@ namespace geoqp
                 double r = std::sqrt(Lii * Lii + wi * wi);
 
                 if (r < 1e-14)
-                    return false; 
+                    return false;
 
                 double c = r / Lii;
                 double s = wi / Lii;
@@ -332,7 +339,7 @@ namespace geoqp
             double diag_sq = sigma - l_norm_sq;
             if (diag_sq < 1e-14)
             {
-                return false; 
+                return false;
             }
 
             L_new[k * k1 + k] = std::sqrt(diag_sq);
@@ -343,7 +350,6 @@ namespace geoqp
             const double *L, int k, int idx,
             double *L_new)
         {
-            // Remove row/column idx from Cholesky factor using Givens rotations
             if (k <= 1 || idx < 0 || idx >= k)
             {
                 return false;
@@ -374,18 +380,18 @@ namespace geoqp
 
             for (int i = idx; i < k1; ++i)
             {
-                double a = L_work[i * k + i];       
-                double b = L_work[(i + 1) * k + i]; 
+                double a = L_work[i * k + i];
+                double b = L_work[(i + 1) * k + i];
 
                 if (std::abs(b) < 1e-14)
                 {
-                    continue; 
+                    continue;
                 }
 
                 double r = std::sqrt(a * a + b * b);
                 if (r < 1e-14)
                 {
-                    return false; 
+                    return false;
                 }
 
                 double c = a / r;
