@@ -158,6 +158,11 @@ namespace geoqp
             bool is_box_constrained_ = false;
             std::vector<double> box_lb_;
             std::vector<double> box_ub_;
+            
+            mutable std::vector<double> ws_direction_;
+            mutable std::vector<double> ws_Ax_;
+            mutable std::vector<double> ws_Ad_;
+            mutable std::vector<double> ws_candidate_;
         };
 
         class ConstraintCache

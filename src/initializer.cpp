@@ -1,4 +1,5 @@
 #include "geoqp/internal.hpp"
+#include "geoqp/compiler_hints.hpp"
 #include <cmath>
 #include <limits>
 #include <algorithm>
@@ -16,6 +17,11 @@ namespace geoqp
             const Config &config) : Q_(Q), A_(A), b_(b), x_bar_(x_bar), m_(m), n_(n), config_(config)
         {
             detect_box_constraints();
+
+            ws_direction_.resize(n);
+            ws_Ax_.resize(m);
+            ws_Ad_.resize(m);
+            ws_candidate_.resize(n);
         }
 
         void Initializer::detect_box_constraints()
@@ -131,12 +137,36 @@ namespace geoqp
         double Initializer::compute_euclidean_distance_squared(
             const std::vector<double> &v) const
         {
-            double dist_sq = 0.0;
-            for (int i = 0; i < n_; ++i)
+            const double *GEOQP_RESTRICT v_ptr = v.data();
+            const double *GEOQP_RESTRICT xbar_ptr = x_bar_.data();
+
+            double sum0 = 0.0;
+            double sum1 = 0.0;
+            double sum2 = 0.0;
+            double sum3 = 0.0;
+
+            int i = 0;
+            for (; i + 3 < n_; i += 4)
             {
-                double d = v[i] - x_bar_[i];
+                double d0 = v_ptr[i] - xbar_ptr[i];
+                double d1 = v_ptr[i + 1] - xbar_ptr[i + 1];
+                double d2 = v_ptr[i + 2] - xbar_ptr[i + 2];
+                double d3 = v_ptr[i + 3] - xbar_ptr[i + 3];
+
+                sum0 += d0 * d0;
+                sum1 += d1 * d1;
+                sum2 += d2 * d2;
+                sum3 += d3 * d3;
+            }
+
+            double dist_sq = (sum0 + sum1) + (sum2 + sum3);
+
+            for (; i < n_; ++i)
+            {
+                double d = v_ptr[i] - xbar_ptr[i];
                 dist_sq += d * d;
             }
+
             return dist_sq;
         }
 
@@ -144,15 +174,34 @@ namespace geoqp
             const std::vector<double> &v,
             const std::vector<int> &active_set) const
         {
-            // A vertex v is "good" if: a_i^T (x_bar - v) <= 0 for all active constraints i
+            const double *GEOQP_RESTRICT v_ptr = v.data();
+            const double *GEOQP_RESTRICT xbar_ptr = x_bar_.data();
+
             for (int idx : active_set)
             {
-                const double *a_row = A_ + idx * n_;
-                double dot = 0.0;
-                for (int j = 0; j < n_; ++j)
+                const double *GEOQP_RESTRICT a_row = A_ + idx * n_;
+
+                double sum0 = 0.0;
+                double sum1 = 0.0;
+                double sum2 = 0.0;
+                double sum3 = 0.0;
+
+                int j = 0;
+                for (; j + 3 < n_; j += 4)
                 {
-                    dot += a_row[j] * (x_bar_[j] - v[j]);
+                    sum0 += a_row[j] * (xbar_ptr[j] - v_ptr[j]);
+                    sum1 += a_row[j + 1] * (xbar_ptr[j + 1] - v_ptr[j + 1]);
+                    sum2 += a_row[j + 2] * (xbar_ptr[j + 2] - v_ptr[j + 2]);
+                    sum3 += a_row[j + 3] * (xbar_ptr[j + 3] - v_ptr[j + 3]);
                 }
+
+                double dot = (sum0 + sum1) + (sum2 + sum3);
+
+                for (; j < n_; ++j)
+                {
+                    dot += a_row[j] * (xbar_ptr[j] - v_ptr[j]);
+                }
+
                 if (dot > config_.tolerance)
                 {
                     return false;
@@ -210,6 +259,7 @@ namespace geoqp
             iterations = 0;
             vertices_explored = 0;
 
+            // Fast path for box constraints
             if (is_box_constrained_)
             {
                 vertices_explored = 1;
@@ -217,148 +267,108 @@ namespace geoqp
                 return find_good_vertex_box_fast();
             }
 
-            Polytope polytope(A_, b_, m_, n_);
+            // Geometric approach: Find the "farthest good vertex"
+            // Starting from initial_vertex (feasible), shoot a ray away from x_bar
+            // to find the antipodal vertex (farthest feasible point in that direction)
 
-            std::vector<int> current_active = polytope.get_active_constraints(initial_vertex, 1e-8);
-            std::vector<double> current_vertex = initial_vertex;
+            Polytope polytope(A_, b_, m_, n_);
+            std::vector<int> active_set = polytope.get_active_constraints(initial_vertex, 1e-8);
+
+            iterations = 1;
             vertices_explored = 1;
 
-            std::vector<double> best_good_vertex;
-            double best_distance_sq = -1.0;
-
-            if (is_good_vertex(current_vertex, current_active))
-            {
-                best_good_vertex = current_vertex;
-                best_distance_sq = compute_euclidean_distance_squared(current_vertex);
-            }
-
-            // pivot toward vertices farther from x_bar
-            const int max_iter = config_.max_simplex_iterations;
-
-            while (iterations < max_iter)
-            {
-                iterations++;
-
-                if (current_active.size() < static_cast<size_t>(n_))
-                {
-                    break;
-                }
-
-                std::vector<double> direction(n_);
-                for (int j = 0; j < n_; ++j)
-                {
-                    direction[j] = current_vertex[j] - x_bar_[j];
-                }
-
-                int best_drop = -1;
-                double best_ratio = 0.0;
-
-                for (int k = 0; k < n_ && k < static_cast<int>(current_active.size()); ++k)
-                {
-                    int idx = current_active[k];
-                    const double *a_row = A_ + idx * n_;
-                    double a_dot_d = LinearAlgebra::dot(a_row, direction.data(), n_);
-
-                    if (a_dot_d < -config_.tolerance && a_dot_d < best_ratio)
-                    {
-                        best_ratio = a_dot_d;
-                        best_drop = k;
-                    }
-                }
-
-                if (best_drop < 0)
-                {
-                    break; 
-                }
-
-                std::vector<int> reduced_active;
-                for (int k = 0; k < n_ && k < static_cast<int>(current_active.size()); ++k)
-                {
-                    if (k != best_drop)
-                    {
-                        reduced_active.push_back(current_active[k]);
-                    }
-                }
-
-                double min_t = std::numeric_limits<double>::infinity();
-                int blocking = -1;
-
-                for (int c = 0; c < m_; ++c)
-                {
-                    bool in_reduced = false;
-                    for (int a : reduced_active)
-                    {
-                        if (a == c)
-                        {
-                            in_reduced = true;
-                            break;
-                        }
-                    }
-                    if (in_reduced)
-                        continue;
-
-                    const double *a_row = A_ + c * n_;
-                    double a_dot_d = LinearAlgebra::dot(a_row, direction.data(), n_);
-                    double a_dot_x = LinearAlgebra::dot(a_row, current_vertex.data(), n_);
-
-                    if (a_dot_d > config_.tolerance)
-                    {
-                        double t = (b_[c] - a_dot_x) / a_dot_d;
-                        if (t > config_.tolerance && t < min_t)
-                        {
-                            min_t = t;
-                            blocking = c;
-                        }
-                    }
-                }
-
-                if (blocking < 0 || !std::isfinite(min_t))
-                {
-                    break;
-                }
-
-                std::vector<int> new_active = reduced_active;
-                new_active.push_back(blocking);
-
-                if (new_active.size() != static_cast<size_t>(n_))
-                {
-                    break;
-                }
-
-                std::vector<double> new_vertex = compute_vertex_from_active_set(new_active);
-                if (new_vertex.empty())
-                {
-                    break;
-                }
-
-                vertices_explored++;
-
-                double new_dist_sq = compute_euclidean_distance_squared(new_vertex);
-
-                if (is_good_vertex(new_vertex, new_active))
-                {
-                    if (new_dist_sq > best_distance_sq)
-                    {
-                        best_good_vertex = new_vertex;
-                        best_distance_sq = new_dist_sq;
-                    }
-                }
-
-                double current_dist_sq = compute_euclidean_distance_squared(current_vertex);
-                if (new_dist_sq <= current_dist_sq + config_.tolerance)
-                {
-                    break;
-                }
-
-                current_vertex = std::move(new_vertex);
-                current_active = std::move(new_active);
-            }
-
-            if (best_good_vertex.empty())
+            if (is_good_vertex(initial_vertex, active_set))
             {
                 return initial_vertex;
             }
-            return best_good_vertex;
+
+            const double *GEOQP_RESTRICT init_ptr = initial_vertex.data();
+            const double *GEOQP_RESTRICT xbar_ptr = x_bar_.data();
+            double *GEOQP_RESTRICT dir_ptr = ws_direction_.data();
+
+            for (int j = 0; j < n_; ++j)
+            {
+                dir_ptr[j] = init_ptr[j] - xbar_ptr[j];
+            }
+
+            double norm = LinearAlgebra::norm(dir_ptr, n_);
+            if (norm > 1e-10)
+            {
+                for (int j = 0; j < n_; ++j)
+                {
+                    dir_ptr[j] /= norm;
+                }
+            }
+            else
+            {
+                for (int j = 0; j < n_; ++j)
+                {
+                    dir_ptr[j] = 1.0 / std::sqrt(static_cast<double>(n_));
+                }
+            }
+
+            LinearAlgebra::matvec(A_, init_ptr, ws_Ax_.data(), m_, n_);
+
+            LinearAlgebra::matvec(A_, dir_ptr, ws_Ad_.data(), m_, n_);
+
+            double min_blocking_t = std::numeric_limits<double>::infinity();
+            int blocking_constraint = -1;
+
+            const double *GEOQP_RESTRICT Ax_ptr = ws_Ax_.data();
+            const double *GEOQP_RESTRICT Ad_ptr = ws_Ad_.data();
+
+            for (int i = 0; i < m_; ++i)
+            {
+                if (Ad_ptr[i] > config_.tolerance)
+                {
+                    double val = b_[i] - Ax_ptr[i];
+
+                    if (val < 0.0)
+                        val = 0.0;
+
+                    double t = val / Ad_ptr[i];
+
+                    if (t < min_blocking_t)
+                    {
+                        min_blocking_t = t;
+                        blocking_constraint = i;
+                    }
+                }
+            }
+
+            if (!std::isfinite(min_blocking_t) || min_blocking_t < config_.tolerance)
+            {
+                return initial_vertex;
+            }
+
+            double *GEOQP_RESTRICT cand_ptr = ws_candidate_.data();
+
+            for (int j = 0; j < n_; ++j)
+            {
+                cand_ptr[j] = init_ptr[j] + min_blocking_t * dir_ptr[j];
+            }
+
+            for (int i = 0; i < m_; ++i)
+            {
+                const double *GEOQP_RESTRICT a_row = A_ + i * n_;
+                double ax = LinearAlgebra::dot(a_row, cand_ptr, n_);
+                if (ax > b_[i] + config_.tolerance)
+                {
+                    return initial_vertex;
+                }
+            }
+
+            std::vector<double> candidate(ws_candidate_.begin(), ws_candidate_.begin() + n_);
+
+            std::vector<int> candidate_active = polytope.get_active_constraints(candidate, 1e-8);
+
+            if (is_good_vertex(candidate, candidate_active))
+            {
+                vertices_explored = 2;
+                return candidate;
+            }
+
+            return initial_vertex;
         }
 
         bool Initializer::is_direction_feasible(
