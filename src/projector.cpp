@@ -13,8 +13,9 @@ Projector::Projector(
     const std::vector<double>& x_bar,
     const std::vector<double>& Q_chol,
     int m, int n,
-    const Config& config
-) : Q_(Q), A_(A), b_(b), x_bar_(x_bar), Q_chol_(Q_chol), m_(m), n_(n), config_(config) {}
+    const Config& config,
+    const std::vector<double>* Q_inv
+) : Q_(Q), A_(A), b_(b), x_bar_(x_bar), Q_chol_(Q_chol), Q_inv_(Q_inv), m_(m), n_(n), config_(config) {}
 
 std::vector<double> Projector::project_onto_face(
     const std::vector<int>& active_set,
@@ -24,7 +25,8 @@ std::vector<double> Projector::project_onto_face(
     
     bool success = ProjectionSolver::solve(
         active_set, Q_, A_, b_, x_bar_, Q_chol_,
-        m_, n_, x_star, lambda_out
+        m_, n_, x_star, lambda_out,
+        Q_inv_ ? *Q_inv_ : std::vector<double>()
     );
     
     if (!success) {

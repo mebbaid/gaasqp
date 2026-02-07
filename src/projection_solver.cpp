@@ -1,5 +1,3 @@
-
-
 #include "geoqp/internal.hpp"
 #include "geoqp/compiler_hints.hpp"
 #include <cstring>
@@ -19,7 +17,10 @@ namespace geoqp
             int m,
             int n,
             std::vector<double> &x_star_out,
-            std::vector<double> &lambda_out)
+            std::vector<double> &lambda_out,
+            const std::vector<double> &Q_inv,
+            bool q_is_diagonal,
+            const std::vector<double> &Q_diag)
         {
 
             const int k = static_cast<int>(active_set.size());
@@ -42,13 +43,39 @@ namespace geoqp
             double *GEOQP_RESTRICT A_active_ptr = A_active.data();
             double *GEOQP_RESTRICT b_active_ptr = b_active.data();
 
+            if (xbar_ptr == nullptr) {
+                return false;
+            }
+
             // Build A_active and b_active
+            std::vector<int> box_indices(k, -1);
+            std::vector<double> box_signs(k, 0.0);
+
             for (int i = 0; i < k; ++i)
             {
                 const int constraint_idx = active_set[i];
+                if (A == nullptr || b == nullptr || constraint_idx < 0 || constraint_idx >= m) {
+                    return false;
+                }
                 b_active_ptr[i] = b[constraint_idx];
                 const double *GEOQP_RESTRICT A_row = A + constraint_idx * n;
                 std::memcpy(A_active_ptr + i * n, A_row, n * sizeof(double));
+
+                // Identify if this is a box constraint
+                int p = -1;
+                double sign = 0.0;
+                int non_zeros = 0;
+                for (int l = 0; l < n; ++l) {
+                    if (A_row[l] != 0.0) {
+                        non_zeros++;
+                        p = l;
+                        sign = A_row[l];
+                    }
+                }
+                if (non_zeros == 1) {
+                    box_indices[i] = p;
+                    box_signs[i] = sign;
+                }
             }
 
             // Compute residual: A_active * x_bar - b_active
@@ -62,12 +89,52 @@ namespace geoqp
             double *GEOQP_RESTRICT Q_inv_AT_ptr = Q_inv_AT.data();
 
             // Compute Q^{-1} A^T by solving Q * y = a_col for each constraint
+            const bool use_Q_inv = !Q_inv.empty() && (static_cast<int>(Q_inv.size()) >= n * n);
+            const double* GEOQP_RESTRICT Q_inv_ptr = use_Q_inv ? Q_inv.data() : nullptr;
+
             for (int j = 0; j < k; ++j)
             {
+                const double * GEOQP_RESTRICT A_active_row = A_active_ptr + j * n;
+                const int p_j = box_indices[j];
+                const double sign_j = box_signs[j];
+
+                if (q_is_diagonal && !Q_diag.empty()) {
+                    for (int i = 0; i < n; ++i) {
+                        Q_inv_AT_ptr[i * k + j] = A_active_row[i] / Q_diag[i];
+                    }
+                    continue;
+                }
+
+                if (use_Q_inv) {
+                    if (p_j != -1) {
+                        // S construction will use Q_inv directly for box constraints
+                        // We still need to populate Q_inv_AT for others or for the final x_star computation
+                        const double* GEOQP_RESTRICT Q_inv_col = Q_inv_ptr + p_j * n;
+                        for (int i = 0; i < n; ++i) {
+                            Q_inv_AT_ptr[i * k + j] = Q_inv_col[i] * sign_j;
+                        }
+                    } else {
+                        for (int i = 0; i < n; ++i) {
+                            double val = 0.0;
+                            const double* GEOQP_RESTRICT Qi = Q_inv_ptr + i * n;
+                            int l = 0;
+                            GEOQP_UNROLL_LOOP_4
+                            for (; l + 3 < n; l += 4) {
+                                val += Qi[l] * A_active_row[l];
+                                val += Qi[l+1] * A_active_row[l+1];
+                                val += Qi[l+2] * A_active_row[l+2];
+                                val += Qi[l+3] * A_active_row[l+3];
+                            }
+                            for (; l < n; ++l) val += Qi[l] * A_active_row[l];
+                            Q_inv_AT_ptr[i * k + j] = val;
+                        }
+                    }
+                    continue;
+                }
+
                 // Get j-th row of A_active as a column vector
                 std::vector<double> a_col(n);
                 double *GEOQP_RESTRICT a_col_ptr = a_col.data();
-                const double *GEOQP_RESTRICT A_active_row = A_active_ptr + j * n;
 
                 for (int i = 0; i < n; ++i)
                 {
@@ -107,35 +174,37 @@ namespace geoqp
 
             double *GEOQP_RESTRICT S_ptr = S.data();
 
-            // Compute Schur complement: S = A_active * Q^{-1} A^T with loop unrolling
+            // Compute Schur complement: S = A_active * Q^{-1} A^T
             for (int i = 0; i < k; ++i)
             {
                 const double *GEOQP_RESTRICT A_row = A_active_ptr + i * n;
+                const int p_i = box_indices[i];
+                const double sign_i = box_signs[i];
 
-                for (int j = 0; j < k; ++j)
+                for (int j = i; j < k; ++j) // Only compute upper triangle
                 {
-                    double sum0 = 0.0;
-                    double sum1 = 0.0;
-                    double sum2 = 0.0;
-                    double sum3 = 0.0;
-
-                    int l = 0;
-                    for (; l + 3 < n; l += 4)
-                    {
-                        sum0 += A_row[l] * Q_inv_AT_ptr[l * k + j];
-                        sum1 += A_row[l + 1] * Q_inv_AT_ptr[(l + 1) * k + j];
-                        sum2 += A_row[l + 2] * Q_inv_AT_ptr[(l + 2) * k + j];
-                        sum3 += A_row[l + 3] * Q_inv_AT_ptr[(l + 3) * k + j];
+                    if (p_i != -1) {
+                        S_ptr[i * k + j] = sign_i * Q_inv_AT_ptr[p_i * k + j];
+                    } else {
+                        const int p_j = box_indices[j];
+                        if (p_j != -1) {
+                             S_ptr[i * k + j] = box_signs[j] * Q_inv_AT_ptr[p_j * k + i];
+                        } else {
+                            double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
+                            int l = 0;
+                            GEOQP_UNROLL_LOOP_4
+                            for (; l + 3 < n; l += 4) {
+                                sum0 += A_row[l] * Q_inv_AT_ptr[l * k + j];
+                                sum1 += A_row[l + 1] * Q_inv_AT_ptr[(l + 1) * k + j];
+                                sum2 += A_row[l + 2] * Q_inv_AT_ptr[(l + 2) * k + j];
+                                sum3 += A_row[l + 3] * Q_inv_AT_ptr[(l + 3) * k + j];
+                            }
+                            double sum = (sum0 + sum1) + (sum2 + sum3);
+                            for (; l < n; ++l) sum += A_row[l] * Q_inv_AT_ptr[l * k + j];
+                            S_ptr[i * k + j] = sum;
+                        }
                     }
-
-                    double sum = (sum0 + sum1) + (sum2 + sum3);
-
-                    for (; l < n; ++l)
-                    {
-                        sum += A_row[l] * Q_inv_AT_ptr[l * k + j];
-                    }
-
-                    S_ptr[i * k + j] = sum;
+                    S_ptr[j * k + i] = S_ptr[i * k + j]; // Symmetry
                 }
             }
 

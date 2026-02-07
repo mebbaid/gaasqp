@@ -30,11 +30,62 @@ namespace geoqp
                 Q_chol_.clear();
             }
 
+            // Optimized density check for Q
+            int nonzero_q = 0;
+            const int total_elements = n_ * n_;
+            const double * GEOQP_RESTRICT Q_ptr = Q_;
+            const double tol = 1e-12;
+
+            int i = 0;
+            GEOQP_UNROLL_LOOP_4
+            for (; i + 3 < total_elements; i += 4) {
+                nonzero_q += (std::abs(Q_ptr[i]) > tol);
+                nonzero_q += (std::abs(Q_ptr[i + 1]) > tol);
+                nonzero_q += (std::abs(Q_ptr[i + 2]) > tol);
+                nonzero_q += (std::abs(Q_ptr[i + 3]) > tol);
+            }
+            for (; i < total_elements; ++i) {
+                nonzero_q += (std::abs(Q_ptr[i]) > tol);
+            }
+            q_is_dense_ = (nonzero_q > (total_elements / 2));
+
+            // Detect diagonal Q
+            q_is_diagonal_ = true;
+            Q_diag_.resize(n_);
+            for (int i = 0; i < n_; ++i) {
+                Q_diag_[i] = Q_[i * n_ + i];
+                for (int j = 0; j < n_; ++j) {
+                    if (i != j && std::abs(Q_[i * n_ + j]) > 1e-12) {
+                        q_is_diagonal_ = false;
+                        break;
+                    }
+                }
+                if (!q_is_diagonal_) break;
+            }
+
+            // Precompute Q_inv if Q is dense and n is manageable
+            if (q_is_dense_ && n_ <= 256 && !Q_chol_.empty()) {
+                Q_inv_.resize(n_ * n_);
+                for (int i = 0; i < n_; ++i) {
+                    std::vector<double> e(n_, 0.0);
+                    e[i] = 1.0;
+                    LinearAlgebra::solve_cholesky(Q_chol_.data(), e.data(), &Q_inv_[i * n_], n_);
+                }
+                if (config_.verbosity >= 2) {
+                    std::cout << "  Q is dense - precomputed Q_inv for fast access\n";
+                }
+            }
+
             ws_residual_.resize(m);
             ws_w_.resize(n);
             ws_correction_.resize(n);
             ws_x_star_.resize(n);
             ws_lambda_.resize(m);
+
+            ws_Axbar_.resize(m_);
+            LinearAlgebra::matvec(A_, x_bar_.data(), ws_Axbar_.data(), m_, n_);
+
+            if (static_cast<int>(ws_is_active_.size()) < m_) ws_is_active_.assign(m_, 0);
 
             has_diagonal_constraints_ = true;
             for (int i = 0; i < m_ && has_diagonal_constraints_; ++i)
@@ -320,70 +371,107 @@ namespace geoqp
                     residual[i] = signs[i] * x_bar_[constrained_vars[i]] - bounds[i];
                 }
 
-                std::vector<double> Q_inv_columns(n_ * k);
-                for (int j = 0; j < k; ++j)
-                {
-                    std::vector<double> rhs(n_, 0.0);
-                    rhs[constrained_vars[j]] = signs[j];
-
-                    std::vector<double> col(n_);
-                    if (!Q_chol_.empty())
-                    {
-                        LinearAlgebra::solve_cholesky(Q_chol_.data(), rhs.data(), col.data(), n_);
-                    }
-                    else
-                    {
-                        std::vector<double> Q_copy(n_ * n_);
-                        std::memcpy(Q_copy.data(), Q_, n_ * n_ * sizeof(double));
-                        try
-                        {
-                            LinearAlgebra::solve_linear_system(Q_copy.data(), rhs.data(), col.data(), n_);
-                        }
-                        catch (...)
-                        {
-                            if (config_.timing_verbosity > 0)
-                            {
-                                timing_stats_.compute_projection_total += t.elapsed_ms();
-                                ++timing_stats_.compute_projection_calls;
-                            }
-                            return false;
-                        }
-                    }
-                    std::memcpy(Q_inv_columns.data() + j * n_, col.data(), n_ * sizeof(double));
+                // Use workspace to avoid allocations
+                if (static_cast<int>(ws_constrained_vars_.size()) < k) {
+                    ws_constrained_vars_.resize(k);
+                    ws_signs_.resize(k);
+                    ws_residual_.resize(k);
                 }
 
-                std::vector<double> S(k * k);
+                int* GEOQP_RESTRICT c_vars = ws_constrained_vars_.data();
+                double* GEOQP_RESTRICT c_signs = ws_signs_.data();
+                double* GEOQP_RESTRICT c_residual = ws_residual_.data();
+
                 for (int i = 0; i < k; ++i)
                 {
+                    const int idx = face[i];
+                    c_residual[i] = ws_Axbar_[idx] - b_[idx]; 
+                    
+                    const double * GEOQP_RESTRICT a_row = A_ + idx * n_;
+                    for (int j = 0; j < n_; ++j)
+                    {
+                        if (std::abs(a_row[j]) > 1e-10)
+                        {
+                            c_vars[i] = j;
+                            c_signs[i] = a_row[j];
+                            break;
+                        }
+                    }
+                }
+
+                // Use a pre-allocated workspace for Q_inv_columns instead of std::vector
+                if (static_cast<int>(ws_Q_inv_cols_.size()) < n_ * k) {
+                    ws_Q_inv_cols_.resize(n_ * k);
+                }
+                double* GEOQP_RESTRICT Q_inv_columns = ws_Q_inv_cols_.data();
+
+                for (int j = 0; j < k; ++j)
+                {
+                    double* GEOQP_RESTRICT target_col = &Q_inv_columns[j * n_];
+                    const double s = c_signs[j];
+                    const int v = c_vars[j];
+
+                    if (q_is_diagonal_) {
+                        std::fill(target_col, target_col + n_, 0.0);
+                        target_col[v] = s / Q_diag_[v];
+                    } else if (!Q_inv_.empty()) {
+                        const double* GEOQP_RESTRICT Qi = &Q_inv_[v * n_];
+                        int i = 0;
+                        GEOQP_UNROLL_LOOP_4
+                        for (; i + 3 < n_; i += 4) {
+                            target_col[i] = Qi[i] * s;
+                            target_col[i + 1] = Qi[i+1] * s;
+                            target_col[i + 2] = Qi[i+2] * s;
+                            target_col[i + 3] = Qi[i+3] * s;
+                        }
+                        for (; i < n_; ++i) target_col[i] = Qi[i] * s;
+                    } else if (!Q_chol_.empty()) {
+                        std::vector<double> rhs(n_, 0.0);
+                        rhs[v] = s;
+                        LinearAlgebra::solve_cholesky(Q_chol_.data(), rhs.data(), target_col, n_);
+                    } else {
+                        return false;
+                    }
+                }
+
+                if (static_cast<int>(ws_S_.size()) < k * k) ws_S_.resize(k * k);
+                double* GEOQP_RESTRICT S = ws_S_.data();
+
+                for (int i = 0; i < k; ++i)
+                {
+                    const int var_i = c_vars[i];
+                    const double sign_i = c_signs[i];
                     for (int j = 0; j < k; ++j)
                     {
-                        S[i * k + j] = Q_inv_columns[j * n_ + constrained_vars[i]] * signs[i];
+                        S[i * k + j] = Q_inv_columns[j * n_ + var_i] * sign_i;
                     }
                 }
 
                 try
                 {
-                    LinearAlgebra::solve_linear_system(S.data(), residual.data(), lambda.data(), k);
+                    LinearAlgebra::solve_linear_system(S, c_residual, lambda.data(), k);
                 }
                 catch (...)
                 {
-                    if (config_.timing_verbosity > 0)
-                    {
-                        timing_stats_.compute_projection_total += t.elapsed_ms();
-                        ++timing_stats_.compute_projection_calls;
-                    }
                     return false;
                 }
 
                 x_star = x_bar_;
-                for (int i = 0; i < n_; ++i)
+                double* GEOQP_RESTRICT x_ptr = x_star.data();
+                const double* GEOQP_RESTRICT lambda_ptr = lambda.data();
+                for (int j = 0; j < k; ++j)
                 {
-                    double correction = 0.0;
-                    for (int j = 0; j < k; ++j)
-                    {
-                        correction += Q_inv_columns[j * n_ + i] * lambda[j];
+                    const double l_j = lambda_ptr[j];
+                    const double* GEOQP_RESTRICT col = &Q_inv_columns[j * n_];
+                    int i = 0;
+                    GEOQP_UNROLL_LOOP_4
+                    for (; i + 3 < n_; i += 4) {
+                        x_ptr[i] -= col[i] * l_j;
+                        x_ptr[i+1] -= col[i+1] * l_j;
+                        x_ptr[i+2] -= col[i+2] * l_j;
+                        x_ptr[i+3] -= col[i+3] * l_j;
                     }
-                    x_star[i] -= correction;
+                    for (; i < n_; ++i) x_ptr[i] -= col[i] * l_j;
                 }
 
                 for (int i = 0; i < m_; ++i)
@@ -392,34 +480,20 @@ namespace geoqp
                     double ax = LinearAlgebra::dot(a_row, x_star.data(), n_);
                     if (ax > b_[i] + config_.tolerance)
                     {
-                        if (config_.timing_verbosity > 0)
-                        {
-                            timing_stats_.compute_projection_total += t.elapsed_ms();
-                            ++timing_stats_.compute_projection_calls;
-                        }
                         return false;
                     }
                 }
 
-                if (config_.timing_verbosity > 0)
-                {
-                    timing_stats_.compute_projection_total += t.elapsed_ms();
-                    ++timing_stats_.compute_projection_calls;
-                }
                 return true;
             }
 
             bool success = ProjectionSolver::solve(
                 face, Q_, A_, b_, x_bar_, Q_chol_,
-                m_, n_, x_star, lambda);
+                m_, n_, x_star, lambda,
+                Q_inv_, q_is_diagonal_, Q_diag_);
 
             if (!success)
             {
-                if (config_.timing_verbosity > 0)
-                {
-                    timing_stats_.compute_projection_total += t.elapsed_ms();
-                    ++timing_stats_.compute_projection_calls;
-                }
                 return false;
             }
 
@@ -429,19 +503,8 @@ namespace geoqp
                 double ax = LinearAlgebra::dot(a_row, x_star.data(), n_);
                 if (ax > b_[i] + config_.tolerance)
                 {
-                    if (config_.timing_verbosity > 0)
-                    {
-                        timing_stats_.compute_projection_total += t.elapsed_ms();
-                        ++timing_stats_.compute_projection_calls;
-                    }
                     return false;
                 }
-            }
-
-            if (config_.timing_verbosity > 0)
-            {
-                timing_stats_.compute_projection_total += t.elapsed_ms();
-                ++timing_stats_.compute_projection_calls;
             }
 
             return true;
@@ -610,14 +673,17 @@ namespace geoqp
                 int most_violated = -1;
                 double max_violation = 0.0;
 
-                std::set<int> active_set(current_face.begin(), current_face.end());
+                // Optimization: Use ws_is_active_ mask instead of std::set
+                if (static_cast<int>(ws_is_active_.size()) < m_) ws_is_active_.assign(m_, 0);
+                else std::fill(ws_is_active_.begin(), ws_is_active_.end(), 0);
+                for (int idx : current_face) ws_is_active_[idx] = 1;
+
                 for (int i = 0; i < m_; ++i)
                 {
-                    if (active_set.count(i))
-                        continue;
-
-                    const double *GEOQP_RESTRICT a_row = A_ + i * n_;
-                    double ax = LinearAlgebra::dot(a_row, xstar_ptr, n_);
+                    if (ws_is_active_[i]) continue;
+                    
+                    const double *a_row = A_ + i * n_;
+                    double ax = LinearAlgebra::dot(a_row, ws_x_star_.data(), n_);
                     double violation = ax - b_[i];
 
                     if (violation > max_violation + config_.tolerance)
@@ -633,11 +699,11 @@ namespace geoqp
                     std::vector<int> to_add;
                     for (int i = 0; i < m_; ++i)
                     {
-                        if (active_set.count(i))
+                        if (ws_is_active_[i])
                             continue;
 
                         const double *GEOQP_RESTRICT a_row = A_ + i * n_;
-                        double ax = LinearAlgebra::dot(a_row, xstar_ptr, n_);
+                        double ax = LinearAlgebra::dot(a_row, ws_x_star_.data(), n_);
                         if (ax > b_[i] + config_.tolerance)
                         {
                             to_add.push_back(i);

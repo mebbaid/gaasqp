@@ -279,14 +279,14 @@ void generateMPCProblem(int horizon, int n_states, int n_inputs,
             for (int i = 0; i < n_states; ++i)
                 for (int l = 0; l < n_inputs; ++l)
                     if (i % n_inputs == l)
-                        Su(k * n_states + i, j * n_inputs + l) = decay * 0.05;
+                        Su(k * n_states + i, j * n_inputs + l) = decay * 0.1; // Increased gain
         }
     }
     Eigen::MatrixXd Q = Eigen::MatrixXd::Identity(n_states * horizon, n_states * horizon);
-    Eigen::MatrixXd R = 0.1 * Eigen::MatrixXd::Identity(n, n);
+    Eigen::MatrixXd R = 0.5 * Eigen::MatrixXd::Identity(n, n); // Increased regularization
     H = Su.transpose() * Q * Su + R;
     H = 0.5 * (H + H.transpose());
-    g = Eigen::VectorXd::Random(n);
+    g = Eigen::VectorXd::Random(n) * 10.0; // Larger gradient
     A = Eigen::MatrixXd::Identity(n, n);
     lb = -Eigen::VectorXd::Ones(n);
     ub = Eigen::VectorXd::Ones(n);

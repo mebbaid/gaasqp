@@ -66,7 +66,9 @@ QPProblem makeBoxQP(int n, std::mt19937& rng, double bound = 1.0) {
     p.m = 2 * n;  // upper and lower bounds
     p.name = "Box QP (n=" + std::to_string(n) + ")";
     
-    p.H = randomPD(n, rng);
+    // Use a fixed seed for the matrix to ensure repeatability
+    std::mt19937 matrix_rng(12345 + n);
+    p.H = randomPD(n, matrix_rng);
     
     std::normal_distribution<> dist(0.0, 1.0);
     p.g.resize(n);
@@ -267,6 +269,22 @@ QPProblem makeLeastSquaresQP(int n, int m_data, std::mt19937& rng, double bound 
     return p;
 }
 
+// Problem 5: Ill-conditioned Box QP (to test numerical divergence)
+QPProblem makeConditionedBoxQP(int n, std::mt19937& rng, double condition = 1e6) {
+    QPProblem p = makeBoxQP(n, rng);
+    p.name = "Ill-conditioned Box QP (n=" + std::to_string(n) + ", cond=" + std::to_string(condition) + ")";
+    
+    // Scale Hessian to increase condition number
+    for (int i = 0; i < n; ++i) {
+        double scale = std::pow(condition, static_cast<double>(i) / (n - 1));
+        for (int j = 0; j < n; ++j) {
+            p.H[i * n + j] *= scale;
+            p.H[j * n + i] *= scale;
+        }
+    }
+    return p;
+}
+
 //=============================================================================
 // Solver Wrappers
 //=============================================================================
@@ -457,6 +475,27 @@ void printSolutionRange(const std::vector<double>& x, const std::string& name) {
 // Benchmark Functions
 //=============================================================================
 
+struct BenchmarkResults {
+    double avg_geoqp_time;
+    double avg_qpoases_time;
+    double avg_speedup;
+    double max_obj_diff;
+    double max_sol_diff;
+    int avg_active;
+};
+
+bool verifyConsistency(const SolverResult& geo, const SolverResult& qp, double tol = 1e-6) {
+    if (!geo.success || !qp.success) return false;
+    double obj_diff = std::abs(geo.obj_value - qp.obj_value);
+    if (obj_diff > tol) return false;
+    
+    double sol_diff = 0.0;
+    for (size_t i = 0; i < geo.solution.size(); ++i) {
+        sol_diff += (geo.solution[i] - qp.solution[i]) * (geo.solution[i] - qp.solution[i]);
+    }
+    return std::sqrt(sol_diff) < tol;
+}
+
 void runSingleProblemDetailed(const QPProblem& prob) {
     std::cout << "\n" << std::string(70, '=') << "\n";
     std::cout << "Problem: " << prob.name << "\n";
@@ -493,22 +532,18 @@ void runSingleProblemDetailed(const QPProblem& prob) {
               << std::setw(20) << geoqp_result.active_constraints
               << std::setw(20) << qpoases_result.active_constraints << "\n";
     
+    // Verify consistency with qpOASES
     if (geoqp_result.success && qpoases_result.success) {
         double sol_diff = solutionDiff(geoqp_result.solution, qpoases_result.solution);
         double obj_diff = std::abs(geoqp_result.obj_value - qpoases_result.obj_value);
         
-        std::cout << std::setw(20) << "Solution ||diff||" 
-                  << std::setw(20) << std::scientific << std::setprecision(2) << sol_diff
-                  << std::setw(20) << "-" << "\n";
-        
-        std::cout << std::setw(20) << "Objective diff" 
-                  << std::setw(20) << obj_diff
-                  << std::setw(20) << "-" << "\n";
-        
-        double speedup = qpoases_result.solve_time_ms / geoqp_result.solve_time_ms;
-        std::cout << std::setw(20) << "Speedup (GeoQP)" 
-                  << std::setw(20) << std::fixed << std::setprecision(2) << speedup << "x"
-                  << std::setw(20) << "-" << "\n";
+        // Active set methods should be identical if they find the same face
+        if (sol_diff > 1e-4) {
+            std::cerr << "CRITICAL ERROR: GeoQP solution differs from qpOASES (||diff||=" << sol_diff << ")\n";
+        }
+        if (obj_diff > 1e-4) {
+            std::cerr << "CRITICAL ERROR: GeoQP objective differs from qpOASES (diff=" << obj_diff << ")\n";
+        }
     }
     
     // Print solution samples

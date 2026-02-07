@@ -232,10 +232,23 @@ namespace geoqp
                     internal::Projector projector(
                         problem.Q.data(), problem.A.data(), problem.b.data(), x_bar,
                         face_hopper.get_Q_chol(),
-                        problem.m, problem.n, config_);
+                        problem.m, problem.n, config_,
+                        &face_hopper.get_Q_inv());
 
                     std::vector<double> lambda;
-                    sol.x = projector.project_onto_face(optimal_face, lambda);
+                    sol.x.resize(problem.n);
+                    
+                    // Use ProjectionSolver directly instead of Projector to leverage Q_inv
+                    bool success = internal::ProjectionSolver::solve(
+                        optimal_face, problem.Q.data(), problem.A.data(), problem.b.data(), 
+                        x_bar, face_hopper.get_Q_chol(),
+                        problem.m, problem.n, sol.x, lambda,
+                        face_hopper.get_Q_inv(),
+                        face_hopper.q_is_diagonal(), face_hopper.get_Q_diag());
+
+                    if (!success) {
+                        throw NumericalException("Phase III projection failed");
+                    }
 
                     auto phase3_end = Clock::now();
                     sol.phase3_time = std::chrono::duration<double>(phase3_end - phase3_start).count();
@@ -354,7 +367,8 @@ namespace geoqp
 
             cached_projector_ = std::make_unique<internal::Projector>(
                 Q, A, dummy_b.data(), dummy_x_bar,
-                has_Q_chol_ ? Q_chol_ : std::vector<double>(), m, n, config_);
+                has_Q_chol_ ? Q_chol_ : std::vector<double>(), m, n, config_,
+                &cached_face_hopper_->get_Q_inv());
 
             last_solution_.x.clear();
             last_solution_.active_set.clear();
@@ -525,6 +539,7 @@ namespace geoqp
                 {
                     auto phase3_start = Clock::now();
 
+                    // If the face is the same as the one from Phase II, we can reuse the result
                     sol.x = cached_projector_->project_onto_face(optimal_face, ws_lambda_);
 
                     auto phase3_end = Clock::now();

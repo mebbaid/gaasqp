@@ -2,6 +2,7 @@
 #define GEOQP_INTERNAL_HPP
 
 #include "geoqp/geoqp.hpp"
+#include "geoqp/compiler_hints.hpp"
 #include <vector>
 #include <set>
 #include <chrono>
@@ -103,11 +104,7 @@ namespace geoqp
                 int m, int n,
                 const Config &config);
 
-            void update(const double *b, const std::vector<double> &x_bar)
-            {
-                b_ = b;
-                x_bar_ = x_bar;
-            }
+            void update(const double *b, const std::vector<double> &x_bar);
 
             std::vector<double> find_good_vertex(
                 const std::vector<double> &initial_vertex,
@@ -115,6 +112,9 @@ namespace geoqp
                 int &vertices_explored);
 
         private:
+            void compute_axbar();
+            void detect_box_constraints();
+
             bool is_direction_feasible(
                 const std::vector<double> &v,
                 const std::vector<double> &d,
@@ -143,8 +143,6 @@ namespace geoqp
             std::vector<double> compute_vertex_from_active_set(
                 const std::vector<int> &active_indices) const;
 
-            void detect_box_constraints();
-
             std::vector<double> find_good_vertex_box_fast() const;
 
             const double *Q_;
@@ -158,7 +156,10 @@ namespace geoqp
             bool is_box_constrained_ = false;
             std::vector<double> box_lb_;
             std::vector<double> box_ub_;
-            
+            std::vector<bool> has_lb_;
+            std::vector<bool> has_ub_;
+
+            mutable std::vector<double> ws_Axbar_;
             mutable std::vector<double> ws_direction_;
             mutable std::vector<double> ws_Ax_;
             mutable std::vector<double> ws_Ad_;
@@ -254,7 +255,13 @@ namespace geoqp
                 const std::vector<int> &initial_face,
                 int &iterations);
 
+            const std::vector<double> &get_last_x() const { return ws_x_star_; }
+            const std::vector<double> &get_last_lambda() const { return ws_lambda_; }
+
             const std::vector<double> &get_Q_chol() const { return Q_chol_; }
+            const std::vector<double> &get_Q_inv() const { return Q_inv_; }
+            const std::vector<double> &get_Q_diag() const { return Q_diag_; }
+            bool q_is_diagonal() const { return q_is_diagonal_; }
 
             void set_Q_chol(const std::vector<double> &Q_chol) { Q_chol_ = Q_chol; }
 
@@ -287,18 +294,29 @@ namespace geoqp
             Config config_;
 
             std::vector<double> Q_chol_;
+            mutable std::vector<double> Q_inv_;
             bool has_diagonal_constraints_ = false;
+            bool q_is_dense_ = false;
 
             mutable ConstraintCache constraint_cache_;
             mutable SchurComplementManager schur_manager_;
-            
-            // Pre-allocated workspaces for zero-allocation hot paths
+
             mutable std::vector<double> ws_residual_;
             mutable std::vector<double> ws_w_;
             mutable std::vector<double> ws_correction_;
             mutable std::vector<double> ws_x_star_;
             mutable std::vector<double> ws_lambda_;
-            
+            mutable std::vector<double> ws_Axbar_;
+            mutable std::vector<double> ws_is_active_;
+
+            mutable std::vector<int> ws_constrained_vars_;
+            mutable std::vector<double> ws_signs_;
+            mutable std::vector<double> ws_Q_inv_cols_;
+            mutable std::vector<double> ws_S_;
+
+            bool q_is_diagonal_ = false;
+            std::vector<double> Q_diag_;
+
             struct TimingStats
             {
                 double compute_intersection_total = 0.0;
@@ -327,8 +345,11 @@ namespace geoqp
                 const std::vector<double> &Q_chol,
                 int m,
                 int n,
-                std::vector<double> &x_star_out,
-                std::vector<double> &lambda_out);
+                std::vector<double> &x_star,
+                std::vector<double> &lambda,
+                const std::vector<double> &Q_inv = std::vector<double>(),
+                bool q_is_diagonal = false,
+                const std::vector<double> &Q_diag = std::vector<double>());
         };
 
         class Projector
@@ -339,7 +360,8 @@ namespace geoqp
                 const std::vector<double> &x_bar,
                 const std::vector<double> &Q_chol,
                 int m, int n,
-                const Config &config);
+                const Config &config,
+                const std::vector<double> *Q_inv = nullptr);
 
             void update(const double *b, const std::vector<double> &x_bar)
             {
@@ -357,6 +379,7 @@ namespace geoqp
             const double *b_;
             std::vector<double> x_bar_;
             std::vector<double> Q_chol_;
+            const std::vector<double> *Q_inv_;
             int m_;
             int n_;
             Config config_;
