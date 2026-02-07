@@ -296,7 +296,7 @@ namespace geoqp
                     {
                         const double *a_row = A_ + i * n_;
                         double ax = LinearAlgebra::dot(a_row, x_star.data(), n_);
-                        if (ax > b_[i] + config_.tolerance)
+                        if (ax > b_[i] + config_.constraint_tolerance)
                         {
                             success = false;
                             break;
@@ -324,7 +324,7 @@ namespace geoqp
                 {
                     const double *a_row = A_ + i * n_;
                     double ax = LinearAlgebra::dot(a_row, x_bar_.data(), n_);
-                    if (ax > b_[i] + config_.tolerance)
+                    if (ax > b_[i] + config_.constraint_tolerance)
                     {
                         if (config_.timing_verbosity > 0)
                         {
@@ -478,7 +478,7 @@ namespace geoqp
                 {
                     const double *a_row = A_ + i * n_;
                     double ax = LinearAlgebra::dot(a_row, x_star.data(), n_);
-                    if (ax > b_[i] + config_.tolerance)
+                    if (ax > b_[i] + config_.constraint_tolerance)
                     {
                         return false;
                     }
@@ -501,7 +501,7 @@ namespace geoqp
             {
                 const double *a_row = A_ + i * n_;
                 double ax = LinearAlgebra::dot(a_row, x_star.data(), n_);
-                if (ax > b_[i] + config_.tolerance)
+                if (ax > b_[i] + config_.constraint_tolerance)
                 {
                     return false;
                 }
@@ -686,7 +686,7 @@ namespace geoqp
                     double ax = LinearAlgebra::dot(a_row, ws_x_star_.data(), n_);
                     double violation = ax - b_[i];
 
-                    if (violation > max_violation + config_.tolerance)
+                    if (violation > max_violation + config_.constraint_tolerance)
                     {
                         max_violation = violation;
                         most_violated = i;
@@ -704,7 +704,7 @@ namespace geoqp
 
                         const double *GEOQP_RESTRICT a_row = A_ + i * n_;
                         double ax = LinearAlgebra::dot(a_row, ws_x_star_.data(), n_);
-                        if (ax > b_[i] + config_.tolerance)
+                        if (ax > b_[i] + config_.constraint_tolerance)
                         {
                             to_add.push_back(i);
                         }
@@ -726,7 +726,7 @@ namespace geoqp
                 }
 
                 int drop_idx = -1;
-                double min_lambda = -config_.tolerance;
+                double min_lambda = -config_.constraint_tolerance;
                 for (int i = 0; i < k; ++i)
                 {
                     if (lambda_ptr[i] < min_lambda)
@@ -842,7 +842,7 @@ namespace geoqp
 
                     for (size_t i = 0; i < current_face.size(); ++i)
                     {
-                        if (lambda[i] < -config_.tolerance)
+                        if (lambda[i] < -config_.constraint_tolerance)
                         {
                             std::vector<int> smaller_face;
                             for (size_t j = 0; j < current_face.size(); ++j)
@@ -857,7 +857,7 @@ namespace geoqp
                                 bool dual_feasible = true;
                                 for (double l : lambda2)
                                 {
-                                    if (l < -config_.tolerance)
+                                    if (l < -config_.constraint_tolerance)
                                     {
                                         dual_feasible = false;
                                         break;
@@ -897,7 +897,7 @@ namespace geoqp
                                     }
                                 }
 
-                                if (!early_exit && d2 < d1 - config_.tolerance)
+                                if (!early_exit && d2 < d1 - config_.constraint_tolerance)
                                 {
                                     current_face = std::move(smaller_face);
                                     improved = true;
@@ -942,7 +942,7 @@ namespace geoqp
 
                         const double *a_row = A_ + i * n_;
                         double ax = LinearAlgebra::dot(a_row, x_star.data(), n_);
-                        if (ax > b_[i] + config_.tolerance)
+                        if (ax > b_[i] + config_.constraint_tolerance)
                         {
                             violated.push_back(i);
                         }

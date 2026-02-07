@@ -30,6 +30,7 @@ namespace geoqp
     struct Config
     {
         double tolerance = 1e-12;
+        double constraint_tolerance = 1e-8;  // Looser tolerance for constraint feasibility
         int max_simplex_iterations = 1000;
         int max_iterations = 1000;
         bool warm_start = false;

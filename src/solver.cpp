@@ -140,7 +140,7 @@ namespace geoqp
                 }
 
                 if (is_feasible(x_bar, problem.A, problem.b,
-                                problem.m, problem.n, config_.tolerance))
+                                problem.m, problem.n, config_.constraint_tolerance))
                 {
                     if (config_.verbosity >= 1)
                     {

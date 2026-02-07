@@ -211,7 +211,7 @@ std::vector<int> hopping_strategy_batch(
         
         std::vector<int> to_add;
         bool primal_feasible = check_primal_feasibility(x_star, current_face, A, b,
-                                                        m, n, config.tolerance, to_add);
+                                                        m, n, config.constraint_tolerance, to_add);
         
         if (!primal_feasible) {
             bool all_added = true;
@@ -233,7 +233,7 @@ std::vector<int> hopping_strategy_batch(
         
         std::vector<ConstraintSensitivity> candidates;
         for (int i = 0; i < k; ++i) {
-            if (lambda[i] < -config.tolerance) {
+            if (lambda[i] < -config.constraint_tolerance) {
                 double L_ii = schur_manager.get_L_diagonal(i);
                 if (L_ii < 1e-12) continue;
                 
@@ -328,7 +328,7 @@ std::vector<int> hopping_strategy_sensitivity(
         
         std::vector<int> to_add;
         bool primal_feasible = check_primal_feasibility(x_star, current_face, A, b,
-                                                        m, n, config.tolerance, to_add);
+                                                        m, n, config.constraint_tolerance, to_add);
         
         if (!primal_feasible) {
             bool all_added = true;
@@ -346,7 +346,7 @@ std::vector<int> hopping_strategy_sensitivity(
         double best_sensitivity = 0.0;
         
         for (int i = 0; i < k; ++i) {
-            if (lambda[i] < -config.tolerance) {
+            if (lambda[i] < -config.constraint_tolerance) {
                 double L_ii = schur_manager.get_L_diagonal(i);
                 if (L_ii < 1e-12) continue; 
                 double sensitivity = (lambda[i] * lambda[i]) / (2.0 * L_ii * L_ii);
@@ -419,7 +419,7 @@ std::vector<int> hopping_strategy_neighbors(
         
         std::vector<int> to_add;
         bool primal_feasible = check_primal_feasibility(x_star, current_face, A, b,
-                                                        m, n, config.tolerance, to_add);
+                                                        m, n, config.constraint_tolerance, to_add);
         
         if (!primal_feasible) {
             bool all_added = true;
@@ -438,7 +438,7 @@ std::vector<int> hopping_strategy_neighbors(
         double best_improvement = 0.0;
         
         for (int i = 0; i < k; ++i) {
-            if (lambda[i] >= -config.tolerance) {
+            if (lambda[i] >= -config.constraint_tolerance) {
                 continue; 
             }
             
