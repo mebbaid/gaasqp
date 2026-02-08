@@ -3,7 +3,7 @@
  * @brief 2D visualization comparing GeoQP, OSQP, and qpOASES iterate trajectories
  * 
  * This example shows a simple 2D QP where the unconstrained minimum is outside
- * a polytope. We compare how each solver approaches the solution and output
+ * a octagon polytope. We compare how each solver approaches the solution and output
  * the iterates for visualization.
  */
 

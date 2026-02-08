@@ -29,8 +29,10 @@ struct QPProblem
     Eigen::MatrixXd H;  // n x n Hessian
     Eigen::VectorXd g;  // n gradient
     Eigen::MatrixXd A;  // m x n constraint matrix
-    Eigen::VectorXd lb; // m lower bounds
-    Eigen::VectorXd ub; // m upper bounds
+    Eigen::VectorXd lbA; // m lower bounds for constraints Ax
+    Eigen::VectorXd ubA; // m upper bounds for constraints Ax
+    Eigen::VectorXd lbX; // n lower bounds for variables x (simple bounds)
+    Eigen::VectorXd ubX; // n upper bounds for variables x (simple bounds)
     std::string name;
 };
 
@@ -55,7 +57,7 @@ QPProblem makeBoxQP(int n, std::mt19937 &rng, double bound = 1.0)
 {
     QPProblem p;
     p.n = n;
-    p.m = n; // Just Identity matrix for box constraints in OSQP/qpOASES format
+    p.m = 0; // No general constraints, only simple bounds
     p.name = "Box QP (n=" + std::to_string(n) + ")";
 
     // Use a fixed seed for the matrix to ensure repeatability for same n
@@ -67,10 +69,14 @@ QPProblem makeBoxQP(int n, std::mt19937 &rng, double bound = 1.0)
     for (int i = 0; i < n; ++i)
         p.g(i) = dist(rng) * 5.0; // Push solution to boundary
 
-    // Constraints: lb <= I*x <= ub
-    p.A = Eigen::MatrixXd::Identity(n, n);
-    p.lb = -bound * Eigen::VectorXd::Ones(n);
-    p.ub = bound * Eigen::VectorXd::Ones(n);
+    // Simple bounds on variables: -bound <= x <= bound
+    p.lbX = -bound * Eigen::VectorXd::Ones(n);
+    p.ubX = bound * Eigen::VectorXd::Ones(n);
+    
+    // No general constraints
+    p.A = Eigen::MatrixXd(0, n);
+    p.lbA = Eigen::VectorXd(0);
+    p.ubA = Eigen::VectorXd(0);
 
     return p;
 }
@@ -93,8 +99,8 @@ QPProblem makePolytopeQP(int n, int m, std::mt19937 &rng)
         p.g(i) = dist(rng);
 
     p.A.resize(m, n);
-    p.lb.resize(m);
-    p.ub.resize(m);
+    p.lbA.resize(m);
+    p.ubA.resize(m);
 
     for (int i = 0; i < m; ++i)
     {
@@ -102,9 +108,13 @@ QPProblem makePolytopeQP(int n, int m, std::mt19937 &rng)
         {
             p.A(i, j) = dist(rng);
         }
-        p.lb(i) = -1e20; // One-sided
-        p.ub(i) = udist(rng);
+        p.lbA(i) = -1e20; // One-sided
+        p.ubA(i) = udist(rng);
     }
+    
+    // No simple bounds
+    p.lbX = -1e20 * Eigen::VectorXd::Ones(n);
+    p.ubX = 1e20 * Eigen::VectorXd::Ones(n);
 
     return p;
 }
@@ -118,7 +128,7 @@ QPProblem makeMPCQP(int horizon, std::mt19937 &rng)
 
     QPProblem p;
     p.n = n;
-    p.m = n; // box constraints: -1 <= u <= 1
+    p.m = 0; // No general constraints, only input bounds
     p.name = "MPC QP (horizon=" + std::to_string(horizon) + ", n=" + std::to_string(n) + ")";
 
     // Build state propagation matrix Su: x = Su * u
@@ -152,9 +162,14 @@ QPProblem makeMPCQP(int horizon, std::mt19937 &rng)
     for (int i = 0; i < n; ++i)
         p.g(i) = dist(rng);
 
-    p.A = Eigen::MatrixXd::Identity(n, n);
-    p.lb = -Eigen::VectorXd::Ones(n);
-    p.ub = Eigen::VectorXd::Ones(n);
+    // Simple bounds on inputs: -1 <= u <= 1
+    p.lbX = -Eigen::VectorXd::Ones(n);
+    p.ubX = Eigen::VectorXd::Ones(n);
+    
+    // No general constraints
+    p.A = Eigen::MatrixXd(0, n);
+    p.lbA = Eigen::VectorXd(0);
+    p.ubA = Eigen::VectorXd(0);
 
     return p;
 }
@@ -188,7 +203,7 @@ QPProblem makeDiagonalMPCQP(int horizon, std::mt19937 &rng)
     const int n = 2 * horizon;
     QPProblem p;
     p.n = n;
-    p.m = n;
+    p.m = 0; // Only simple bounds
     p.name = "Diagonal MPC (horizon=" + std::to_string(horizon) + ")";
 
     p.H = Eigen::MatrixXd::Zero(n, n);
@@ -203,9 +218,14 @@ QPProblem makeDiagonalMPCQP(int horizon, std::mt19937 &rng)
     for (int i = 0; i < n; ++i)
         p.g(i) = dist(rng) * 5.0;
 
-    p.A = Eigen::MatrixXd::Identity(n, n);
-    p.lb = -Eigen::VectorXd::Ones(n);
-    p.ub = Eigen::VectorXd::Ones(n);
+    // Simple bounds
+    p.lbX = -Eigen::VectorXd::Ones(n);
+    p.ubX = Eigen::VectorXd::Ones(n);
+    
+    // No general constraints
+    p.A = Eigen::MatrixXd(0, n);
+    p.lbA = Eigen::VectorXd(0);
+    p.ubA = Eigen::VectorXd(0);
 
     return p;
 }
@@ -239,20 +259,32 @@ public:
     {
         SolverResult result;
         int n = prob.n;
+        int m = prob.m;
+        
         // GeoQP handles bounds as explicit constraints Ax <= b
-        // Each row of A has an upper and lower bound in the problem definition
-        // We need to convert lb <= Ax <= ub into:
-        // Ax <= ub
-        // -Ax <= -lb
+        // We need to convert:
+        // - Simple bounds: lbX <= x <= ubX  ->  -I*x <= -lbX and I*x <= ubX
+        // - General constraints: lbA <= Ax <= ubA  ->  -A*x <= -lbA and A*x <= ubA
 
         // Count actual constraints (finite bounds)
         int n_constraints = 0;
-        for (int i = 0; i < prob.m; ++i)
+        
+        // Count simple bound constraints
+        for (int i = 0; i < n; ++i)
         {
-            if (prob.ub(i) < 1e19)
-                n_constraints++;
-            if (prob.lb(i) > -1e19)
-                n_constraints++;
+            if (prob.lbX(i) > -1e19)
+                n_constraints++; // -x_i <= -lbX_i
+            if (prob.ubX(i) < 1e19)
+                n_constraints++; // x_i <= ubX_i
+        }
+        
+        // Count general constraints
+        for (int i = 0; i < m; ++i)
+        {
+            if (prob.lbA(i) > -1e19)
+                n_constraints++; // -A_i*x <= -lbA_i
+            if (prob.ubA(i) < 1e19)
+                n_constraints++; // A_i*x <= ubA_i
         }
 
         bool structure_changed = (current_n != n || current_m != n_constraints);
@@ -277,29 +309,45 @@ public:
         b_vec.resize(n_constraints);
 
         int row = 0;
-        for (int i = 0; i < prob.m; ++i)
+        
+        // Add simple bound constraints
+        for (int i = 0; i < n; ++i)
         {
-            // Upper bound
-            if (prob.ub(i) < 1e19)
+            // Lower bound: -x_i <= -lbX_i
+            if (prob.lbX(i) > -1e19)
             {
-                // If structure changed OR we suspect A changes (random polytope?), we must update A
-                // For safety, let's always update A for now. Benchmark overhead is negligible compared to solve time for large N?
-                // Actually copying A is O(mn), verify cost. For n=100 m=200, it's 20000 doubles. Fast.
-                // Optimally we'd track if A changed. But Problem struct doesn't say.
-
                 for (int j = 0; j < n; ++j)
-                    A_flat[row * n + j] = prob.A(i, j);
-
-                b_vec[row] = prob.ub(i);
+                    A_flat[row * n + j] = (i == j) ? -1.0 : 0.0;
+                b_vec[row] = -prob.lbX(i);
                 row++;
             }
-            // Lower bound
-            if (prob.lb(i) > -1e19)
+            // Upper bound: x_i <= ubX_i
+            if (prob.ubX(i) < 1e19)
+            {
+                for (int j = 0; j < n; ++j)
+                    A_flat[row * n + j] = (i == j) ? 1.0 : 0.0;
+                b_vec[row] = prob.ubX(i);
+                row++;
+            }
+        }
+        
+        // Add general constraints
+        for (int i = 0; i < m; ++i)
+        {
+            // Lower bound: -A_i*x <= -lbA_i
+            if (prob.lbA(i) > -1e19)
             {
                 for (int j = 0; j < n; ++j)
                     A_flat[row * n + j] = -prob.A(i, j);
-
-                b_vec[row] = -prob.lb(i);
+                b_vec[row] = -prob.lbA(i);
+                row++;
+            }
+            // Upper bound: A_i*x <= ubA_i
+            if (prob.ubA(i) < 1e19)
+            {
+                for (int j = 0; j < n; ++j)
+                    A_flat[row * n + j] = prob.A(i, j);
+                b_vec[row] = prob.ubA(i);
                 row++;
             }
         }
@@ -393,21 +441,38 @@ public:
         // Assumes setup already called
         SolverResult result;
         int n = prob.n;
+        int m = prob.m;
+        
         g_vec.resize(n);
         for (int i = 0; i < n; ++i)
             g_vec[i] = prob.g(i);
 
         // Update bounds only
         int n_constraints = 0;
-        for (int i = 0; i < prob.m; ++i)
+        
+        // Simple bounds
+        for (int i = 0; i < n; ++i)
         {
-            if (prob.ub(i) < 1e19)
+            if (prob.lbX(i) > -1e19)
             {
-                b_vec[n_constraints++] = prob.ub(i);
+                b_vec[n_constraints++] = -prob.lbX(i);
             }
-            if (prob.lb(i) > -1e19)
+            if (prob.ubX(i) < 1e19)
             {
-                b_vec[n_constraints++] = -prob.lb(i);
+                b_vec[n_constraints++] = prob.ubX(i);
+            }
+        }
+        
+        // General constraints
+        for (int i = 0; i < m; ++i)
+        {
+            if (prob.lbA(i) > -1e19)
+            {
+                b_vec[n_constraints++] = -prob.lbA(i);
+            }
+            if (prob.ubA(i) < 1e19)
+            {
+                b_vec[n_constraints++] = prob.ubA(i);
             }
         }
 
@@ -436,22 +501,84 @@ public:
     }
 };
 
-// OSQP Wrapper (matching benchmark_osqp.cpp exactly)
-SolverResult solveOSQP(const Eigen::MatrixXd &H, const Eigen::VectorXd &g,
-                       const Eigen::MatrixXd &A, const Eigen::VectorXd &lb,
-                       const Eigen::VectorXd &ub)
+// OSQP Wrapper using separate simple bounds and general constraint bounds
+// Note: OSQP via QpSolversEigen combines variable bounds and constraints into one constraint matrix
+SolverResult solveOSQP(const QPProblem &prob)
 {
     SolverResult result;
-    int n = H.rows();
-    int m = A.rows();
+    int n = prob.n;
+    int m = prob.m;
 
-    Eigen::MatrixXd H_upper = H.triangularView<Eigen::Upper>();
+    Eigen::MatrixXd H_upper = prob.H.triangularView<Eigen::Upper>();
     Eigen::SparseMatrix<double> H_sparse = H_upper.sparseView();
-    Eigen::SparseMatrix<double> A_sparse = A.sparseView();
 
-    Eigen::VectorXd g_copy = g;
-    Eigen::VectorXd lb_copy = lb;
-    Eigen::VectorXd ub_copy = ub;
+    Eigen::VectorXd g_copy = prob.g;
+
+    // Count total constraints (variable bounds + general constraints)
+    int total_constraints = 0;
+    for (int i = 0; i < n; ++i)
+    {
+        if (prob.lbX(i) > -1e19)
+            total_constraints++; // -x_i <= -lbX_i
+        if (prob.ubX(i) < 1e19)
+            total_constraints++; // x_i <= ubX_i
+    }
+    for (int i = 0; i < m; ++i)
+    {
+        if (prob.lbA(i) > -1e19)
+            total_constraints++; // -A_i*x <= -lbA_i
+        if (prob.ubA(i) < 1e19)
+            total_constraints++; // A_i*x <= ubA_i
+    }
+
+    // Build combined constraint matrix
+    Eigen::MatrixXd A_combined(total_constraints, n);
+    Eigen::VectorXd lb_combined(total_constraints);
+    Eigen::VectorXd ub_combined(total_constraints);
+
+    int row = 0;
+    
+    // Add variable bounds as constraints
+    for (int i = 0; i < n; ++i)
+    {
+        if (prob.lbX(i) > -1e19)
+        {
+            A_combined.row(row).setZero();
+            A_combined(row, i) = 1.0;
+            lb_combined(row) = prob.lbX(i);
+            ub_combined(row) = 1e20;
+            row++;
+        }
+        if (prob.ubX(i) < 1e19)
+        {
+            A_combined.row(row).setZero();
+            A_combined(row, i) = 1.0;
+            lb_combined(row) = -1e20;
+            ub_combined(row) = prob.ubX(i);
+            row++;
+        }
+    }
+    
+    // Add general constraints
+    for (int i = 0; i < m; ++i)
+    {
+        if (prob.lbA(i) > -1e19)
+        {
+            A_combined.row(row) = prob.A.row(i);
+            lb_combined(row) = prob.lbA(i);
+            ub_combined(row) = 1e20;
+            row++;
+        }
+        if (prob.ubA(i) < 1e19)
+        {
+            A_combined.row(row) = prob.A.row(i);
+            lb_combined(row) = -1e20;
+            ub_combined(row) = prob.ubA(i);
+            row++;
+        }
+    }
+
+    Eigen::SparseMatrix<double> A_sparse = A_combined.sparseView();
 
     QpSolversEigen::Solver solver;
     bool ok = solver.instantiateSolver("osqp");
@@ -466,12 +593,12 @@ SolverResult solveOSQP(const Eigen::MatrixXd &H, const Eigen::VectorXd &g,
 
     solver.setBooleanParameter("verbose", false);
     solver.data()->setNumberOfVariables(n);
-    solver.data()->setNumberOfInequalityConstraints(m);
+    solver.data()->setNumberOfInequalityConstraints(total_constraints);
     ok = solver.data()->setHessianMatrix(H_sparse);
     ok = ok && solver.data()->setGradient(g_copy);
     ok = ok && solver.data()->setInequalityConstraintsMatrix(A_sparse);
-    ok = ok && solver.data()->setLowerBound(lb_copy);
-    ok = ok && solver.data()->setUpperBound(ub_copy);
+    ok = ok && solver.data()->setLowerBound(lb_combined);
+    ok = ok && solver.data()->setUpperBound(ub_combined);
 
     if (!ok)
     {
@@ -508,32 +635,37 @@ SolverResult solveOSQP(const Eigen::MatrixXd &H, const Eigen::VectorXd &g,
     return result;
 }
 
-// qpOASES Wrapper
-SolverResult solveQPOASES(const Eigen::MatrixXd &H, const Eigen::VectorXd &g,
-                          const Eigen::MatrixXd &A, const Eigen::VectorXd &lb,
-                          const Eigen::VectorXd &ub)
+// qpOASES Wrapper using separate simple bounds and general constraint bounds
+SolverResult solveQPOASES(const QPProblem &prob)
 {
     SolverResult result;
-    int n = H.rows();
-    int m = A.rows();
+    int n = prob.n;
+    int m = prob.m;
 
     // Copy to vectors
-    std::vector<double> H_vec(n * n), A_vec(m * n), g_vec(n), lb_vec(m), ub_vec(m);
+    std::vector<double> H_vec(n * n), g_vec(n);
+    std::vector<double> A_vec(m * n), lbA_vec(m), ubA_vec(m);
+    std::vector<double> lbX_vec(n), ubX_vec(n);
 
     for (int i = 0; i < n; ++i)
         for (int j = 0; j < n; ++j)
-            H_vec[i * n + j] = H(i, j);
+            H_vec[i * n + j] = prob.H(i, j);
 
     for (int i = 0; i < m; ++i)
         for (int j = 0; j < n; ++j)
-            A_vec[i * n + j] = A(i, j);
+            A_vec[i * n + j] = prob.A(i, j);
 
     for (int i = 0; i < n; ++i)
-        g_vec[i] = g(i);
+    {
+        g_vec[i] = prob.g(i);
+        lbX_vec[i] = prob.lbX(i);
+        ubX_vec[i] = prob.ubX(i);
+    }
+    
     for (int i = 0; i < m; ++i)
     {
-        lb_vec[i] = lb(i);
-        ub_vec[i] = ub(i);
+        lbA_vec[i] = prob.lbA(i);
+        ubA_vec[i] = prob.ubA(i);
     }
 
     qpOASES::QProblem qp(n, m, qpOASES::HST_POSDEF);
@@ -546,9 +678,11 @@ SolverResult solveQPOASES(const Eigen::MatrixXd &H, const Eigen::VectorXd &g,
 
     auto start = Clock::now();
     qpOASES::returnValue status = qp.init(
-        H_vec.data(), g_vec.data(), A_vec.data(),
-        nullptr, nullptr,             // simple bounds on x
-        lb_vec.data(), ub_vec.data(), // constraints bounds
+        H_vec.data(), g_vec.data(), 
+        m > 0 ? A_vec.data() : nullptr,
+        lbX_vec.data(), ubX_vec.data(),      // simple bounds on x
+        m > 0 ? lbA_vec.data() : nullptr, 
+        m > 0 ? ubA_vec.data() : nullptr,    // constraint bounds
         nWSR);
     auto end = Clock::now();
 
@@ -609,8 +743,8 @@ void runBenchmarkSuit(const std::string &suiteName,
             QPProblem p = problemGen(n, rng);
 
             auto res_geo = geoWrapper.solve(p);
-            auto res_osqp = solveOSQP(p.H, p.g, p.A, p.lb, p.ub);
-            auto res_qpoases = solveQPOASES(p.H, p.g, p.A, p.lb, p.ub);
+            auto res_osqp = solveOSQP(p);
+            auto res_qpoases = solveQPOASES(p);
 
             if (!res_geo.success || !res_osqp.success || !res_qpoases.success)
             {

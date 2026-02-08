@@ -4,9 +4,6 @@ target_link_libraries(simple_example PRIVATE geoqp::geoqp)
 add_executable(mpc_example mpc_example.cpp)
 target_link_libraries(mpc_example PRIVATE geoqp::geoqp)
 
-add_executable(timing_test timing_test.cpp)
-target_link_libraries(timing_test PRIVATE geoqp::geoqp)
-
 # Planar comparison example (requires both OSQP and qpOASES)
 find_package(QpSolversEigen QUIET)
 find_package(qpOASES QUIET)
@@ -27,6 +24,6 @@ if(QpSolversEigen_FOUND AND qpOASES_FOUND)
 endif()
 
 # Install examples
-install(TARGETS simple_example mpc_example timing_test
+install(TARGETS simple_example mpc_example
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}/examples
 )
