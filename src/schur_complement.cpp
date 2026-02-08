@@ -99,10 +99,31 @@ namespace geoqp
             }
 
             L_S_.resize(k_ * k_);
+            
+            bool has_issues = false;
+            for (int i = 0; i < k_; ++i)
+            {
+                if (S_ptr[i * k_ + i] <= 1e-14)
+                {
+                    has_issues = true;
+                    break;
+                }
+            }
+            
+            if (has_issues)
+            {
+                return false;
+            }
+            
             try
             {
                 LinearAlgebra::cholesky(S.data(), L_S_.data(), k_);
                 return true;
+            }
+            catch (const std::exception& e)
+            {
+                // Cholesky failed - matrix is not positive definite
+                return false;
             }
             catch (...)
             {

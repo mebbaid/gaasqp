@@ -600,7 +600,71 @@ namespace geoqp
 
             if (!schur_manager_.initialize(initial_face, A_, Q_chol_.data(), n_, constraint_cache_))
             {
-                return initial_face;
+                // We need to use the non-cached projection method instead                
+                std::vector<int> current_face = initial_face;
+                std::vector<double> x_proj, lambda;
+                
+                for (int iter = 0; iter < config_.max_iterations; ++iter)
+                {
+                    iterations++;
+                    
+                    if (!compute_projection_and_lambda(current_face, x_proj, lambda))
+                    {
+                        break;
+                    }
+                    
+                    int most_neg = -1;
+                    double most_neg_val = -config_.constraint_tolerance;
+                    for (size_t i = 0; i < current_face.size(); ++i)
+                    {
+                        if (lambda[i] < most_neg_val)
+                        {
+                            most_neg_val = lambda[i];
+                            most_neg = static_cast<int>(i);
+                        }
+                    }
+                    
+                    if (most_neg >= 0)
+                    {
+                        current_face.erase(current_face.begin() + most_neg);
+                        continue;
+                    }
+                    
+                    std::vector<int> violated;
+                    for (int i = 0; i < m_; ++i)
+                    {
+                        bool is_active = false;
+                        for (int idx : current_face)
+                        {
+                            if (idx == i)
+                            {
+                                is_active = true;
+                                break;
+                            }
+                        }
+                        if (is_active) continue;
+                        
+                        const double *a_row = A_ + i * n_;
+                        double ax = LinearAlgebra::dot(a_row, x_proj.data(), n_);
+                        if (ax > b_[i] + config_.constraint_tolerance)
+                        {
+                            violated.push_back(i);
+                        }
+                    }
+                    
+                    if (violated.empty())
+                    {
+                        return current_face;
+                    }
+                    
+                    for (int idx : violated)
+                    {
+                        current_face.push_back(idx);
+                    }
+                    std::sort(current_face.begin(), current_face.end());
+                }
+                
+                return current_face;
             }
 
             while (iterations < max_iter)
@@ -609,16 +673,12 @@ namespace geoqp
                 const auto &current_face = schur_manager_.get_active_constraints();
                 const int k = schur_manager_.size();
 
-                if (static_cast<int>(ws_residual_.size()) < k)
-                    ws_residual_.resize(k);
-                if (static_cast<int>(ws_w_.size()) < n_)
-                    ws_w_.resize(n_);
-                if (static_cast<int>(ws_correction_.size()) < n_)
-                    ws_correction_.resize(n_);
-                if (static_cast<int>(ws_x_star_.size()) < n_)
-                    ws_x_star_.resize(n_);
-                if (static_cast<int>(ws_lambda_.size()) < k)
-                    ws_lambda_.resize(k);
+                // Always resize to exact size needed 
+                ws_residual_.resize(k);
+                ws_w_.resize(n_);
+                ws_correction_.resize(n_);
+                ws_x_star_.resize(n_);
+                ws_lambda_.resize(k);
 
                 const double *GEOQP_RESTRICT xbar_ptr = x_bar_.data();
 
@@ -631,6 +691,7 @@ namespace geoqp
 
                 if (!schur_manager_.solve(ws_residual_, ws_lambda_))
                 {
+                    // Return current face (caller should check KKT conditions)
                     break;
                 }
 
@@ -673,7 +734,6 @@ namespace geoqp
                 int most_violated = -1;
                 double max_violation = 0.0;
 
-                // Optimization: Use ws_is_active_ mask instead of std::set
                 if (static_cast<int>(ws_is_active_.size()) < m_) ws_is_active_.assign(m_, 0);
                 else std::fill(ws_is_active_.begin(), ws_is_active_.end(), 0);
                 for (int idx : current_face) ws_is_active_[idx] = 1;
@@ -721,7 +781,70 @@ namespace geoqp
                     }
 
                     if (!all_added)
-                        break;
+                    {
+                        // Schur complement can't handle these constraints - fall back
+                        std::vector<int> fallback_face = schur_manager_.get_active_constraints();
+                        for (int c : to_add)
+                        {
+                            fallback_face.push_back(c);
+                        }
+                        std::sort(fallback_face.begin(), fallback_face.end());
+                        
+                        for (int iter = iterations; iter < config_.max_iterations; ++iter)
+                        {
+                            iterations++;
+                            
+                            std::vector<double> x_proj, lambda;
+                            if (!compute_projection_and_lambda(fallback_face, x_proj, lambda))
+                            {
+                                break;
+                            }
+                            
+                            int most_neg = -1;
+                            double most_neg_val = -config_.constraint_tolerance;
+                            for (size_t i = 0; i < fallback_face.size(); ++i)
+                            {
+                                if (lambda[i] < most_neg_val)
+                                {
+                                    most_neg_val = lambda[i];
+                                    most_neg = static_cast<int>(i);
+                                }
+                            }
+                            
+                            if (most_neg >= 0)
+                            {
+                                fallback_face.erase(fallback_face.begin() + most_neg);
+                                continue;
+                            }
+                            
+                            std::vector<int> violated;
+                            for (int i = 0; i < m_; ++i)
+                            {
+                                bool is_active = std::find(fallback_face.begin(), fallback_face.end(), i) != fallback_face.end();
+                                if (is_active) continue;
+                                
+                                const double *a_row = A_ + i * n_;
+                                double ax = LinearAlgebra::dot(a_row, x_proj.data(), n_);
+                                if (ax > b_[i] + config_.constraint_tolerance)
+                                {
+                                    violated.push_back(i);
+                                }
+                            }
+                            
+                            if (violated.empty())
+                            {
+                                return fallback_face;
+                            }
+                            
+                            for (int idx : violated)
+                            {
+                                fallback_face.push_back(idx);
+                            }
+                            std::sort(fallback_face.begin(), fallback_face.end());
+                        }
+                        
+                        return fallback_face;
+                    }
                     continue;
                 }
 
@@ -740,7 +863,63 @@ namespace geoqp
                 {
                     if (!schur_manager_.remove_constraint(drop_idx))
                     {
-                        break;
+                        std::vector<int> fallback_face = schur_manager_.get_active_constraints();
+                        fallback_face.erase(fallback_face.begin() + drop_idx);
+                        
+                        for (int iter = iterations; iter < config_.max_iterations; ++iter)
+                        {
+                            iterations++;
+                            
+                            std::vector<double> x_proj, lambda;
+                            if (!compute_projection_and_lambda(fallback_face, x_proj, lambda))
+                            {
+                                break;
+                            }
+                            
+                            int most_neg = -1;
+                            double most_neg_val = -config_.constraint_tolerance;
+                            for (size_t i = 0; i < fallback_face.size(); ++i)
+                            {
+                                if (lambda[i] < most_neg_val)
+                                {
+                                    most_neg_val = lambda[i];
+                                    most_neg = static_cast<int>(i);
+                                }
+                            }
+                            
+                            if (most_neg >= 0)
+                            {
+                                fallback_face.erase(fallback_face.begin() + most_neg);
+                                continue;
+                            }
+                            
+                            std::vector<int> violated;
+                            for (int i = 0; i < m_; ++i)
+                            {
+                                bool is_active = std::find(fallback_face.begin(), fallback_face.end(), i) != fallback_face.end();
+                                if (is_active) continue;
+                                
+                                const double *a_row = A_ + i * n_;
+                                double ax = LinearAlgebra::dot(a_row, x_proj.data(), n_);
+                                if (ax > b_[i] + config_.constraint_tolerance)
+                                {
+                                    violated.push_back(i);
+                                }
+                            }
+                            
+                            if (violated.empty())
+                            {
+                                return fallback_face;
+                            }
+                            
+                            for (int idx : violated)
+                            {
+                                fallback_face.push_back(idx);
+                            }
+                            std::sort(fallback_face.begin(), fallback_face.end());
+                        }
+                        
+                        return fallback_face;
                     }
                     continue;
                 }
@@ -838,96 +1017,84 @@ namespace geoqp
 
                 if (feasible)
                 {
-                    bool improved = false;
-
+                    int most_negative_idx = -1;
+                    double most_negative_value = -config_.constraint_tolerance;
+                    
                     for (size_t i = 0; i < current_face.size(); ++i)
                     {
-                        if (lambda[i] < -config_.constraint_tolerance)
+                        if (lambda[i] < most_negative_value)
                         {
-                            std::vector<int> smaller_face;
-                            for (size_t j = 0; j < current_face.size(); ++j)
-                            {
-                                if (i != j)
-                                    smaller_face.push_back(current_face[j]);
-                            }
-
-                            std::vector<double> x2, lambda2;
-                            if (compute_projection_and_lambda(smaller_face, x2, lambda2))
-                            {
-                                bool dual_feasible = true;
-                                for (double l : lambda2)
-                                {
-                                    if (l < -config_.constraint_tolerance)
-                                    {
-                                        dual_feasible = false;
-                                        break;
-                                    }
-                                }
-
-                                if (!dual_feasible)
-                                {
-                                    continue;
-                                }
-
-                                double d1 = 0.0, d2 = 0.0;
-                                bool early_exit = false;
-
-                                std::vector<double> diff1(n_), diff2(n_);
-                                for (int j = 0; j < n_; ++j)
-                                {
-                                    diff1[j] = x_star[j] - x_bar_[j];
-                                    diff2[j] = x2[j] - x_bar_[j];
-                                }
-
-                                for (int j = 0; j < n_ && !early_exit; ++j)
-                                {
-                                    const double *Q_row = Q_ + j * n_;
-                                    double row_contrib1 = 0.0, row_contrib2 = 0.0;
-                                    for (int k = 0; k < n_; ++k)
-                                    {
-                                        row_contrib1 += Q_row[k] * diff1[k];
-                                        row_contrib2 += Q_row[k] * diff2[k];
-                                    }
-                                    d1 += diff1[j] * row_contrib1;
-                                    d2 += diff2[j] * row_contrib2;
-
-                                    if (j % 10 == 9 && d2 > d1 * 1.1)
-                                    {
-                                        early_exit = true;
-                                    }
-                                }
-
-                                if (!early_exit && d2 < d1 - config_.constraint_tolerance)
-                                {
-                                    current_face = std::move(smaller_face);
-                                    improved = true;
-                                    break;
-                                }
-                            }
+                            most_negative_value = lambda[i];
+                            most_negative_idx = static_cast<int>(i);
                         }
                     }
 
-                    if (!improved)
+                    if (most_negative_idx >= 0)
                     {
+                        std::vector<int> smaller_face;
+                        for (size_t j = 0; j < current_face.size(); ++j)
+                        {
+                            if (static_cast<int>(j) != most_negative_idx)
+                                smaller_face.push_back(current_face[j]);
+                        }
+                        
                         if (config_.verbosity >= 3)
                         {
-                            std::cout << "  Optimal face with " << current_face.size() << " constraints\n";
+                            std::cout << "  Removing constraint with negative lambda = " 
+                                      << most_negative_value << "\n";
                         }
-                        if (config_.timing_verbosity > 0)
+                        
+                        current_face = std::move(smaller_face);
+                    }
+                    else
+                    {
+                        std::set<int> face_set(current_face.begin(), current_face.end());
+                        std::vector<int> violated;
+
+                        for (int i = 0; i < m_; ++i)
                         {
-                            timing_stats_.find_optimal_face_total += t.elapsed_ms();
-                            ++timing_stats_.find_optimal_face_calls;
-                            std::cout << "FaceHopper timing summary:\n";
-                            std::cout << "  compute_intersection: " << timing_stats_.compute_intersection_calls
-                                      << " calls, " << timing_stats_.compute_intersection_total << " ms\n";
-                            std::cout << "  find_initial_face: " << timing_stats_.find_initial_face_calls
-                                      << " calls, " << timing_stats_.find_initial_face_total << " ms\n";
-                            std::cout << "  compute_projection: " << timing_stats_.compute_projection_calls
-                                      << " calls, " << timing_stats_.compute_projection_total << " ms\n";
-                            std::cout << "  find_optimal_face: " << timing_stats_.find_optimal_face_calls
-                                      << " calls, " << timing_stats_.find_optimal_face_total << " ms\n";
+                            if (face_set.find(i) != face_set.end())
+                                continue;
+
+                            const double *a_row = A_ + i * n_;
+                            double ax = LinearAlgebra::dot(a_row, x_star.data(), n_);
+                            if (ax > b_[i] + config_.constraint_tolerance)
+                            {
+                                violated.push_back(i);
+                            }
                         }
-                        return current_face;
+
+                        if (violated.empty())
+                        {
+                            // Both dual and primal feasibility satisfied - optimal!
+                            if (config_.verbosity >= 3)
+                            {
+                                std::cout << "  Optimal face with " << current_face.size() << " constraints\n";
+                            }
+                            if (config_.timing_verbosity > 0)
+                            {
+                                timing_stats_.find_optimal_face_total += t.elapsed_ms();
+                                ++timing_stats_.find_optimal_face_calls;
+                                std::cout << "FaceHopper timing summary:\n";
+                                std::cout << "  compute_intersection: " << timing_stats_.compute_intersection_calls
+                                          << " calls, " << timing_stats_.compute_intersection_total << " ms\n";
+                                std::cout << "  find_initial_face: " << timing_stats_.find_initial_face_calls
+                                          << " calls, " << timing_stats_.find_initial_face_total << " ms\n";
+                                std::cout << "  compute_projection: " << timing_stats_.compute_projection_calls
+                                          << " calls, " << timing_stats_.compute_projection_total << " ms\n";
+                                std::cout << "  find_optimal_face: " << timing_stats_.find_optimal_face_calls
+                                          << " calls, " << timing_stats_.find_optimal_face_total << " ms\n";
+                            }
+                            return current_face;
+                        }
+                        else
+                        {
+                            for (int c : violated)
+                            {
+                                current_face.push_back(c);
+                            }
+                            std::sort(current_face.begin(), current_face.end());
+                        }
                     }
                 }
                 else

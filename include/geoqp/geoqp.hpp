@@ -37,7 +37,9 @@ namespace geoqp
         bool check_optimality = true;
         int verbosity = 0;
         int timing_verbosity = 0;
-        bool use_caching = true;
+        // TODO: Schur complement caching has numerical issues with some problems
+        // Disable by default until fixed (causes failures on ill-conditioned problems)
+        bool use_caching = false;
         FaceHoppingStrategy face_hopping_strategy = FaceHoppingStrategy::STANDARD;
     };
 
