@@ -1089,9 +1089,61 @@ namespace geoqp
                         }
                         else
                         {
-                            for (int c : violated)
+                            // Adaptive strategy: add all violated if safe, else add most violated
+                            const int current_size = static_cast<int>(current_face.size());
+                            const int violated_size = static_cast<int>(violated.size());
+                            const int space_left = n_ - current_size;
+                            
+                            if (GEOQP_LIKELY(violated_size <= space_left))
                             {
-                                current_face.push_back(c);
+                                // Safe to add all violated constraints without over-constraining
+                                for (int c : violated)
+                                {
+                                    current_face.push_back(c);
+                                }
+                            }
+                            else
+                            {
+                                // Would over-constrain: add only the most violated
+                                int most_violated = violated[0];
+                                double max_violation = -std::numeric_limits<double>::infinity();
+                                
+                                const double *GEOQP_RESTRICT x_ptr = x_star.data();
+                                
+                                for (int i = 0; i < violated_size; ++i)
+                                {
+                                    const int c = violated[i];
+                                    const double *GEOQP_RESTRICT a_row = A_ + c * n_;
+                                    const double bi = b_[c];
+                                    
+                                    // Compute a^T * x inline with loop unrolling
+                                    double ax = 0.0;
+                                    int j = 0;
+                                    
+                                    // Unroll by 4
+                                    for (; j + 3 < n_; j += 4)
+                                    {
+                                        ax += a_row[j] * x_ptr[j]
+                                            + a_row[j+1] * x_ptr[j+1]
+                                            + a_row[j+2] * x_ptr[j+2]
+                                            + a_row[j+3] * x_ptr[j+3];
+                                    }
+                                    
+                                    // Handle remainder
+                                    for (; j < n_; ++j)
+                                    {
+                                        ax += a_row[j] * x_ptr[j];
+                                    }
+                                    
+                                    const double violation = ax - bi;
+                                    if (violation > max_violation)
+                                    {
+                                        max_violation = violation;
+                                        most_violated = c;
+                                    }
+                                }
+                                
+                                current_face.push_back(most_violated);
                             }
                             std::sort(current_face.begin(), current_face.end());
                         }
@@ -1138,16 +1190,64 @@ namespace geoqp
                         return current_face;
                     }
 
-                    for (int c : violated)
+                    // Adaptive strategy: add all violated if safe, else add most violated
+                    const int current_size = static_cast<int>(current_face.size());
+                    const int violated_size = static_cast<int>(violated.size());
+                    const int space_left = n_ - current_size;
+                    
+                    if (GEOQP_LIKELY(violated_size <= space_left))
                     {
-                        current_face.push_back(c);
+                        // Safe to add all violated constraints without over-constraining
+                        for (int c : violated)
+                        {
+                            current_face.push_back(c);
+                        }
+                    }
+                    else
+                    {
+                        // Would over-constrain: add only the most violated
+                        int most_violated = violated[0];
+                        double max_violation = -std::numeric_limits<double>::infinity();
+                        
+                        const double *GEOQP_RESTRICT x_ptr = x_star.data();
+                        
+                        for (int i = 0; i < violated_size; ++i)
+                        {
+                            const int c = violated[i];
+                            const double *GEOQP_RESTRICT a_row = A_ + c * n_;
+                            const double bi = b_[c];
+                            
+                            // Compute a^T * x inline with loop unrolling
+                            double ax = 0.0;
+                            int j = 0;
+                            
+                            // Unroll by 4
+                            for (; j + 3 < n_; j += 4)
+                            {
+                                ax += a_row[j] * x_ptr[j]
+                                    + a_row[j+1] * x_ptr[j+1]
+                                    + a_row[j+2] * x_ptr[j+2]
+                                    + a_row[j+3] * x_ptr[j+3];
+                            }
+                            
+                            // Handle remainder
+                            for (; j < n_; ++j)
+                            {
+                                ax += a_row[j] * x_ptr[j];
+                            }
+                            
+                            const double violation = ax - bi;
+                            if (violation > max_violation)
+                            {
+                                max_violation = violation;
+                                most_violated = c;
+                            }
+                        }
+                        
+                        current_face.push_back(most_violated);
                     }
                     std::sort(current_face.begin(), current_face.end());
 
-                    if (config_.verbosity >= 3)
-                    {
-                        std::cout << "  Added " << violated.size() << " violated constraints\n";
-                    }
                 }
             }
 

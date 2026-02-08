@@ -268,55 +268,116 @@ namespace geoqp
                 return find_good_vertex_box_fast();
             }
 
-            Polytope polytope(A_, b_, m_, n_);
-            std::vector<int> active_set = polytope.get_active_constraints(initial_vertex, 1e-8);
 
-            if (is_good_vertex(initial_vertex, active_set))
-            {
-                vertices_explored = 1;
-                iterations = 1;
-                return initial_vertex;
-            }
-
-            // Implementation of "Furthest Good Vertex" logic
-            // We want to move from initial_vertex (feasible) as far as possible
-            // in the direction (initial_vertex - x_bar) to find an antipodal vertex.
-            
+            // Step A: Determine search direction d
+            // Ideally d = centroid - x_bar.
+            // We use initial_vertex as a proxy for the centroid (assuming it's somewhat central/feasible).
             const double *GEOQP_RESTRICT init_ptr = initial_vertex.data();
             const double *GEOQP_RESTRICT xbar_ptr = x_bar_.data();
-            double *GEOQP_RESTRICT dir_ptr = ws_direction_.data();
-
-            for (int j = 0; j < n_; ++j)
-                dir_ptr[j] = init_ptr[j] - xbar_ptr[j];
-
-            double norm = LinearAlgebra::norm(dir_ptr, n_);
-            if (norm > 1e-10)
-            {
-                double inv_norm = 1.0 / norm;
-                for (int j = 0; j < n_; ++j) dir_ptr[j] *= inv_norm;
-            }
-            else
-            {
-                // Degenerate case: initial_vertex is x_bar (shouldn't happen here)
-                for (int j = 0; j < n_; ++j) dir_ptr[j] = 0.0;
-                dir_ptr[0] = 1.0; 
-            }
-
-            // We are already at init_ptr. We need Ax_init.
-            LinearAlgebra::matvec(A_, init_ptr, ws_Ax_.data(), m_, n_);
-            LinearAlgebra::matvec(A_, dir_ptr, ws_Ad_.data(), m_, n_);
-
-            double t_max = std::numeric_limits<double>::infinity();
             
+            double *GEOQP_RESTRICT d_ptr = ws_direction_.data(); 
+            for (int j = 0; j < n_; ++j) {
+                d_ptr[j] = init_ptr[j] - xbar_ptr[j];
+            }
+            
+            double norm_d = LinearAlgebra::norm(d_ptr, n_);
+            if (norm_d > 1e-10) {
+                double inv = 1.0/norm_d;
+                for(int j=0; j<n_; ++j) d_ptr[j] *= inv;
+            }
+
+            // Step B: Score constraints by projection (a_i^T * d)
+            LinearAlgebra::matvec(A_, d_ptr, ws_Ad_.data(), m_, n_);
+            
+            // Store pairs of <score, index>
+            std::vector<std::pair<double, int>> ranked_constraints(m_);
+            for(int i=0; i<m_; ++i) {
+                ranked_constraints[i] = { ws_Ad_[i], i };
+            }
+
+            if (m_ >= n_) {
+                std::partial_sort(ranked_constraints.begin(), 
+                                  ranked_constraints.begin() + n_, 
+                                  ranked_constraints.end(),
+                                  [](const std::pair<double, int>& a, const std::pair<double, int>& b) {
+                                      return a.first > b.first;
+                                  });
+            }
+
+            if (m_ >= n_) 
+            {
+                // Build small linear system A_sub * v = b_sub
+                // We use the Q matrix workspace or factorization workspace since we haven't started main solve yet
+                // WARNING: We need n*n space. ws_matrix_Q_ (n*n) is available/unused during init phase?
+                // Yes, Q is read-only in 'Q_', 'ws_matrix_Q_' is usually for factorization.
+                
+                // We need to act carefully not to overwrite data needed later. 
+                // Let's assume we can use a temporary buffer or part of the workspace.
+                std::vector<double> A_sub(n_ * n_);
+                std::vector<double> b_sub(n_);
+                std::vector<double> v_candidate(n_);
+
+                // Extract rows
+                for(int i=0; i<n_; ++i) {
+                    int original_idx = ranked_constraints[i].second;
+                    // Copy row A[original_idx]
+                    const double* row_ptr = A_ + original_idx * n_;
+                    for(int j=0; j<n_; ++j) {
+                        A_sub[i*n_ + j] = row_ptr[j];
+                    }
+                    b_sub[i] = b_[original_idx];
+                }
+
+                try {
+                    // Solve A_sub * v = b_sub
+                    // Use standard Gaussian elimination or QR. 
+                    // Since we implemented LinearAlgebra::solve_linear_system:
+                    LinearAlgebra::solve_linear_system(A_sub.data(), b_sub.data(), v_candidate.data(), n_);
+
+                    // Check if this candidate is feasible (against ALL constraints)
+                    // We allow a small tolerance since we are just finding a start point
+                    Polytope polytope(A_, b_, m_, n_);
+                    if (polytope.is_vertex(v_candidate))
+                    {
+                        // Check if it is "Good" (sees x_bar through interior)
+                        // Since we constructed it from constraints facing 'd', it is highly likely to be good.
+                        std::vector<int> active_set; 
+                        active_set.reserve(n_);
+                        for(int i=0; i<n_; ++i) active_set.push_back(ranked_constraints[i].second);
+                        
+                        if (is_good_vertex(v_candidate, active_set)) {
+                            vertices_explored = 1;
+                            iterations = 1;
+                            // This is a robust VERTEX (n constraints active). 
+                            // Much better than a random boundary point.
+                            return v_candidate; 
+                        }
+                    }
+                } catch (...) {
+                    // Singular matrix (constraints were parallel/dependent)
+                    // Fall through to ray casting
+                }
+            }
+
+            // ---------------------------------------------------------
+            // 3. Fallback: Ray Casting (The "Back Wall" approach)
+            // ---------------------------------------------------------
+
+            LinearAlgebra::matvec(A_, init_ptr, ws_Ax_.data(), m_, n_);
+            
+            // We already computed Ad (projection of direction) in Step B -> ws_Ad_
             const double *GEOQP_RESTRICT Ax_ptr = ws_Ax_.data();
             const double *GEOQP_RESTRICT Ad_ptr = ws_Ad_.data();
 
+            double t_max = std::numeric_limits<double>::infinity();
+            
             for (int i = 0; i < m_; ++i)
             {
+                // We only care about constraints we are moving TOWARDS (Ad > 0)
                 if (Ad_ptr[i] > 1e-12)
                 {
                     double dist = b_[i] - Ax_ptr[i];
-                    if (dist < 0.0) dist = 0.0;
+                    if (dist < 0.0) dist = 0.0; // clamp small violations
                     double t = dist / Ad_ptr[i];
                     if (t < t_max) t_max = t;
                 }
@@ -326,24 +387,15 @@ namespace geoqp
 
             std::vector<double> furthest_v(n_);
             for (int j = 0; j < n_; ++j)
-                furthest_v[j] = init_ptr[j] + t_max * dir_ptr[j];
+                furthest_v[j] = init_ptr[j] + t_max * d_ptr[j];
 
-            // Verify if furthest_v is a good vertex. 
-            // A vertex is "good" if (x_bar - v) points INTO the polytope for all active constraints at v.
-            std::vector<int> furthest_active = polytope.get_active_constraints(furthest_v, 1e-7);
+            // Note: furthest_v is likely on a Face (1 active constraint), not a Vertex.
+            // The solver must handle rank-deficient initial active sets or perform Phase I pivots.
+            // However, this is the best we can do without expensive vertex enumeration.
             
-            if (is_good_vertex(furthest_v, furthest_active))
-            {
-                vertices_explored = 2;
-                iterations = 1;
-                return furthest_v;
-            }
-
-            // Fallback: If the furthest point isn't a good vertex, the ray might have hit a non-vertex face.
-            // But for the initial ray, picking the furthest feasible point in this direction is usually best.
-            vertices_explored = 1;
-            iterations = 1;
-            return initial_vertex;
+            vertices_explored++;
+            iterations++;
+            return furthest_v;
         }
 
         bool Initializer::is_direction_feasible(

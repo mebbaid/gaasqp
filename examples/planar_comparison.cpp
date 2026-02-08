@@ -1,10 +1,9 @@
 /**
- * @file planar_comparison.cpp
- * @brief 2D visualization comparing GeoQP, OSQP, and qpOASES iterate trajectories
- * 
- * This example shows a simple 2D QP where the unconstrained minimum is outside
- * a octagon polytope. We compare how each solver approaches the solution and output
- * the iterates for visualization.
+ * @file planar_octagon.cpp
+ * @brief 2D Benchmark: GeoQP vs OSQP vs qpOASES on an Octagon
+ *
+ * Geometry: Regular Octagon created by intersecting a Box with a Diamond.
+ * Unconstrained Minimum: Placed outside to test active-set identification.
  */
 
 #include <geoqp/geoqp.hpp>
@@ -19,268 +18,226 @@
 #include <vector>
 #include <cmath>
 
-// Store iterate information
-struct Iterate {
+// Helper to print nice output
+struct Iterate
+{
     double x, y;
     std::string description;
 };
 
-/**
- * Simple 2D QP:
- *   min (1/2) x^T Q x + g^T x
- *   s.t. A x <= b
- * 
- * We create a pentagon-like polytope and place x_bar outside it.
- */
-int main() {
+int main()
+{
     std::cout << "================================================================\n";
-    std::cout << "  2D Planar QP: Comparing Solver Iterate Trajectories\n";
+    std::cout << "  2D Octagon QP: Comparing Solver Trajectories\n";
     std::cout << "================================================================\n\n";
-    
-    // Problem dimensions
+
+    // ---------------------------------------------------------
+    // 1. UNIFIED PROBLEM DEFINITION (The "Ground Truth")
+    // ---------------------------------------------------------
     const int n = 2;
-    
-    // Hessian Q = I (identity) - circular level sets
-    // This ensures Euclidean distance correlates with objective value
-    std::vector<double> Q = {1.0, 0.0, 
-                              0.0, 1.0};
-    
-    // Linear term: g such that x_bar = -Q^{-1}g = (3, 3) - outside the polytope
-    // g = -Q * x_bar = -[3, 3]
-    std::vector<double> g = {-3.0, -3.0};
-    
-    // Unconstrained minimum
-    double x_bar_x = 3.0, x_bar_y = 3.0;
-    
-    std::cout << "Problem Setup:\n";
-    std::cout << "  Q = I (identity) - circular level sets\n";
-    std::cout << "  Unconstrained minimum x_bar = (" << x_bar_x << ", " << x_bar_y << ")\n\n";
-    
-    // Create a polytope (irregular pentagon)
-    // Constraints: A x <= b
-    //   x <= 2        (right wall)
-    //   y <= 2        (top wall)
-    //   -x <= 1       (left wall at x = -1)
-    //   -y <= 1       (bottom wall at y = -1)
-    //   x + y <= 3    (diagonal cut at top-right)
-    //   -x - y <= 0   (diagonal cut at bottom-left, passes through origin)
-    
-    const int m = 6;
-    std::vector<double> A = {
-         1.0,  0.0,   // x <= 2
-         0.0,  1.0,   // y <= 2
-        -1.0,  0.0,   // -x <= 1  (x >= -1)
-         0.0, -1.0,   // -y <= 1  (y >= -1)
-         1.0,  1.0,   // x + y <= 3
-        -1.0, -1.0    // -x - y <= 0  (x + y >= 0)
+    const int m = 8; // Octagon = 8 inequalities
+
+    // Objective: minimize ||x - x_bar||^2
+    // x_bar = (4.0, 1.0) -> Target is to the right, slightly up
+    double x_bar_x = 4.0;
+    double x_bar_y = 1.0;
+
+    // Q = I, g = -x_bar
+    std::vector<double> Q_shared = {1.0, 0.0, 0.0, 1.0};
+    std::vector<double> g_shared = {-x_bar_x, -x_bar_y};
+
+    // Octagon Constraints (Intersection of Box and Diamond)
+    // 1. Right:  x <= 2
+    // 2. Top:    y <= 2
+    // 3. Left:  -x <= 2  (x >= -2)
+    // 4. Bottom:-y <= 2  (y >= -2)
+    // 5. TR Diag: x + y <= 3
+    // 6. TL Diag:-x + y <= 3
+    // 7. BL Diag:-x - y <= 3
+    // 8. BR Diag: x - y <= 3
+
+    std::vector<double> A_shared = {
+        1.0, 0.0,   // x <= 2
+        0.0, 1.0,   // y <= 2
+        -1.0, 0.0,  // x >= -2
+        0.0, -1.0,  // y >= -2
+        1.0, 1.0,   // x + y <= 3
+        -1.0, 1.0,  // -x + y <= 3
+        -1.0, -1.0, // -x - y <= 3
+        1.0, -1.0   // x - y <= 3
     };
-    std::vector<double> b = {2.0, 2.0, 1.0, 1.0, 3.0, 0.0};
-    
-    std::cout << "Polytope (6 constraints):\n";
-    std::cout << "  x <= 2, y <= 2, x >= -1, y >= -1\n";
-    std::cout << "  x + y <= 3 (diagonal)\n";
-    std::cout << "  x + y >= 0 (diagonal)\n\n";
-    
-    // The optimal solution should be on the diagonal x + y = 3
-    // where the ellipse is tangent to this line
-    
+
+    std::vector<double> b_shared = {
+        2.0, 2.0, 2.0, 2.0, // Box bounds
+        3.0, 3.0, 3.0, 3.0  // Diagonal cuts
+    };
+
+    std::cout << "Problem Setup (Octagon):\n";
+    std::cout << "  Target x_bar = (" << x_bar_x << ", " << x_bar_y << ")\n";
+    std::cout << "  Constraints: Box[-2, 2] intersected with |x|+|y|<=3\n";
+
+    // Geometric intuition:
+    // x_bar is at (4,1).
+    // Right wall is x=2. Distance to (2,1) is 2.0.
+    // Diagonal is x+y=3. Projection of (4,1) onto x+y=3 is (2.5, -0.5)? No.
+    // Vector to (4,1) is roughly East.
+    // The closest point should be on the Right Wall x=2, y=1.
+    // Let's check constraints at (2,1):
+    // x=2 (Active), y=1 (Inactive), x+y=3 (Active!).
+    // Solution should be the vertex (2, 1).
+    std::cout << "  Expected Solution: (2.0, 1.0) [Intersection of x=2 and x+y=3]\n\n";
+
+    // ---------------------------------------------------------
+    // 2. GEOQP SOLVER
+    // ---------------------------------------------------------
     std::cout << "========================================\n";
-    std::cout << "  GeoQP Solver (Geometric Active Set)\n";
-    std::cout << "========================================\n\n";
-    
+    std::cout << "  GeoQP Solver\n";
+    std::cout << "========================================\n";
+
     std::vector<Iterate> geoqp_iterates;
-    
-    // Add x_bar as starting reference
-    geoqp_iterates.push_back({x_bar_x, x_bar_y, "x_bar (unconstrained min)"});
-    
+    geoqp_iterates.push_back({x_bar_x, x_bar_y, "Start"});
+
     {
         geoqp::Problem problem;
         problem.n = n;
         problem.m = m;
-        problem.Q = Q;
-        problem.g = g;
-        problem.A = A;
-        problem.b = b;
-        
+        problem.Q = Q_shared;
+        problem.g = g_shared;
+        problem.A = A_shared;
+        problem.b = b_shared;
+
         geoqp::Config config;
-        config.verbosity = 2;  // Show details
-        
+        config.verbosity = 3;  // Maximum verbosity
+        config.use_caching =  false;
+
         geoqp::Solver solver(config);
         geoqp::Solution sol = solver.solve(problem);
-        
-        std::cout << "\nGeoQP Result:\n";
-        std::cout << "  Solution: (" << sol.x[0] << ", " << sol.x[1] << ")\n";
-        std::cout << "  Objective: " << sol.objective_value << "\n";
-        std::cout << "  Active constraints: " << sol.num_active_constraints << "\n";
-        std::cout << "  Initializer iterations: " << sol.phase1_iterations << "\n";
-        std::cout << "  Face hops: " << sol.phase2_iterations << "\n";
-        std::cout << "  Total time: " << (sol.phase1_time + sol.phase2_time + sol.phase3_time) * 1000 << " ms\n\n";
-        
-        geoqp_iterates.push_back({sol.x[0], sol.x[1], "GeoQP solution"});
+
+        if (sol.status == geoqp::Status::SUCCESS && !sol.x.empty())
+        {
+            std::cout << "  Solution: (" << sol.x[0] << ", " << sol.x[1] << ")\n";
+            std::cout << "  Active Set Size: " << sol.num_active_constraints << "\n";
+            geoqp_iterates.push_back({sol.x[0], sol.x[1], "GeoQP"});
+        }
+        else
+        {
+            std::cout << "  FAILED\n";
+        }
     }
-    
+
+    // ---------------------------------------------------------
+    // 3. QPOASES SOLVER
+    // ---------------------------------------------------------
+    std::cout << "\n========================================\n";
+    std::cout << "  qpOASES Solver\n";
     std::cout << "========================================\n";
-    std::cout << "  qpOASES Solver (Parametric Active Set)\n";
-    std::cout << "========================================\n\n";
-    
+
     std::vector<Iterate> qpoases_iterates;
-    qpoases_iterates.push_back({x_bar_x, x_bar_y, "x_bar (unconstrained min)"});
-    
+    qpoases_iterates.push_back({x_bar_x, x_bar_y, "Start"});
+
     {
-        // qpOASES uses row-major for matrices
-        qpOASES::real_t H[4] = {1.0, 0.0, 0.0, 1.0};
-        qpOASES::real_t g_qp[2] = {-3.0, -3.0};
-        qpOASES::real_t A_qp[12] = {
-             1.0,  0.0,
-             0.0,  1.0,
-            -1.0,  0.0,
-             0.0, -1.0,
-             1.0,  1.0,
-            -1.0, -1.0
-        };
-        qpOASES::real_t ubA[6] = {2.0, 2.0, 1.0, 1.0, 3.0, 0.0};
-        qpOASES::real_t lbA[6] = {-1e10, -1e10, -1e10, -1e10, -1e10, -1e10};
-        
-        qpOASES::QProblem qp(2, 6);
+        std::vector<double> lbA(m, -1.0e10); // One-sided inequality
+
+        qpOASES::QProblem qp(n, m);
         qpOASES::Options options;
-        options.printLevel = qpOASES::PL_MEDIUM;
+        options.printLevel = qpOASES::PL_LOW;
         qp.setOptions(options);
-        
-        qpOASES::int_t nWSR = 100;
-        qp.init(H, g_qp, A_qp, nullptr, nullptr, lbA, ubA, nWSR);
-        
-        qpOASES::real_t x_opt[2];
-        qp.getPrimalSolution(x_opt);
-        
-        double obj = qp.getObjVal();
-        int iterations = static_cast<int>(nWSR);
-        
-        std::cout << "\nqpOASES Result:\n";
+
+        int nWSR = 100;
+        // Using same A_shared pointer
+        qp.init(Q_shared.data(), g_shared.data(),
+                A_shared.data(),
+                nullptr, nullptr,
+                lbA.data(), b_shared.data(),
+                nWSR);
+
+        std::vector<double> x_opt(n);
+        qp.getPrimalSolution(x_opt.data());
+
         std::cout << "  Solution: (" << x_opt[0] << ", " << x_opt[1] << ")\n";
-        std::cout << "  Objective: " << obj << "\n";
-        std::cout << "  Working set recalculations: " << iterations << "\n\n";
-        
-        qpoases_iterates.push_back({x_opt[0], x_opt[1], "qpOASES solution"});
+        qpoases_iterates.push_back({x_opt[0], x_opt[1], "qpOASES"});
     }
-    
+
+    // ---------------------------------------------------------
+    // 4. OSQP SOLVER
+    // ---------------------------------------------------------
+    std::cout << "\n========================================\n";
+    std::cout << "  OSQP Solver\n";
     std::cout << "========================================\n";
-    std::cout << "  OSQP Solver (ADMM)\n";
-    std::cout << "========================================\n\n";
-    
+
     std::vector<Iterate> osqp_iterates;
-    osqp_iterates.push_back({x_bar_x, x_bar_y, "x_bar (unconstrained min)"});
-    
+    osqp_iterates.push_back({x_bar_x, x_bar_y, "Start"});
+
     {
-        // Setup OSQP with QpSolversEigen
-        Eigen::SparseMatrix<double> H_sparse(2, 2);
-        H_sparse.insert(0, 0) = 1.0;
-        H_sparse.insert(1, 1) = 1.0;
-        H_sparse.makeCompressed();
-        
-        Eigen::VectorXd g_vec(2);
-        g_vec << -3.0, -3.0;
-        
-        Eigen::SparseMatrix<double> A_sparse(6, 2);
-        A_sparse.insert(0, 0) = 1.0;
-        A_sparse.insert(1, 1) = 1.0;
-        A_sparse.insert(2, 0) = -1.0;
-        A_sparse.insert(3, 1) = -1.0;
-        A_sparse.insert(4, 0) = 1.0; A_sparse.insert(4, 1) = 1.0;
-        A_sparse.insert(5, 0) = -1.0; A_sparse.insert(5, 1) = -1.0;
-        A_sparse.makeCompressed();
-        
-        Eigen::VectorXd lowerBound(6);
-        lowerBound << -1e10, -1e10, -1e10, -1e10, -1e10, -1e10;
-        
-        Eigen::VectorXd upperBound(6);
-        upperBound << 2.0, 2.0, 1.0, 1.0, 3.0, 0.0;
-        
+        // Convert shared vectors to Eigen Sparse
+        Eigen::SparseMatrix<double> H_sp(n, n);
+        H_sp.setIdentity();
+        Eigen::VectorXd g_vec(n);
+        g_vec << g_shared[0], g_shared[1];
+
+        Eigen::SparseMatrix<double> A_sp(m, n);
+        std::vector<Eigen::Triplet<double>> triplets;
+        for (int i = 0; i < m; ++i)
+        {
+            if (A_shared[i * 2] != 0)
+                triplets.push_back({i, 0, A_shared[i * 2]});
+            if (A_shared[i * 2 + 1] != 0)
+                triplets.push_back({i, 1, A_shared[i * 2 + 1]});
+        }
+        A_sp.setFromTriplets(triplets.begin(), triplets.end());
+
+        Eigen::VectorXd lb_vec(m);
+        lb_vec.setConstant(-1e10);
+        Eigen::VectorXd ub_vec(m);
+        for (int i = 0; i < m; ++i)
+            ub_vec(i) = b_shared[i];
+
         QpSolversEigen::Solver solver;
         solver.instantiateSolver("osqp");
-        solver.setBooleanParameter("verbose", true);
-        
-        solver.data()->setNumberOfVariables(2);
-        solver.data()->setNumberOfInequalityConstraints(6);
-        solver.data()->setHessianMatrix(H_sparse);
+        solver.setBooleanParameter("verbose", false);
+
+        solver.data()->setNumberOfVariables(n);
+        solver.data()->setNumberOfInequalityConstraints(m);
+        solver.data()->setHessianMatrix(H_sp);
         solver.data()->setGradient(g_vec);
-        solver.data()->setInequalityConstraintsMatrix(A_sparse);
-        solver.data()->setLowerBound(lowerBound);
-        solver.data()->setUpperBound(upperBound);
-        
+        solver.data()->setInequalityConstraintsMatrix(A_sp);
+        solver.data()->setLowerBound(lb_vec);
+        solver.data()->setUpperBound(ub_vec);
+
         solver.initSolver();
         solver.solveProblem();
-        
+
         Eigen::VectorXd x_opt = solver.getSolution();
-        
-        std::cout << "\nOSQP Result:\n";
         std::cout << "  Solution: (" << x_opt[0] << ", " << x_opt[1] << ")\n";
-        double obj = solver.getObjValue();
-        std::cout << "  Objective: " << obj << "\n\n";
-        
-        osqp_iterates.push_back({x_opt[0], x_opt[1], "OSQP solution"});
+        osqp_iterates.push_back({x_opt[0], x_opt[1], "OSQP"});
     }
-    
-    // Summary comparison
+
+    // ---------------------------------------------------------
+    // FINAL RESULTS
+    // ---------------------------------------------------------
     std::cout << "\n================================================================\n";
-    std::cout << "  Summary: Iterate Trajectories\n";
-    std::cout << "================================================================\n\n";
-    
-    std::cout << "Starting point (unconstrained minimum):\n";
-    std::cout << "  x_bar = (3.0, 3.0) - OUTSIDE polytope\n\n";
-    
-    std::cout << std::fixed << std::setprecision(6);
-    
-    std::cout << "GeoQP iterates (geometric face hopping):\n";
-    for (size_t i = 0; i < geoqp_iterates.size(); ++i) {
-        std::cout << "  [" << i << "] (" << geoqp_iterates[i].x << ", " 
-                  << geoqp_iterates[i].y << ") - " << geoqp_iterates[i].description << "\n";
-    }
-    
-    std::cout << "\nqpOASES iterates (parametric active set):\n";
-    for (size_t i = 0; i < qpoases_iterates.size(); ++i) {
-        std::cout << "  [" << i << "] (" << qpoases_iterates[i].x << ", " 
-                  << qpoases_iterates[i].y << ") - " << qpoases_iterates[i].description << "\n";
-    }
-    
-    std::cout << "\nOSQP iterates (ADMM - many internal iterations):\n";
-    for (size_t i = 0; i < osqp_iterates.size(); ++i) {
-        std::cout << "  [" << i << "] (" << osqp_iterates[i].x << ", " 
-                  << osqp_iterates[i].y << ") - " << osqp_iterates[i].description << "\n";
-    }
-    
-    std::cout << "\n================================================================\n";
-    std::cout << "  Key Insight\n";
-    std::cout << "================================================================\n\n";
-    
-    std::cout << "GeoQP's approach:\n";
-    std::cout << "  1. Start at x_bar (unconstrained minimum)\n";
-    std::cout << "  2. Ray trace toward feasible region -> find blocking face\n";
-    std::cout << "  3. Hop to neighboring faces until optimal face found\n";
-    std::cout << "  4. Project x_bar onto optimal face -> solution\n\n";
-    
-    std::cout << "This is fundamentally different from:\n";
-    std::cout << "  - qpOASES: Starts from a feasible point, moves along constraint surfaces\n";
-    std::cout << "  - OSQP: Uses ADMM with many small steps through the interior\n\n";
-    
-    std::cout << "For problems where x_bar is outside but the optimal face is 'visible',\n";
-    std::cout << "GeoQP can find the solution with very few face hops.\n\n";
-    
-    // Output data for plotting
+    std::cout << "  Summary: Final Coordinates\n";
     std::cout << "================================================================\n";
-    std::cout << "  Data for Plotting (Python/Matplotlib)\n";
-    std::cout << "================================================================\n\n";
-    
-    std::cout << "# Polytope vertices (approximate for visualization)\n";
-    std::cout << "polytope_x = [-1, 2, 2, 1, -1, 0, -1]\n";
-    std::cout << "polytope_y = [1, 1, 2, 2, -1, -1, 1]\n\n";
-    
-    std::cout << "# Unconstrained minimum\n";
-    std::cout << "x_bar = (3.0, 3.0)\n\n";
-    
-    std::cout << "# Solutions (should all be approximately the same)\n";
-    std::cout << "geoqp_sol = (" << geoqp_iterates.back().x << ", " << geoqp_iterates.back().y << ")\n";
-    std::cout << "qpoases_sol = (" << qpoases_iterates.back().x << ", " << qpoases_iterates.back().y << ")\n";
-    std::cout << "osqp_sol = (" << osqp_iterates.back().x << ", " << osqp_iterates.back().y << ")\n";
-    
+
+    std::cout << "GeoQP:   (" << geoqp_iterates.back().x << ", " << geoqp_iterates.back().y << ")\n";
+    std::cout << "qpOASES: (" << qpoases_iterates.back().x << ", " << qpoases_iterates.back().y << ")\n";
+    std::cout << "OSQP:    (" << osqp_iterates.back().x << ", " << osqp_iterates.back().y << ")\n";
+    std::cout << "\n================================================================\n";
+    std::cout << "  Summary: Iterations\n";
+    std::cout << "================================================================\n";
+
+    for (const auto &iter : geoqp_iterates)
+    {
+        std::cout << "GeoQP:   (" << iter.x << ", " << iter.y << ")\n";
+    }
+    for (const auto &iter : qpoases_iterates)
+    {
+        std::cout << "qpOASES: (" << iter.x << ", " << iter.y << ")\n";
+    }
+    for (const auto &iter : osqp_iterates)
+    {
+        std::cout << "OSQP:    (" << iter.x << ", " << iter.y << ")\n";
+    }
+
     return 0;
 }
