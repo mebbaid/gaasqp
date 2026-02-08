@@ -313,6 +313,13 @@ namespace geoqp
             mutable std::vector<double> ws_signs_;
             mutable std::vector<double> ws_Q_inv_cols_;
             mutable std::vector<double> ws_S_;
+            
+            // Workspace for find_optimal_face to avoid allocations in hot loop
+            mutable std::vector<double> ws_opt_x_star_;
+            mutable std::vector<double> ws_opt_lambda_;
+            mutable std::vector<int> ws_opt_violated_;
+            mutable std::vector<int> ws_opt_smaller_face_;
+            mutable std::vector<char> ws_opt_is_active_set_;  // Use char for bitset (faster than std::set)
 
             bool q_is_diagonal_ = false;
             std::vector<double> Q_diag_;
