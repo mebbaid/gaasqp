@@ -38,9 +38,9 @@ struct Parameters
 {
     double com_height = 0.53;                    // [m]
     double dsp_duration = 0.1;                   // [s] double support
-    double foot_size = 0.065;                    // [m] half-foot length
+    double foot_size = 0.05;                    // [m] half-foot length
     double gravity = 9.81;                       // [m/s²]
-    double init_x = 0.09;                        // [m] initial support foot x
+    double init_x = 0.0;                        // [m] initial support foot x
     int N = 15;                                  // MPC horizon
     double dt = 0.1;                             // [s] sampling period
     double ssp_duration = 0.7;                   // [s] single support
@@ -508,7 +508,6 @@ int main()
               << "╚══════════════════════════════════════════════════════════════╝\n\n";
 
     Parameters p;
-    // p.N = 40; // Uncomment to test scalability
 
     double w = p.omega();
     std::vector<double> state = {
