@@ -30,6 +30,7 @@
 
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
+#include <geoqp/internal.hpp>
 
 using Clock = std::chrono::high_resolution_clock;
 
@@ -359,7 +360,9 @@ static Result runGeoQP(const DenseQP &qp, geoqp::FaceHoppingStrategy strat, cons
 
     geoqp::Config cfg;
     cfg.face_hopping_strategy = strat;
-    cfg.use_caching = false; // Benchmark cold start
+    // keep caller control of cfg.use_caching by passing via env var
+    const char *env = std::getenv("GEOQP_USE_CACHING");
+    cfg.use_caching = (env && std::string(env) == "1");
     cfg.warm_start = false;
     cfg.tolerance = 1e-7;
 
@@ -534,43 +537,54 @@ int main()
     int idx_qpoases = n_geo + 1;
     int total_solvers = n_geo + 2;
 
-    std::vector<std::vector<Result>> all_results(num_steps);
+    auto run_pass = [&](bool use_caching, std::vector<std::vector<Result>> &all_results) {
+    if (use_caching) setenv("GEOQP_USE_CACHING", "1", 1);
+    else unsetenv("GEOQP_USE_CACHING");
 
-    for (int step = 0; step < num_steps; ++step)
-    {
-        std::vector<std::pair<double, double>> zmp_bounds;
-        std::vector<double> x_ref;
-        phase.fill(sup_x, zmp_bounds, x_ref);
+    // reset Schur instrumentation counters
+    geoqp::internal::schur_stats_reset();
+        // Use local copies so we don't mutate the outer simulation state
+        auto state_local = state;
+        auto phase_local = phase;
+        double sup_x_local = sup_x;
 
-        DenseQP qp = buildQP(p, state, zmp_bounds, x_ref);
-
-        auto &step_res = all_results[step];
-
-        for (auto &[strat, name] : geoqp_strats)
-            step_res.push_back(runGeoQP(qp, strat, name));
-
-        step_res.push_back(runOSQP(qp));
-
-        step_res.push_back(runQpOASES(qp));
-
-        double jerk = 0.0;
-        if (step_res[idx_qpoases].success && !step_res[idx_qpoases].solution.empty())
+        all_results.assign(num_steps, std::vector<Result>());
+        for (int step = 0; step < num_steps; ++step)
         {
-            jerk = step_res[idx_qpoases].solution[0];
-        }
-        else
-        {
-            std::cerr << "Warning: Step " << step << " failed to find solution.\n";
-        }
+            std::vector<std::pair<double, double>> zmp_bounds;
+            std::vector<double> x_ref;
+            phase_local.fill(sup_x_local, zmp_bounds, x_ref);
 
-        state = integrate(state, jerk, p.dt);
-        phase.advance();
-        if (phase.idx == 0)
-        {
-            sup_x = phase.next_foot(sup_x);
-            phase.advance_stride();
+            DenseQP qp = buildQP(p, state_local, zmp_bounds, x_ref);
+
+            auto &step_res = all_results[step];
+
+            for (auto &[strat, name] : geoqp_strats)
+                step_res.push_back(runGeoQP(qp, strat, name));
+
+            step_res.push_back(runOSQP(qp));
+
+            step_res.push_back(runQpOASES(qp));
+
+            double jerk = 0.0;
+            if (step_res[idx_qpoases].success && !step_res[idx_qpoases].solution.empty())
+            {
+                jerk = step_res[idx_qpoases].solution[0];
+            }
+            else
+            {
+                std::cerr << "Warning: Step " << step << " failed to find solution.\n";
+            }
+
+            state_local = integrate(state_local, jerk, p.dt);
+            phase_local.advance();
+            if (phase_local.idx == 0)
+            {
+                sup_x_local = phase_local.next_foot(sup_x_local);
+                phase_local.advance_stride();
+            }
         }
-    }
+    };
 
 
     std::cout << "\n"
@@ -587,18 +601,28 @@ int main()
               << "\n"
               << std::string(120, '-') << "\n";
 
-    std::vector<double> ref_obj(num_steps, 0.0);
-    for (int i = 0; i < num_steps; ++i)
-        if (all_results[i][idx_qpoases].success)
-            ref_obj[i] = all_results[i][idx_qpoases].objective;
+    // Run two passes: caching disabled then enabled
+
+    // Run two passes: caching disabled then enabled
+    std::vector<std::vector<Result>> all_results_no_cache, all_results_cache;
+    run_pass(false, all_results_no_cache);
+    run_pass(true, all_results_cache);
+
+    auto print_table = [&](const std::vector<std::vector<Result>> &all_results, const std::string &title) {
+        std::cout << "\n" << title << "\n";
+        std::vector<double> ref_obj(num_steps, 0.0);
+        int idx_qpoases_local = idx_qpoases;
+        for (int i = 0; i < num_steps; ++i)
+            if (all_results[i][idx_qpoases_local].success)
+                ref_obj[i] = all_results[i][idx_qpoases_local].objective;
 
     for (int s = 0; s < total_solvers; ++s)
     {
-        double sum_t = 0, sum_sq = 0, min_t = 1e9, max_t = 0;
+    double sum_t = 0, sum_sq = 0, min_t = 1e9, max_t = 0;
         double sum_obj = 0, sum_diff = 0;
         int sum_it = 0, count_ok = 0;
 
-        for (int i = 0; i < num_steps; ++i)
+            for (int i = 0; i < num_steps; ++i)
         {
             const auto &r = all_results[i][s];
             double t = r.time_ms;
@@ -643,7 +667,26 @@ int main()
                   << std::setw(16) << std::scientific << std::setprecision(2) << avg_diff
                   << "\n";
     }
-    std::cout << std::string(120, '=') << "\n";
+        std::cout << std::string(120, '=') << "\n";
+    };
+
+    print_table(all_results_no_cache, "Results (caching = OFF)");
+    auto stats_off = geoqp::internal::schur_stats_get();
+    std::cout << "Schur stats (caching OFF): init=" << stats_off.initialize_calls
+              << " extend_success=" << stats_off.extend_success
+              << " extend_fallback=" << stats_off.extend_fallback
+              << " shrink_success=" << stats_off.shrink_success
+              << " shrink_fallback=" << stats_off.shrink_fallback
+              << " solves=" << stats_off.solve_calls << "\n";
+
+    print_table(all_results_cache, "Results (caching = ON)");
+    auto stats_on = geoqp::internal::schur_stats_get();
+    std::cout << "Schur stats (caching ON):  init=" << stats_on.initialize_calls
+              << " extend_success=" << stats_on.extend_success
+              << " extend_fallback=" << stats_on.extend_fallback
+              << " shrink_success=" << stats_on.shrink_success
+              << " shrink_fallback=" << stats_on.shrink_fallback
+              << " solves=" << stats_on.solve_calls << "\n";
 
 
 

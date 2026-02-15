@@ -231,7 +231,34 @@ namespace geoqp
             std::vector<double> L_S_;
             std::vector<int> active_constraints_;
             int k_;
+            // Stored context for validation / full recompute when needed
+            const double *A_ptr_ = nullptr;
+            const double *L_Q_ptr_ = nullptr;
+            int n_ = 0;
+            ConstraintCache *cache_ptr_ = nullptr;
+            // Lightweight operation counters (not persisted across processes)
+            struct SchurStats {
+                int initialize_calls = 0;
+                int extend_success = 0;
+                int extend_fallback = 0;
+                int shrink_success = 0;
+                int shrink_fallback = 0;
+                int solve_calls = 0;
+            } mutable stats_;
         };
+
+        // Global accessors for lightweight Schur instrumentation (bench-only)
+        struct SchurStatsGlobal {
+            int initialize_calls = 0;
+            int extend_success = 0;
+            int extend_fallback = 0;
+            int shrink_success = 0;
+            int shrink_fallback = 0;
+            int solve_calls = 0;
+        };
+
+        void schur_stats_reset();
+    SchurStatsGlobal &schur_stats_get();
 
         class FaceHopper
         {

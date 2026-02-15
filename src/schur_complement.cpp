@@ -7,6 +7,20 @@ namespace geoqp
     namespace internal
     {
 
+        // Global stats instance (bench-only)
+        static SchurStatsGlobal g_schur_stats;
+
+        void schur_stats_reset()
+        {
+            g_schur_stats = SchurStatsGlobal();
+        }
+
+        SchurStatsGlobal &schur_stats_get()
+        {
+            return g_schur_stats;
+        }
+
+
         const std::vector<double> &ConstraintCache::get_z(
             int constraint_idx,
             const double *A,
@@ -39,11 +53,20 @@ namespace geoqp
             ConstraintCache &cache)
         {
             k_ = static_cast<int>(face.size());
+            ++stats_.initialize_calls;
             active_constraints_ = face;
+
+            // store context for later validation / full recompute
+            A_ptr_ = A;
+            L_Q_ptr_ = L_Q;
+            n_ = n;
+            cache_ptr_ = &cache;
 
             if (k_ == 0)
             {
                 L_S_.clear();
+                // clear stored context
+                A_ptr_ = nullptr; L_Q_ptr_ = nullptr; n_ = 0; cache_ptr_ = nullptr;
                 return true;
             }
 
@@ -118,6 +141,22 @@ namespace geoqp
             try
             {
                 LinearAlgebra::cholesky(S.data(), L_S_.data(), k_);
+
+                // Optional debug print: if environment variable GEOQP_PRINT_SCHUR is set,
+                // print the Cholesky factor L_S_ (lower triangular) for inspection.
+                if (std::getenv("GEOQP_PRINT_SCHUR") != nullptr)
+                {
+                    std::cout << "[SCHUR] k=" << k_ << " L_S (lower-triangular):\n";
+                    for (int i = 0; i < k_; ++i)
+                    {
+                        for (int j = 0; j <= i; ++j)
+                        {
+                            std::cout << " " << L_S_[i * k_ + j];
+                        }
+                        std::cout << "\n";
+                    }
+                }
+
                 return true;
             }
             catch (const std::exception& e)
@@ -188,12 +227,76 @@ namespace geoqp
 
             if (success)
             {
+                ++stats_.extend_success;
+                schur_stats_get().extend_success += 1;
                 L_S_ = std::move(L_new);
                 active_constraints_.push_back(constraint_idx);
                 k_++;
+
+                // Validate incremental update by rebuilding S from cache and
+                // comparing with L_S_ * L_S_^T. Use stored cache/context if available.
+                ConstraintCache *use_cache = cache_ptr_ ? cache_ptr_ : &cache;
+                const double *use_A = A_ptr_ ? A_ptr_ : A;
+                const double *use_LQ = L_Q_ptr_ ? L_Q_ptr_ : L_Q;
+
+                if (use_cache)
+                {
+                    const int kk = k_;
+                    std::vector<double> S_cache(kk * kk);
+                    for (int i = 0; i < kk; ++i)
+                    {
+                        const auto &z_i = use_cache->get_z(active_constraints_[i], use_A, use_LQ);
+                        const double *GEOQP_RESTRICT z_i_ptr = z_i.data();
+                        for (int j = i; j < kk; ++j)
+                        {
+                            const auto &z_j = use_cache->get_z(active_constraints_[j], use_A, use_LQ);
+                            const double *GEOQP_RESTRICT z_j_ptr = z_j.data();
+                            double sum = 0.0;
+                            int t = 0;
+                            for (; t + 3 < n_; t += 4)
+                            {
+                                sum += z_i_ptr[t] * z_j_ptr[t]
+                                     + z_i_ptr[t+1] * z_j_ptr[t+1]
+                                     + z_i_ptr[t+2] * z_j_ptr[t+2]
+                                     + z_i_ptr[t+3] * z_j_ptr[t+3];
+                            }
+                            for (; t < n_; ++t) sum += z_i_ptr[t] * z_j_ptr[t];
+                            S_cache[i * kk + j] = sum;
+                            S_cache[j * kk + i] = sum;
+                        }
+                    }
+
+                    // reconstruct and compare
+                    std::vector<double> S_recon(kk * kk);
+                    for (int i = 0; i < kk; ++i)
+                        for (int j = 0; j < kk; ++j)
+                        {
+                            double v = 0.0;
+                            for (int t = 0; t < kk; ++t) v += L_S_[i * kk + t] * L_S_[j * kk + t];
+                            S_recon[i * kk + j] = v;
+                        }
+
+                    double diff_sq = 0.0, ref_sq = 0.0;
+                    for (int i = 0; i < kk * kk; ++i) { double d = S_cache[i] - S_recon[i]; diff_sq += d*d; ref_sq += S_cache[i]*S_cache[i]; }
+                    double rel_err = std::sqrt(diff_sq) / (std::sqrt(ref_sq) + 1e-20);
+
+                    if (rel_err > 1e-10)
+                    {
+                        // Fallback: recompute Schur complement from scratch
+                        ++stats_.extend_fallback;
+                        schur_stats_get().extend_fallback += 1;
+                        if (!initialize(active_constraints_, use_A, use_LQ, n_, *use_cache))
+                        {
+                            return false;
+                        }
+                    }
+                }
+
                 return true;
             }
 
+            ++stats_.extend_fallback;
+            schur_stats_get().extend_fallback += 1;
             return false;
         }
 
@@ -219,12 +322,51 @@ namespace geoqp
 
             if (success)
             {
+                ++stats_.shrink_success;
+                schur_stats_get().shrink_success += 1;
                 L_S_ = std::move(L_new);
                 active_constraints_.erase(active_constraints_.begin() + face_index);
                 k_--;
+
+                // Validate shrink using stored cache/context
+                if (cache_ptr_ && A_ptr_ && L_Q_ptr_ && n_ > 0)
+                {
+                    const int kk = k_;
+                    if (kk == 0) return true;
+
+                    std::vector<double> S_cache(kk * kk);
+                    for (int i = 0; i < kk; ++i)
+                    {
+                        const auto &zi = cache_ptr_->get_z(active_constraints_[i], A_ptr_, L_Q_ptr_);
+                        for (int j = i; j < kk; ++j)
+                        {
+                            const auto &zj = cache_ptr_->get_z(active_constraints_[j], A_ptr_, L_Q_ptr_);
+                            double s = 0.0;
+                            for (int t = 0; t < n_; ++t) s += zi[t] * zj[t];
+                            S_cache[i * kk + j] = s; S_cache[j * kk + i] = s;
+                        }
+                    }
+
+                    std::vector<double> L_full(kk * kk);
+                    try { LinearAlgebra::cholesky(S_cache.data(), L_full.data(), kk); }
+                    catch (...) { return false; }
+
+                    double diff_sq = 0.0, ref_sq = 0.0;
+                    for (int i = 0; i < kk * kk; ++i) { double d = L_S_[i] - L_full[i]; diff_sq += d*d; ref_sq += L_full[i]*L_full[i]; }
+                    double rel = std::sqrt(diff_sq) / (std::sqrt(ref_sq) + 1e-20);
+                    if (rel > 1e-10)
+                    {
+                        ++stats_.shrink_fallback;
+                        schur_stats_get().shrink_fallback += 1;
+                        if (!initialize(active_constraints_, A_ptr_, L_Q_ptr_, n_, *cache_ptr_)) return false;
+                    }
+                }
+
                 return true;
             }
 
+            ++stats_.shrink_fallback;
+            schur_stats_get().shrink_fallback += 1;
             return false;
         }
 
@@ -242,6 +384,10 @@ namespace geoqp
             {
                 return false;
             }
+
+            // increment solve counter
+            const_cast<SchurComplementManager*>(this)->stats_.solve_calls += 1;
+            schur_stats_get().solve_calls += 1;
 
             lambda.resize(k_);
 

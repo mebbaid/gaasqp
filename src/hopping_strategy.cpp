@@ -71,7 +71,8 @@ bool compute_projection_with_schur(
     const auto& current_face = schur_manager.get_active_constraints();
     const int k = schur_manager.size();
     
-    if (static_cast<int>(ws_residual.size()) < k) ws_residual.resize(k);
+    // Ensure the residual workspace has exactly k entries (must match Schur size)
+    if (static_cast<int>(ws_residual.size()) != k) ws_residual.resize(k);
     if (static_cast<int>(ws_w.size()) < n) ws_w.resize(n);
     if (static_cast<int>(ws_correction.size()) < n) ws_correction.resize(n);
     

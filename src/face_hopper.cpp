@@ -531,7 +531,8 @@ namespace geoqp
                 return true;
             }
 
-            if (static_cast<int>(ws_residual_.size()) < k)
+            // Ensure residual workspace matches schur dimension exactly
+            if (static_cast<int>(ws_residual_.size()) != k)
                 ws_residual_.resize(k);
             if (static_cast<int>(ws_w_.size()) < n_)
                 ws_w_.resize(n_);
