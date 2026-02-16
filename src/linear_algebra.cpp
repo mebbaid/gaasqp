@@ -1,5 +1,6 @@
 #include "geoqp/internal.hpp"
 #include "geoqp/compiler_hints.hpp"
+#include "geoqp/timing.hpp"
 #include <cmath>
 #include <algorithm>
 #include <cstring>
@@ -12,6 +13,7 @@ namespace geoqp
         void LinearAlgebra::matvec(const double *GEOQP_RESTRICT A, const double *GEOQP_RESTRICT x,
                                    double *GEOQP_RESTRICT y, int m, int n)
         {
+            geoqp::timing::ScopedTimer _t_matvec(geoqp::timing::la_matvec_ns, geoqp::timing::la_matvec_count);
             for (int i = 0; i < m; ++i)
             {
                 const double *GEOQP_RESTRICT row = A + i * n;
@@ -43,6 +45,7 @@ namespace geoqp
 
         double LinearAlgebra::dot(const double *GEOQP_RESTRICT x, const double *GEOQP_RESTRICT y, int n)
         {
+            geoqp::timing::ScopedTimer _t_dot(geoqp::timing::la_dot_ns, geoqp::timing::la_dot_count);
             double sum0 = 0.0;
             double sum1 = 0.0;
             double sum2 = 0.0;
@@ -74,6 +77,7 @@ namespace geoqp
 
         void LinearAlgebra::cholesky(const double *GEOQP_RESTRICT A, double *GEOQP_RESTRICT L, int n)
         {
+            geoqp::timing::ScopedTimer _t_chol(geoqp::timing::la_cholesky_ns, geoqp::timing::la_cholesky_count);
             std::fill(L, L + n * n, 0.0);
 
             for (int i = 0; i < n; ++i)
@@ -121,6 +125,7 @@ namespace geoqp
         void LinearAlgebra::forward_sub(const double *GEOQP_RESTRICT L, const double *GEOQP_RESTRICT b,
                                         double *GEOQP_RESTRICT x, int n)
         {
+            geoqp::timing::ScopedTimer _t_for(geoqp::timing::la_forward_ns, geoqp::timing::la_forward_count);
             for (int i = 0; i < n; ++i)
             {
                 const double *GEOQP_RESTRICT Li = L + i * n;
@@ -154,6 +159,7 @@ namespace geoqp
         void LinearAlgebra::backward_sub(const double *GEOQP_RESTRICT L, const double *GEOQP_RESTRICT b,
                                          double *GEOQP_RESTRICT x, int n)
         {
+            geoqp::timing::ScopedTimer _t_back(geoqp::timing::la_backward_ns, geoqp::timing::la_backward_count);
             for (int i = n - 1; i >= 0; --i)
             {
                 double sum0 = 0.0;
@@ -185,9 +191,11 @@ namespace geoqp
         void LinearAlgebra::solve_cholesky(const double *GEOQP_RESTRICT L, const double *GEOQP_RESTRICT b,
                                            double *GEOQP_RESTRICT x, int n)
         {
-            std::vector<double> y(n);
-            forward_sub(L, b, y.data(), n);
-            backward_sub(L, y.data(), x, n);
+            geoqp::timing::ScopedTimer _t_schol(geoqp::timing::la_solve_cholesky_ns, geoqp::timing::la_solve_cholesky_count);
+            static thread_local std::vector<double> tl_workspace;
+            if (tl_workspace.size() < static_cast<size_t>(n)) tl_workspace.resize(n);
+            forward_sub(L, b, tl_workspace.data(), n);
+            backward_sub(L, tl_workspace.data(), x, n);
         }
 
         void LinearAlgebra::solve_cholesky(const double *GEOQP_RESTRICT L, const double *GEOQP_RESTRICT b,
@@ -200,17 +208,24 @@ namespace geoqp
         void LinearAlgebra::solve_pd_system(const double *GEOQP_RESTRICT Q, const double *GEOQP_RESTRICT b,
                                             double *GEOQP_RESTRICT x, int n)
         {
-            std::vector<double> L(n * n);
-            cholesky(Q, L.data(), n);
-            solve_cholesky(L.data(), b, x, n);
+            static thread_local std::vector<double> tl_L;
+            if (tl_L.size() < static_cast<size_t>(n) * static_cast<size_t>(n)) tl_L.resize(n * n);
+            cholesky(Q, tl_L.data(), n);
+            solve_cholesky(tl_L.data(), b, x, n);
         }
 
         void LinearAlgebra::solve_linear_system(const double *A, const double *b, double *x, int n)
         {
-            std::vector<double> A_copy(n * n);
-            std::vector<double> b_copy(n);
-            std::memcpy(A_copy.data(), A, n * n * sizeof(double));
-            std::memcpy(b_copy.data(), b, n * sizeof(double));
+            geoqp::timing::ScopedTimer _t_solve(geoqp::timing::solve_ns, geoqp::timing::solve_count);
+            geoqp::timing::ScopedTimer _t_solve_full(geoqp::timing::la_cholesky_ns, geoqp::timing::la_cholesky_count);
+            static thread_local std::vector<double> tl_A_copy;
+            static thread_local std::vector<double> tl_b_copy;
+            if (tl_A_copy.size() < static_cast<size_t>(n) * static_cast<size_t>(n)) tl_A_copy.resize(n * n);
+            if (tl_b_copy.size() < static_cast<size_t>(n)) tl_b_copy.resize(n);
+            std::memcpy(tl_A_copy.data(), A, n * n * sizeof(double));
+            std::memcpy(tl_b_copy.data(), b, n * sizeof(double));
+            double *GEOQP_RESTRICT A_copy = tl_A_copy.data();
+            double *GEOQP_RESTRICT b_copy = tl_b_copy.data();
 
             for (int k = 0; k < n; ++k)
             {
@@ -264,12 +279,15 @@ namespace geoqp
 
         bool LinearAlgebra::cholesky_rank1_update(double *L, const double *v, int k)
         {
-            std::vector<double> w(v, v + k);
+            geoqp::timing::ScopedTimer _t_rank1(geoqp::timing::la_rank1_ns, geoqp::timing::la_rank1_count);
+            static thread_local std::vector<double> tl_w;
+            if (tl_w.size() < static_cast<size_t>(k)) tl_w.resize(k);
+            std::memcpy(tl_w.data(), v, k * sizeof(double));
 
             for (int i = 0; i < k; ++i)
             {
                 double Lii = L[i * k + i];
-                double wi = w[i];
+                double wi = tl_w[i];
                 double r = std::sqrt(Lii * Lii + wi * wi);
 
                 if (r < 1e-14)
@@ -282,8 +300,8 @@ namespace geoqp
                 for (int j = i + 1; j < k; ++j)
                 {
                     double Lji = L[j * k + i];
-                    w[j] = w[j] - s * Lji;
-                    L[j * k + i] = (Lji + s * w[j]) / c;
+                    tl_w[j] = tl_w[j] - s * Lji;
+                    L[j * k + i] = (Lji + s * tl_w[j]) / c;
                 }
             }
             return true;
@@ -294,6 +312,7 @@ namespace geoqp
             const double *s, double sigma,
             double *L_new)
         {
+            geoqp::timing::ScopedTimer _t_extend(geoqp::timing::la_extend_ns, geoqp::timing::la_extend_count);
             // Given L (k x k) such that L*L^T = S,
             // extend to L' ((k+1) x (k+1)) for [S, s; s^T, sigma]
             //
@@ -314,26 +333,27 @@ namespace geoqp
                 L_new[i * k1 + k] = 0.0;
             }
 
-            std::vector<double> l(k);
+            static thread_local std::vector<double> tl_l;
+            if (tl_l.size() < static_cast<size_t>(k)) tl_l.resize(k);
             for (int i = 0; i < k; ++i)
             {
                 double sum = 0.0;
                 for (int j = 0; j < i; ++j)
                 {
-                    sum += L[i * k + j] * l[j];
+                    sum += L[i * k + j] * tl_l[j];
                 }
-                l[i] = (s[i] - sum) / L[i * k + i];
+                tl_l[i] = (s[i] - sum) / L[i * k + i];
             }
 
             for (int j = 0; j < k; ++j)
             {
-                L_new[k * k1 + j] = l[j];
+                L_new[k * k1 + j] = tl_l[j];
             }
 
             double l_norm_sq = 0.0;
             for (int i = 0; i < k; ++i)
             {
-                l_norm_sq += l[i] * l[i];
+                l_norm_sq += tl_l[i] * tl_l[i];
             }
 
             double diag_sq = sigma - l_norm_sq;
@@ -350,6 +370,7 @@ namespace geoqp
             const double *L, int k, int idx,
             double *L_new)
         {
+            geoqp::timing::ScopedTimer _t_shrink(geoqp::timing::la_shrink_ns, geoqp::timing::la_shrink_count);
             if (k <= 1 || idx < 0 || idx >= k)
             {
                 return false;
@@ -369,19 +390,20 @@ namespace geoqp
                 return true;
             }
 
-            std::vector<double> L_work(k * k);
+            static thread_local std::vector<double> tl_L_work;
+            if (tl_L_work.size() < static_cast<size_t>(k) * static_cast<size_t>(k)) tl_L_work.resize(k * k);
             for (int i = 0; i < k; ++i)
             {
                 for (int j = 0; j <= i; ++j)
                 {
-                    L_work[i * k + j] = L[i * k + j];
+                    tl_L_work[i * k + j] = L[i * k + j];
                 }
             }
 
             for (int i = idx; i < k1; ++i)
             {
-                double a = L_work[i * k + i];
-                double b = L_work[(i + 1) * k + i];
+                double a = tl_L_work[i * k + i];
+                double b = tl_L_work[(i + 1) * k + i];
 
                 if (std::abs(b) < 1e-14)
                 {
@@ -399,27 +421,27 @@ namespace geoqp
 
                 for (int j = 0; j <= i + 1 && j < k; ++j)
                 {
-                    double L_i_j = (j <= i) ? L_work[i * k + j] : 0.0;
-                    double L_ip1_j = (j <= i + 1) ? L_work[(i + 1) * k + j] : 0.0;
+                    double L_i_j = (j <= i) ? tl_L_work[i * k + j] : 0.0;
+                    double L_ip1_j = (j <= i + 1) ? tl_L_work[(i + 1) * k + j] : 0.0;
 
                     double new_i = c * L_i_j + s * L_ip1_j;
                     double new_ip1 = -s * L_i_j + c * L_ip1_j;
 
                     if (j <= i)
-                        L_work[i * k + j] = new_i;
+                        tl_L_work[i * k + j] = new_i;
                     if (j <= i + 1)
-                        L_work[(i + 1) * k + j] = new_ip1;
+                        tl_L_work[(i + 1) * k + j] = new_ip1;
                 }
 
                 for (int row = i + 2; row < k; ++row)
                 {
-                    double L_row_i = (i < row) ? L_work[row * k + i] : 0.0;
-                    double L_row_ip1 = (i + 1 < row) ? L_work[row * k + i + 1] : 0.0;
+                    double L_row_i = (i < row) ? tl_L_work[row * k + i] : 0.0;
+                    double L_row_ip1 = (i + 1 < row) ? tl_L_work[row * k + i + 1] : 0.0;
 
                     if (i < row)
-                        L_work[row * k + i] = c * L_row_i + s * L_row_ip1;
+                        tl_L_work[row * k + i] = c * L_row_i + s * L_row_ip1;
                     if (i + 1 < row)
-                        L_work[row * k + i + 1] = -s * L_row_i + c * L_row_ip1;
+                        tl_L_work[row * k + i + 1] = -s * L_row_i + c * L_row_ip1;
                 }
             }
 
@@ -427,7 +449,7 @@ namespace geoqp
             {
                 for (int j = 0; j <= i; ++j)
                 {
-                    L_new[i * k1 + j] = L_work[i * k + j];
+                    L_new[i * k1 + j] = tl_L_work[i * k + j];
                 }
             }
 

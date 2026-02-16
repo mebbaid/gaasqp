@@ -88,6 +88,9 @@ namespace geoqp
             std::vector<std::vector<double>> get_neighbors(
                 const std::vector<double> &vertex) const;
 
+            // Append neighbor vertices as contiguous blocks (each block length = n) into out_flat
+            void get_neighbors_flat(const std::vector<double> &vertex, std::vector<double> &out_flat) const;
+
         private:
             const double *A_;
             const double *b_;
@@ -231,13 +234,12 @@ namespace geoqp
             std::vector<double> L_S_;
             std::vector<int> active_constraints_;
             int k_;
-            // Stored context for validation / full recompute when needed
             const double *A_ptr_ = nullptr;
             const double *L_Q_ptr_ = nullptr;
             int n_ = 0;
             ConstraintCache *cache_ptr_ = nullptr;
-            // Lightweight operation counters (not persisted across processes)
-            struct SchurStats {
+            struct SchurStats
+            {
                 int initialize_calls = 0;
                 int extend_success = 0;
                 int extend_fallback = 0;
@@ -247,8 +249,8 @@ namespace geoqp
             } mutable stats_;
         };
 
-        // Global accessors for lightweight Schur instrumentation (bench-only)
-        struct SchurStatsGlobal {
+        struct SchurStatsGlobal
+        {
             int initialize_calls = 0;
             int extend_success = 0;
             int extend_fallback = 0;
@@ -258,7 +260,7 @@ namespace geoqp
         };
 
         void schur_stats_reset();
-    SchurStatsGlobal &schur_stats_get();
+        SchurStatsGlobal &schur_stats_get();
 
         class FaceHopper
         {
@@ -340,13 +342,12 @@ namespace geoqp
             mutable std::vector<double> ws_signs_;
             mutable std::vector<double> ws_Q_inv_cols_;
             mutable std::vector<double> ws_S_;
-            
-            // Workspace for find_optimal_face to avoid allocations in hot loop
+
             mutable std::vector<double> ws_opt_x_star_;
             mutable std::vector<double> ws_opt_lambda_;
             mutable std::vector<int> ws_opt_violated_;
             mutable std::vector<int> ws_opt_smaller_face_;
-            mutable std::vector<char> ws_opt_is_active_set_;  // Use char for bitset (faster than std::set)
+            mutable std::vector<char> ws_opt_is_active_set_; 
 
             bool q_is_diagonal_ = false;
             std::vector<double> Q_diag_;

@@ -1,5 +1,6 @@
 #include "geoqp/internal.hpp"
 #include "geoqp/compiler_hints.hpp"
+#include "geoqp/timing.hpp"
 #include <cmath>
 #include <limits>
 #include <algorithm>
@@ -15,6 +16,7 @@ namespace geoqp
 
         std::vector<double> Polytope::find_initial_vertex() const
         {
+            geoqp::timing::ScopedTimer _t_init(geoqp::timing::initializer_ns, geoqp::timing::initializer_count);
             // TODO: 1d problem is delicate
             if (n_ == 1)
             {
@@ -64,10 +66,14 @@ namespace geoqp
             const int max_iter = 100;
             const double step_size = 0.1;
 
+            // reuse direction buffer to avoid per-iteration allocations
+            std::vector<double> direction(n_, 0.0);
+
             for (int iter = 0; iter < max_iter; ++iter)
             {
+                geoqp::timing::ScopedTimer __t_iter(geoqp::timing::poly_find_iter_ns, geoqp::timing::poly_find_iter_count);
                 double max_violation = 0.0;
-                std::vector<double> direction(n_, 0.0);
+                std::fill(direction.begin(), direction.end(), 0.0);
 
                 for (int i = 0; i < m_; ++i)
                 {
@@ -152,7 +158,10 @@ namespace geoqp
 
             try
             {
-                LinearAlgebra::solve_linear_system(A_active.data(), b_active.data(), vertex.data(), n_);
+                {
+                    geoqp::timing::ScopedTimer __t_solve(geoqp::timing::poly_find_solve_ns, geoqp::timing::poly_find_solve_count);
+                    LinearAlgebra::solve_linear_system(A_active.data(), b_active.data(), vertex.data(), n_);
+                }
             }
             catch (...)
             {
@@ -161,6 +170,7 @@ namespace geoqp
 
             for (int i = 0; i < m_; ++i)
             {
+                geoqp::timing::ScopedTimer __t_act(geoqp::timing::poly_find_active_ns, geoqp::timing::poly_find_active_count);
                 const double *a_row = A_ + i * n_;
                 double lhs = LinearAlgebra::dot(a_row, vertex.data(), n_);
                 if (lhs > b_[i] + 1e-6)
@@ -187,6 +197,7 @@ namespace geoqp
             const std::vector<double> &x,
             double tol) const
         {
+            geoqp::timing::ScopedTimer _t_act(geoqp::timing::projection_ns, geoqp::timing::projection_count);
             std::vector<int> active;
             active.reserve(n_); 
 
@@ -222,90 +233,182 @@ namespace geoqp
         std::vector<std::vector<double>> Polytope::get_neighbors(
             const std::vector<double> &vertex) const
         {
+            geoqp::timing::ScopedTimer _t_nei(geoqp::timing::initializer_ns, geoqp::timing::initializer_count);
             std::vector<std::vector<double>> neighbors;
 
             auto active = get_active_constraints(vertex, 1e-8);
 
+            // Pre-allocate reusable buffers to avoid inner-loop allocations
+            std::vector<int> new_active;
+            new_active.reserve(active.size());
+
+            std::vector<int> candidate_active;
+            candidate_active.reserve(static_cast<size_t>(n_));
+
+            std::vector<char> is_in_new(m_, 0);
+
+            std::vector<double> A_active(n_ * n_);
+            std::vector<double> b_active(n_);
+            std::vector<double> new_vertex(n_);
+
             for (size_t drop_idx = 0; drop_idx < active.size(); ++drop_idx)
             {
-                std::vector<int> new_active;
+                new_active.clear();
+                // build new_active (active with one dropped)
                 for (size_t i = 0; i < active.size(); ++i)
                 {
-                    if (i != drop_idx)
-                    {
-                        new_active.push_back(active[i]);
-                    }
+                    if (i != drop_idx) new_active.push_back(active[i]);
                 }
 
-                if (new_active.size() < static_cast<size_t>(n_ - 1))
-                {
-                    continue; 
-                }
+                if (new_active.size() < static_cast<size_t>(n_ - 1)) continue;
+
+                // mark flags for fast membership test
+                std::fill(is_in_new.begin(), is_in_new.end(), 0);
+                for (int a : new_active) is_in_new[a] = 1;
 
                 for (int i = 0; i < m_; ++i)
                 {
-                    bool is_active = false;
-                    for (int a : new_active)
+                    if (is_in_new[i]) continue;
+
+                    // build candidate active set = new_active + i
+                    candidate_active.clear();
+                    candidate_active.insert(candidate_active.end(), new_active.begin(), new_active.end());
+                    candidate_active.push_back(i);
+
+                    if (candidate_active.size() != static_cast<size_t>(n_)) continue;
+
+                    // fill A_active and b_active
+                    for (int k = 0; k < n_; ++k)
                     {
-                        if (a == i)
+                        int constraint_idx = candidate_active[k];
+                        b_active[k] = b_[constraint_idx];
+                        for (int j = 0; j < n_; ++j)
                         {
-                            is_active = true;
-                            break;
+                            A_active[k * n_ + j] = A_[constraint_idx * n_ + j];
                         }
                     }
-                    if (!is_active)
+
+                    try
                     {
-                        std::vector<int> candidate_active = new_active;
-                        candidate_active.push_back(i);
+                        LinearAlgebra::solve_linear_system(A_active.data(), b_active.data(),
+                                                           new_vertex.data(), n_);
 
-                        if (candidate_active.size() == static_cast<size_t>(n_))
+                        bool feasible = true;
+                        for (int j = 0; j < m_; ++j)
                         {
-                            std::vector<double> A_active(n_ * n_);
-                            std::vector<double> b_active(n_);
-                            std::vector<double> new_vertex(n_);
-
-                            for (int k = 0; k < n_; ++k)
+                            const double *a_row = A_ + j * n_;
+                            double lhs = LinearAlgebra::dot(a_row, new_vertex.data(), n_);
+                            if (lhs > b_[j] + 1e-8)
                             {
-                                int constraint_idx = candidate_active[k];
-                                b_active[k] = b_[constraint_idx];
-                                for (int j = 0; j < n_; ++j)
-                                {
-                                    A_active[k * n_ + j] = A_[constraint_idx * n_ + j];
-                                }
-                            }
-
-                            try
-                            {
-                                LinearAlgebra::solve_linear_system(A_active.data(), b_active.data(),
-                                                                   new_vertex.data(), n_);
-
-                                bool feasible = true;
-                                for (int j = 0; j < m_; ++j)
-                                {
-                                    const double *a_row = A_ + j * n_;
-                                    double lhs = LinearAlgebra::dot(a_row, new_vertex.data(), n_);
-                                    if (lhs > b_[j] + 1e-8)
-                                    {
-                                        feasible = false;
-                                        break;
-                                    }
-                                }
-
-                                if (feasible)
-                                {
-                                    neighbors.push_back(new_vertex);
-                                }
-                            }
-                            catch (...)
-                            {
-                                // Singular system - skip
+                                feasible = false;
+                                break;
                             }
                         }
+
+                        if (feasible)
+                        {
+                            neighbors.push_back(new_vertex);
+                        }
+                    }
+                    catch (...)
+                    {
+                        // Singular system - skip
                     }
                 }
             }
 
             return neighbors;
+        }
+
+        void Polytope::get_neighbors_flat(
+            const std::vector<double> &vertex,
+            std::vector<double> &out_flat) const
+        {
+            geoqp::timing::ScopedTimer _t_nei(geoqp::timing::initializer_ns, geoqp::timing::initializer_count);
+
+            auto active = get_active_constraints(vertex, 1e-8);
+
+            std::vector<int> new_active;
+            new_active.reserve(active.size());
+
+            std::vector<int> candidate_active;
+            candidate_active.reserve(static_cast<size_t>(n_));
+
+            std::vector<char> is_in_new(m_, 0);
+
+            std::vector<double> A_active(n_ * n_);
+            std::vector<double> b_active(n_);
+            std::vector<double> new_vertex(n_);
+
+            for (size_t drop_idx = 0; drop_idx < active.size(); ++drop_idx)
+            {
+                new_active.clear();
+                for (size_t i = 0; i < active.size(); ++i)
+                {
+                    if (i != drop_idx) new_active.push_back(active[i]);
+                }
+
+                if (new_active.size() < static_cast<size_t>(n_ - 1)) continue;
+
+                std::fill(is_in_new.begin(), is_in_new.end(), 0);
+                for (int a : new_active) is_in_new[a] = 1;
+
+                for (int i = 0; i < m_; ++i)
+                {
+                    if (is_in_new[i]) continue;
+
+                    candidate_active.clear();
+                    candidate_active.insert(candidate_active.end(), new_active.begin(), new_active.end());
+                    candidate_active.push_back(i);
+
+                    if (candidate_active.size() != static_cast<size_t>(n_)) continue;
+
+                    for (int k = 0; k < n_; ++k)
+                    {
+                        int constraint_idx = candidate_active[k];
+                        b_active[k] = b_[constraint_idx];
+                        for (int j = 0; j < n_; ++j)
+                        {
+                            A_active[k * n_ + j] = A_[constraint_idx * n_ + j];
+                        }
+                    }
+
+                    try
+                    {
+                        {
+                            geoqp::timing::ScopedTimer __t_cand(geoqp::timing::poly_neighbors_solve_ns, geoqp::timing::poly_neighbors_solve_count);
+                            LinearAlgebra::solve_linear_system(A_active.data(), b_active.data(),
+                                                               new_vertex.data(), n_);
+                        }
+
+                        bool feasible = true;
+                        {
+                            geoqp::timing::ScopedTimer __t_feas(geoqp::timing::poly_neighbors_feas_ns, geoqp::timing::poly_neighbors_feas_count);
+                            for (int j = 0; j < m_; ++j)
+                            {
+                                const double *a_row = A_ + j * n_;
+                                double lhs = LinearAlgebra::dot(a_row, new_vertex.data(), n_);
+                                if (lhs > b_[j] + 1e-8)
+                                {
+                                    feasible = false;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (feasible)
+                        {
+                            size_t old = out_flat.size();
+                            out_flat.resize(old + static_cast<size_t>(n_));
+                            for (int t = 0; t < n_; ++t) out_flat[old + t] = new_vertex[t];
+                        }
+                    }
+                    catch (...)
+                    {
+                        // Singular system - skip
+                    }
+                }
+            }
         }
 
     } // namespace internal

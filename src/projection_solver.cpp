@@ -1,5 +1,6 @@
 #include "geoqp/internal.hpp"
 #include "geoqp/compiler_hints.hpp"
+#include "geoqp/timing.hpp"
 #include <cstring>
 
 namespace geoqp
@@ -24,6 +25,7 @@ namespace geoqp
         {
 
             const int k = static_cast<int>(active_set.size());
+            geoqp::timing::ScopedTimer _t_proj(geoqp::timing::projection_ns, geoqp::timing::projection_count);
 
             if (k == 0)
             {
@@ -32,16 +34,25 @@ namespace geoqp
                 return true;
             }
 
-            // Pre-allocate all needed arrays
-            std::vector<double> A_active(k * n);
-            std::vector<double> b_active(k);
-            std::vector<double> residual(k);
-            std::vector<double> Q_inv_AT(n * k); // Q^{-1} A^T (n x k matrix)
-            std::vector<double> S(k * k);        // Schur complement
+            // Reuse thread-local workspaces to avoid repeated allocations on hot path
+            static thread_local std::vector<double> tl_A_active;
+            static thread_local std::vector<double> tl_b_active;
+            static thread_local std::vector<double> tl_residual;
+            static thread_local std::vector<double> tl_Q_inv_AT; // Q^{-1} A^T (n x k matrix)
+            static thread_local std::vector<double> tl_S;        // Schur complement
+            static thread_local std::vector<double> tl_a_col;
+            static thread_local std::vector<double> tl_y;
+            static thread_local std::vector<double> tl_Q_copy;
+
+            if (tl_A_active.size() < static_cast<size_t>(k) * static_cast<size_t>(n)) tl_A_active.resize(k * n);
+            if (tl_b_active.size() < static_cast<size_t>(k)) tl_b_active.resize(k);
+            if (tl_residual.size() < static_cast<size_t>(k)) tl_residual.resize(k);
+            if (tl_Q_inv_AT.size() < static_cast<size_t>(n) * static_cast<size_t>(k)) tl_Q_inv_AT.resize(n * k);
+            if (tl_S.size() < static_cast<size_t>(k) * static_cast<size_t>(k)) tl_S.resize(k * k);
 
             const double *GEOQP_RESTRICT xbar_ptr = x_bar.data();
-            double *GEOQP_RESTRICT A_active_ptr = A_active.data();
-            double *GEOQP_RESTRICT b_active_ptr = b_active.data();
+            double *GEOQP_RESTRICT A_active_ptr = tl_A_active.data();
+            double *GEOQP_RESTRICT b_active_ptr = tl_b_active.data();
 
             if (xbar_ptr == nullptr) {
                 return false;
@@ -79,14 +90,14 @@ namespace geoqp
             }
 
             // Compute residual: A_active * x_bar - b_active
-            LinearAlgebra::matvec(A_active_ptr, xbar_ptr, residual.data(), k, n);
+            LinearAlgebra::matvec(A_active_ptr, xbar_ptr, tl_residual.data(), k, n);
             for (int i = 0; i < k; ++i)
             {
-                residual[i] -= b_active_ptr[i];
+                tl_residual[i] -= b_active_ptr[i];
             }
 
             const double *GEOQP_RESTRICT Q_chol_ptr = Q_chol.empty() ? nullptr : Q_chol.data();
-            double *GEOQP_RESTRICT Q_inv_AT_ptr = Q_inv_AT.data();
+            double *GEOQP_RESTRICT Q_inv_AT_ptr = tl_Q_inv_AT.data();
 
             // Compute Q^{-1} A^T by solving Q * y = a_col for each constraint
             const bool use_Q_inv = !Q_inv.empty() && (static_cast<int>(Q_inv.size()) >= n * n);
@@ -132,31 +143,28 @@ namespace geoqp
                     continue;
                 }
 
-                // Get j-th row of A_active as a column vector
-                std::vector<double> a_col(n);
-                double *GEOQP_RESTRICT a_col_ptr = a_col.data();
+                // Get j-th row of A_active as a column vector (reuse workspace)
+                if (tl_a_col.size() < static_cast<size_t>(n)) tl_a_col.resize(n);
+                double *GEOQP_RESTRICT a_col_ptr = tl_a_col.data();
+                for (int i = 0; i < n; ++i) a_col_ptr[i] = A_active_row[i];
 
-                for (int i = 0; i < n; ++i)
-                {
-                    a_col_ptr[i] = A_active_row[i];
-                }
-
-                // Solve Q * y = a_col for y using pre-computed Cholesky if available
-                std::vector<double> y(n);
+                // Solve Q * y = a_col for y using pre-allocated workspace
+                if (tl_y.size() < static_cast<size_t>(n)) tl_y.resize(n);
+                double *GEOQP_RESTRICT y_ptr = tl_y.data();
 
                 if (Q_chol_ptr)
                 {
-                    LinearAlgebra::solve_cholesky(Q_chol_ptr, a_col_ptr, y.data(), n);
+                    LinearAlgebra::solve_cholesky(Q_chol_ptr, a_col_ptr, y_ptr, n);
                 }
                 else
                 {
-                    // Fallback to general solve
-                    std::vector<double> Q_copy(n * n);
-                    std::memcpy(Q_copy.data(), Q, n * n * sizeof(double));
+                    // Fallback to general solve using a reusable copy buffer
+                    if (tl_Q_copy.size() < static_cast<size_t>(n) * static_cast<size_t>(n)) tl_Q_copy.resize(n * n);
+                    std::memcpy(tl_Q_copy.data(), Q, n * n * sizeof(double));
 
                     try
                     {
-                        LinearAlgebra::solve_linear_system(Q_copy.data(), a_col_ptr, y.data(), n);
+                        LinearAlgebra::solve_linear_system(tl_Q_copy.data(), a_col_ptr, y_ptr, n);
                     }
                     catch (...)
                     {
@@ -165,16 +173,19 @@ namespace geoqp
                 }
 
                 // Store as j-th column of Q^{-1} A^T
-                const double *GEOQP_RESTRICT y_ptr = y.data();
                 for (int i = 0; i < n; ++i)
                 {
                     Q_inv_AT_ptr[i * k + j] = y_ptr[i];
                 }
             }
 
-            double *GEOQP_RESTRICT S_ptr = S.data();
+            double *GEOQP_RESTRICT S_ptr = tl_S.data();
+            // zero only the used portion of S (k x k)
+            for (int i = 0; i < k * k; ++i) S_ptr[i] = 0.0;
 
-            // Compute Schur complement: S = A_active * Q^{-1} A^T
+            {
+                geoqp::timing::ScopedTimer _t_schur(geoqp::timing::schur_ns, geoqp::timing::schur_count);
+                // Compute Schur complement: S = A_active * Q^{-1} A^T
             for (int i = 0; i < k; ++i)
             {
                 const double *GEOQP_RESTRICT A_row = A_active_ptr + i * n;
@@ -204,15 +215,16 @@ namespace geoqp
                             S_ptr[i * k + j] = sum;
                         }
                     }
-                    S_ptr[j * k + i] = S_ptr[i * k + j]; // Symmetry
+                        S_ptr[j * k + i] = S_ptr[i * k + j]; // Symmetry
+                    }
                 }
-            }
+                }
 
-            // Solve S * lambda = residual
+                // Solve S * lambda = residual
             lambda_out.resize(k);
             try
             {
-                LinearAlgebra::solve_linear_system(S_ptr, residual.data(), lambda_out.data(), k);
+                LinearAlgebra::solve_linear_system(S_ptr, tl_residual.data(), lambda_out.data(), k);
             }
             catch (...)
             {

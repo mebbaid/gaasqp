@@ -1,9 +1,11 @@
 #include "geoqp/internal.hpp"
 #include "geoqp/compiler_hints.hpp"
+#include "geoqp/timing.hpp"
 #include <cmath>
 #include <limits>
 #include <algorithm>
 #include <cstring>
+#include <cstdint>
 
 namespace geoqp
 {
@@ -258,6 +260,7 @@ namespace geoqp
             int &iterations,
             int &vertices_explored)
         {
+            geoqp::timing::ScopedTimer _t(geoqp::timing::initializer_ns, geoqp::timing::initializer_count);
             iterations = 0;
             vertices_explored = 0;
 
@@ -268,6 +271,254 @@ namespace geoqp
                 return find_good_vertex_box_fast();
             }
 
+            // Try a local vertex-search (greedy neighbor exploration) to find a far
+            // good vertex without performing full vertex enumeration. This exploits
+            // the combinatorial structure: exploring neighbors typically reaches a
+            // far vertex in few hops for well-behaved polytopes.
+            Polytope polytope(A_, b_, m_, n_);
+
+            std::vector<double> start = initial_vertex;
+            if (!polytope.is_vertex(start))
+            {
+                try {
+                    geoqp::timing::ScopedTimer __t_init_sub(geoqp::timing::initializer_find_initial_vertex_ns, geoqp::timing::initializer_find_initial_vertex_count);
+                    start = polytope.find_initial_vertex();
+                } catch (...) {
+                    // fallback to initial_vertex if we couldn't find a vertex
+                    start = initial_vertex;
+                }
+            }
+
+            auto dist_sq = [&](const std::vector<double> &v) {
+                return compute_euclidean_distance_squared(v);
+            };
+
+            auto approx_eq = [&](const std::vector<double> &a, const std::vector<double> &b, double tol = 1e-8) {
+                for (int i = 0; i < n_; ++i)
+                    if (std::abs(a[i] - b[i]) > tol) return false;
+                return true;
+            };
+
+            // Fast 64-bit fingerprint for a vertex: quantize coordinates by tol
+            auto vertex_fingerprint = [&](const std::vector<double> &v, double tol)->uint64_t {
+                const double use_tol = std::max(tol, 1e-12);
+                uint64_t h = 14695981039346656037ULL; // FNV offset
+                for (int i = 0; i < n_; ++i)
+                {
+                    int64_t q = llround(v[i] / use_tol);
+                    uint64_t x = static_cast<uint64_t>(q);
+                    h ^= x;
+                    h *= 1099511628211ULL; // FNV prime
+                }
+                return h;
+            };
+
+            // Flat storage for vertices to avoid many small allocations
+            const int reserve_hint = std::min(512, std::max(32, n_ * 8));
+            std::vector<double> vertices;                // flat: consecutive vertex blocks of length n_
+            vertices.reserve(static_cast<size_t>(reserve_hint) * static_cast<size_t>(n_));
+
+            std::vector<int> frontier_idx;               // indices into vertices
+            frontier_idx.reserve(reserve_hint);
+            std::vector<int> visited_idx;
+            visited_idx.reserve(reserve_hint);
+
+            std::vector<uint64_t> visited_hash;
+            visited_hash.reserve(reserve_hint);
+
+            // helper: push a vector<double> vertex into flat storage and return its index
+            auto push_vertex = [&](const std::vector<double> &v)->int {
+                int idx = static_cast<int>(vertices.size() / n_);
+                vertices.insert(vertices.end(), v.begin(), v.end());
+                return idx;
+            };
+
+            // pointer-based push to avoid creating temporaries
+            auto push_vertex_ptr = [&](const double *ptr)->int {
+                int idx = static_cast<int>(vertices.size() / n_);
+                vertices.insert(vertices.end(), ptr, ptr + n_);
+                return idx;
+            };
+
+            // pointer-based helpers
+            auto ptr_of = [&](int idx)->const double* { return vertices.data() + static_cast<size_t>(idx) * static_cast<size_t>(n_); };
+
+            auto dist_sq_ptr = [&](const double *vptr)->double {
+                const double *GEOQP_RESTRICT xbar_ptr = x_bar_.data();
+                double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
+                int i = 0;
+                for (; i + 3 < n_; i += 4)
+                {
+                    double d0 = vptr[i] - xbar_ptr[i];
+                    double d1 = vptr[i+1] - xbar_ptr[i+1];
+                    double d2 = vptr[i+2] - xbar_ptr[i+2];
+                    double d3 = vptr[i+3] - xbar_ptr[i+3];
+                    sum0 += d0*d0; sum1 += d1*d1; sum2 += d2*d2; sum3 += d3*d3;
+                }
+                double res = (sum0 + sum1) + (sum2 + sum3);
+                for (; i < n_; ++i) { double d = vptr[i] - x_bar_[i]; res += d*d; }
+                return res;
+            };
+
+            auto approx_eq_ptr = [&](const double *a, const double *b, double tol = 1e-8)->bool {
+                for (int i = 0; i < n_; ++i) if (std::abs(a[i] - b[i]) > tol) return false; return true;
+            };
+
+            // push start
+            int start_idx = push_vertex(start);
+            visited_idx.push_back(start_idx);
+            visited_hash.push_back(vertex_fingerprint(start, 1e-8));
+
+            // get neighbors of start into frontier using flat API and append directly into vertices
+            {
+                size_t before = vertices.size();
+                {
+                    geoqp::timing::ScopedTimer __t_nei_sub(geoqp::timing::initializer_neighbors_ns, geoqp::timing::initializer_neighbors_count);
+                    polytope.get_neighbors_flat(start, vertices);
+                }
+                size_t after = vertices.size();
+                for (size_t off = before; off + static_cast<size_t>(n_) <= after; off += static_cast<size_t>(n_))
+                {
+                    int vidx = static_cast<int>(off / static_cast<size_t>(n_));
+                    frontier_idx.push_back(vidx);
+                }
+            }
+
+            std::vector<double> &best_vertex = ws_candidate_;
+            best_vertex.assign(n_, 0.0);
+            double best_dist = -1.0;
+
+            // If the start itself is a good vertex, consider it
+            {
+                auto active = polytope.get_active_constraints(start);
+                if (is_good_vertex(start, active))
+                {
+                    best_vertex = start;
+                    best_dist = dist_sq_ptr(ptr_of(start_idx));
+                }
+            }
+
+            const int max_visit = std::max(100, config_.max_simplex_iterations);
+            while (!frontier_idx.empty() && static_cast<int>(vertices_explored) < max_visit)
+            {
+                // pick frontier index with largest distance
+                int pick_i = 0;
+                double pick_dist = -1.0;
+                for (size_t fi = 0; fi < frontier_idx.size(); ++fi)
+                {
+                    double d = dist_sq_ptr(ptr_of(frontier_idx[fi]));
+                    if (d > pick_dist) { pick_dist = d; pick_i = static_cast<int>(fi); }
+                }
+
+                int vidx = frontier_idx[pick_i];
+                // swap-pop
+                frontier_idx[pick_i] = frontier_idx.back();
+                frontier_idx.pop_back();
+
+                // compute fingerprint directly from pointer to avoid allocation
+                auto vertex_fingerprint_ptr = [&](const double *vp, double tol)->uint64_t {
+                    const double use_tol = std::max(tol, 1e-12);
+                    uint64_t h = 14695981039346656037ULL;
+                    for (int ii = 0; ii < n_; ++ii)
+                    {
+                        int64_t q = llround(vp[ii] / use_tol);
+                        uint64_t x = static_cast<uint64_t>(q);
+                        h ^= x;
+                        h *= 1099511628211ULL;
+                    }
+                    return h;
+                };
+
+                uint64_t vh;
+                {
+                    geoqp::timing::ScopedTimer __t_hash(geoqp::timing::init_hash_ns, geoqp::timing::init_hash_count);
+                    vh = vertex_fingerprint_ptr(ptr_of(vidx), 1e-8);
+                }
+                bool already_seen = false;
+                for (uint64_t hv : visited_hash)
+                {
+                    if (hv == vh)
+                    {
+                        // verify on match
+                        bool eq_found = false;
+                        for (int vid : visited_idx)
+                        {
+                            geoqp::timing::ScopedTimer __t_eq(geoqp::timing::init_eq_ns, geoqp::timing::init_eq_count);
+                            if (approx_eq_ptr(ptr_of(vid), ptr_of(vidx))) { eq_found = true; break; }
+                        }
+                        if (eq_found) { already_seen = true; break; }
+                    }
+                }
+                if (already_seen) continue;
+
+                visited_idx.push_back(vidx);
+                visited_hash.push_back(vh);
+                const double *vptr = ptr_of(vidx);
+                vertices_explored++;
+                // check goodness
+                {
+                    // create a temporary vector view for polytope API
+                    std::vector<double> vview(n_);
+                    for (int i = 0; i < n_; ++i) vview[i] = vptr[i];
+                    {
+                        geoqp::timing::ScopedTimer __t_active_sub(geoqp::timing::initializer_active_ns, geoqp::timing::initializer_active_count);
+                        auto active = polytope.get_active_constraints(vview);
+                        if (is_good_vertex(vview, active))
+                        {
+                            double d = dist_sq_ptr(vptr);
+                            if (d > best_dist)
+                            {
+                                best_dist = d;
+                                for (int i = 0; i < n_; ++i) best_vertex[i] = vptr[i];
+                            }
+                        }
+                    }
+                }
+
+                // expand neighbors by appending directly into vertices via flat API
+                ws_candidate_.assign(n_, 0.0);
+                for (int ii = 0; ii < n_; ++ii) ws_candidate_[ii] = vptr[ii];
+                size_t before2 = vertices.size();
+                {
+                    geoqp::timing::ScopedTimer __t_nei_sub2(geoqp::timing::initializer_neighbors_ns, geoqp::timing::initializer_neighbors_count);
+                    polytope.get_neighbors_flat(ws_candidate_, vertices);
+                }
+                size_t after2 = vertices.size();
+
+                for (size_t off = before2; off + static_cast<size_t>(n_) <= after2; off += static_cast<size_t>(n_))
+                {
+                    const double *nvptr = vertices.data() + off;
+                    uint64_t nh = vertex_fingerprint_ptr(nvptr, 1e-8);
+                    bool seen2 = false;
+                    for (uint64_t hv : visited_hash)
+                    {
+                        if (hv == nh)
+                        {
+                            // verify on hash match
+                            for (int vid : visited_idx)
+                            {
+                                if (approx_eq_ptr(ptr_of(vid), nvptr)) { seen2 = true; break; }
+                            }
+                            if (seen2) break;
+                        }
+                    }
+                    if (!seen2)
+                    {
+                        int nidx = static_cast<int>(off / static_cast<size_t>(n_));
+                        frontier_idx.push_back(nidx);
+                        // candidate solve check timing not needed here; small solves are timed in polytope.get_neighbors_flat via candidate construction
+                    }
+                }
+            }
+
+            if (best_dist >= 0.0)
+            {
+                iterations = 1 + static_cast<int>(visited_idx.size());
+                return best_vertex;
+            }
+
+            // If local search failed to find a good vertex, fall back to the
+            // previous constraint-ranking + ray casting strategy below.
 
             // Step A: Determine search direction d
             // Ideally d = centroid - x_bar.
@@ -288,7 +539,7 @@ namespace geoqp
 
             // Step B: Score constraints by projection (a_i^T * d)
             LinearAlgebra::matvec(A_, d_ptr, ws_Ad_.data(), m_, n_);
-            
+
             // Store pairs of <score, index>
             std::vector<std::pair<double, int>> ranked_constraints(m_);
             for(int i=0; i<m_; ++i) {
@@ -307,12 +558,6 @@ namespace geoqp
             if (m_ >= n_) 
             {
                 // Build small linear system A_sub * v = b_sub
-                // We use the Q matrix workspace or factorization workspace since we haven't started main solve yet
-                // WARNING: We need n*n space. ws_matrix_Q_ (n*n) is available/unused during init phase?
-                // Yes, Q is read-only in 'Q_', 'ws_matrix_Q_' is usually for factorization.
-                
-                // We need to act carefully not to overwrite data needed later. 
-                // Let's assume we can use a temporary buffer or part of the workspace.
                 std::vector<double> A_sub(n_ * n_);
                 std::vector<double> b_sub(n_);
                 std::vector<double> v_candidate(n_);
@@ -320,7 +565,6 @@ namespace geoqp
                 // Extract rows
                 for(int i=0; i<n_; ++i) {
                     int original_idx = ranked_constraints[i].second;
-                    // Copy row A[original_idx]
                     const double* row_ptr = A_ + original_idx * n_;
                     for(int j=0; j<n_; ++j) {
                         A_sub[i*n_ + j] = row_ptr[j];
@@ -329,18 +573,11 @@ namespace geoqp
                 }
 
                 try {
-                    // Solve A_sub * v = b_sub
-                    // Use standard Gaussian elimination or QR. 
-                    // Since we implemented LinearAlgebra::solve_linear_system:
                     LinearAlgebra::solve_linear_system(A_sub.data(), b_sub.data(), v_candidate.data(), n_);
 
-                    // Check if this candidate is feasible (against ALL constraints)
-                    // We allow a small tolerance since we are just finding a start point
-                    Polytope polytope(A_, b_, m_, n_);
-                    if (polytope.is_vertex(v_candidate))
+                    Polytope poly2(A_, b_, m_, n_);
+                    if (poly2.is_vertex(v_candidate))
                     {
-                        // Check if it is "Good" (sees x_bar through interior)
-                        // Since we constructed it from constraints facing 'd', it is highly likely to be good.
                         std::vector<int> active_set; 
                         active_set.reserve(n_);
                         for(int i=0; i<n_; ++i) active_set.push_back(ranked_constraints[i].second);
@@ -348,8 +585,6 @@ namespace geoqp
                         if (is_good_vertex(v_candidate, active_set)) {
                             vertices_explored = 1;
                             iterations = 1;
-                            // This is a robust VERTEX (n constraints active). 
-                            // Much better than a random boundary point.
                             return v_candidate; 
                         }
                     }
@@ -365,7 +600,6 @@ namespace geoqp
 
             LinearAlgebra::matvec(A_, init_ptr, ws_Ax_.data(), m_, n_);
             
-            // We already computed Ad (projection of direction) in Step B -> ws_Ad_
             const double *GEOQP_RESTRICT Ax_ptr = ws_Ax_.data();
             const double *GEOQP_RESTRICT Ad_ptr = ws_Ad_.data();
 
@@ -373,7 +607,6 @@ namespace geoqp
             
             for (int i = 0; i < m_; ++i)
             {
-                // We only care about constraints we are moving TOWARDS (Ad > 0)
                 if (Ad_ptr[i] > 1e-12)
                 {
                     double dist = b_[i] - Ax_ptr[i];
@@ -389,10 +622,6 @@ namespace geoqp
             for (int j = 0; j < n_; ++j)
                 furthest_v[j] = init_ptr[j] + t_max * d_ptr[j];
 
-            // Note: furthest_v is likely on a Face (1 active constraint), not a Vertex.
-            // The solver must handle rank-deficient initial active sets or perform Phase I pivots.
-            // However, this is the best we can do without expensive vertex enumeration.
-            
             vertices_explored++;
             iterations++;
             return furthest_v;
