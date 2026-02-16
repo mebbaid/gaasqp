@@ -123,6 +123,16 @@ inline void print_report()
     cout << "Projection:  " << projection_ns.load() << " ns over " << projection_count.load() << " calls\n";
     cout << "Schur ops:   " << schur_ns.load() << " ns over " << schur_count.load() << " calls\n";
     cout << "Solve ops:   " << solve_ns.load() << " ns over " << solve_count.load() << " calls\n";
+    cout << "Linear algebra kernels:\n";
+    cout << "  matvec:             " << la_matvec_ns.load() << " ns over " << la_matvec_count.load() << " calls\n";
+    cout << "  dot:                " << la_dot_ns.load() << " ns over " << la_dot_count.load() << " calls\n";
+    cout << "  cholesky:           " << la_cholesky_ns.load() << " ns over " << la_cholesky_count.load() << " calls\n";
+    cout << "  forward_sub:        " << la_forward_ns.load() << " ns over " << la_forward_count.load() << " calls\n";
+    cout << "  backward_sub:       " << la_backward_ns.load() << " ns over " << la_backward_count.load() << " calls\n";
+    cout << "  solve_cholesky:     " << la_solve_cholesky_ns.load() << " ns over " << la_solve_cholesky_count.load() << " calls\n";
+    cout << "  rank1_update:       " << la_rank1_ns.load() << " ns over " << la_rank1_count.load() << " calls\n";
+    cout << "  extend:             " << la_extend_ns.load() << " ns over " << la_extend_count.load() << " calls\n";
+    cout << "  shrink:             " << la_shrink_ns.load() << " ns over " << la_shrink_count.load() << " calls\n";
 }
 
 struct ReporterRegister { ReporterRegister() { std::atexit(print_report); } };
