@@ -31,6 +31,7 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 #include <geoqp/internal.hpp>
+#include <geoqp/timing.hpp>
 
 using Clock = std::chrono::high_resolution_clock;
 
@@ -526,6 +527,57 @@ int main()
               << "  Sampling        : " << p.dt << " s\n"
               << "  Constraints     : " << p.N << " (2-sided ZMP) + " << p.N << " (Box Jerk)\n\n";
 
+    // Optional: run one verbose solver step for debugging face hops when env var is set
+    const char *vstep = std::getenv("GEOQP_VERBOSE_STEP");
+    if (vstep && std::string(vstep) == "1")
+    {
+        std::vector<std::pair<double, double>> zmp_bounds;
+        std::vector<double> x_ref;
+        phase.fill(sup_x, zmp_bounds, x_ref);
+        DenseQP qp = buildQP(p, state, zmp_bounds, x_ref);
+
+        // Expand A and b as in runGeoQP
+        int m_expanded = 2 * qp.m;
+        std::vector<double> A_exp(m_expanded * qp.n);
+        std::vector<double> b_exp(m_expanded);
+        for (int i = 0; i < qp.m; ++i)
+        {
+            for (int j = 0; j < qp.n; ++j)
+            {
+                A_exp[(2 * i) * qp.n + j] = qp.C[i * qp.n + j];
+                A_exp[(2 * i + 1) * qp.n + j] = -qp.C[i * qp.n + j];
+            }
+            b_exp[2 * i] = qp.ubA[i];
+            b_exp[2 * i + 1] = -qp.lbA[i];
+        }
+
+        geoqp::Problem prob;
+        prob.n = qp.n;
+        prob.m = m_expanded;
+        prob.Q = qp.H;
+        prob.g = qp.g;
+        prob.A = A_exp;
+        prob.b = b_exp;
+        prob.lb = qp.lb;
+        prob.ub = qp.ub;
+
+        geoqp::Config cfg;
+        cfg.face_hopping_strategy = geoqp::FaceHoppingStrategy::STANDARD;
+        cfg.use_caching = false;
+        cfg.warm_start = false;
+        cfg.tolerance = 1e-7;
+        cfg.verbosity = 3;        // enable detailed face-hopper logs
+        cfg.timing_verbosity = 1; // print per-hop timing summary
+
+        geoqp::Solver solver(cfg);
+        std::cout << "\n=== Verbose single-step solve (STANDARD) ===\n";
+        auto t0 = Clock::now();
+        auto sol = solver.solve(prob);
+        double tms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+        std::cout << "Verbose solve time: " << tms << " ms, phase2 iters: " << sol.phase2_iterations << "\n";
+        return 0;
+    }
+
     std::vector<std::pair<geoqp::FaceHoppingStrategy, std::string>> geoqp_strats = {
         {geoqp::FaceHoppingStrategy::STANDARD, "GeoQP-Standard"},
         {geoqp::FaceHoppingStrategy::BATCH, "GeoQP-Batch"},
@@ -549,6 +601,40 @@ int main()
         double sup_x_local = sup_x;
 
         all_results.assign(num_steps, std::vector<Result>());
+
+        // Build a template Q/A_exp using the initial state so we can setup solvers once
+        std::vector<std::pair<double, double>> zmp_bounds0;
+        std::vector<double> x_ref0;
+        phase_local.fill(sup_x_local, zmp_bounds0, x_ref0);
+        DenseQP qp0 = buildQP(p, state_local, zmp_bounds0, x_ref0);
+
+        int m_expanded = 2 * qp0.m;
+        std::vector<double> A_exp_template(m_expanded * qp0.n);
+        for (int i = 0; i < qp0.m; ++i)
+        {
+            for (int j = 0; j < qp0.n; ++j)
+            {
+                A_exp_template[(2 * i) * qp0.n + j] = qp0.C[i * qp0.n + j];
+                A_exp_template[(2 * i + 1) * qp0.n + j] = -qp0.C[i * qp0.n + j];
+            }
+        }
+
+        // Construct one Solver per GeoQP strategy, setup once with Q and A_exp_template, and reuse across steps
+        std::vector<std::unique_ptr<geoqp::Solver>> geoqp_solvers;
+        geoqp_solvers.reserve(geoqp_strats.size());
+        for (auto &pstr : geoqp_strats) {
+            geoqp::Config cfg;
+            cfg.face_hopping_strategy = pstr.first;
+            cfg.use_caching = use_caching;
+            // Enable warm starting across steps so the initializer is not run every time
+            cfg.warm_start = false;
+            cfg.tolerance = 1e-7;
+            auto solver = std::make_unique<geoqp::Solver>(cfg);
+            // setup with template Q and expanded A (A_exp_template)
+            solver->setup(qp0.n, m_expanded, qp0.H.data(), A_exp_template.data());
+            geoqp_solvers.emplace_back(std::move(solver));
+        }
+
         for (int step = 0; step < num_steps; ++step)
         {
             std::vector<std::pair<double, double>> zmp_bounds;
@@ -559,8 +645,31 @@ int main()
 
             auto &step_res = all_results[step];
 
-            for (auto &[strat, name] : geoqp_strats)
-                step_res.push_back(runGeoQP(qp, strat, name));
+            // Run GeoQP solvers using the pre-constructed solver instances and hotstart API
+            for (size_t si = 0; si < geoqp_strats.size(); ++si)
+            {
+                const auto &name = geoqp_strats[si].second;
+                auto &solver = *geoqp_solvers[si];
+
+                // build expanded b for this step
+                std::vector<double> b_exp(m_expanded);
+                for (int i = 0; i < qp.m; ++i)
+                {
+                    b_exp[2 * i] = qp.ubA[i];
+                    b_exp[2 * i + 1] = -qp.lbA[i];
+                }
+
+                auto t0 = Clock::now();
+                auto sol = solver.solve_hotstart(qp.g.data(), b_exp.data());
+                Result r;
+                r.name = name;
+                r.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+                r.success = (sol.status == geoqp::Status::SUCCESS);
+                r.objective = sol.objective_value + qp.const_term;
+                r.iterations = sol.phase2_iterations;
+                r.solution = sol.x;
+                step_res.push_back(r);
+            }
 
             step_res.push_back(runOSQP(qp));
 
@@ -671,24 +780,12 @@ int main()
     };
 
     print_table(all_results_no_cache, "Results (caching = OFF)");
-    auto stats_off = geoqp::internal::schur_stats_get();
-    std::cout << "Schur stats (caching OFF): init=" << stats_off.initialize_calls
-              << " extend_success=" << stats_off.extend_success
-              << " extend_fallback=" << stats_off.extend_fallback
-              << " shrink_success=" << stats_off.shrink_success
-              << " shrink_fallback=" << stats_off.shrink_fallback
-              << " solves=" << stats_off.solve_calls << "\n";
+    // Schur stats printing removed to reduce console noise.
 
     print_table(all_results_cache, "Results (caching = ON)");
-    auto stats_on = geoqp::internal::schur_stats_get();
-    std::cout << "Schur stats (caching ON):  init=" << stats_on.initialize_calls
-              << " extend_success=" << stats_on.extend_success
-              << " extend_fallback=" << stats_on.extend_fallback
-              << " shrink_success=" << stats_on.shrink_success
-              << " shrink_fallback=" << stats_on.shrink_fallback
-              << " solves=" << stats_on.solve_calls << "\n";
+    // Schur stats printing removed to reduce console noise.
 
-
+    // Lightweight counters and detailed diagnostics suppressed by default.
 
     return 0;
 }

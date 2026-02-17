@@ -3,6 +3,7 @@
 #include "geoqp/compiler_hints.hpp"
 #include <chrono>
 #include <iostream>
+#include <sstream>
 
 namespace geoqp
 {
@@ -203,8 +204,61 @@ namespace geoqp
                 std::vector<int> optimal_face = face_hopper.find_optimal_face(
                     initial_face, sol.phase2_iterations);
 
+                // Debug: per-solve Phase II details when requested
+                const char *dbg_phase2 = std::getenv("GEOQP_DBG_PHASE2");
+                if (dbg_phase2 && std::string(dbg_phase2) == "1")
+                {
+                    std::ostringstream oss;
+                    oss << "[DBG] Phase2 iterations=" << sol.phase2_iterations
+                        << ", initial_face_size=" << initial_face.size() << "\n";
+                    oss << "[DBG] initial_face: ";
+                    for (int c : initial_face) oss << c << " ";
+                    oss << "\n";
+                    oss << "[DBG] good_vertex: ";
+                    for (double xi : good_vertex) oss << xi << " ";
+                    oss << "\n";
+                    // Print to both stderr and stdout to ensure visibility
+                    std::cerr << oss.str();
+                    std::cout << oss.str();
+                    std::cout.flush();
+                    std::cerr.flush();
+                }
+
+                // If phase2_iterations is unexpectedly large, always print a short diagnostic
+                if (sol.phase2_iterations > 3)
+                {
+                    std::cerr << "[WARN] Large Phase II hops: " << sol.phase2_iterations
+                              << " (initial_face_size=" << initial_face.size() << ")\n";
+                }
+
                 auto phase2_end = Clock::now();
                 sol.phase2_time = std::chrono::duration<double>(phase2_end - phase2_start).count();
+
+                // Debug: per-solve Phase II details when requested (hotstart path)
+                const char *dbg_phase2_hs = std::getenv("GEOQP_DBG_PHASE2");
+                if (dbg_phase2_hs && std::string(dbg_phase2_hs) == "1")
+                {
+                    std::ostringstream oss_hs;
+                    oss_hs << "[DBG] Phase2 iterations=" << sol.phase2_iterations
+                           << ", initial_face_size=" << initial_face.size() << "\n";
+                    oss_hs << "[DBG] initial_face: ";
+                    for (int c : initial_face) oss_hs << c << " ";
+                    oss_hs << "\n";
+                    oss_hs << "[DBG] good_vertex: ";
+                    for (double xi : good_vertex) oss_hs << xi << " ";
+                    oss_hs << "\n";
+                    std::cerr << oss_hs.str();
+                    std::cout << oss_hs.str();
+                    std::cout.flush();
+                    std::cerr.flush();
+                }
+
+                // If phase2_iterations is unexpectedly large, always print a short diagnostic
+                if (sol.phase2_iterations > 3)
+                {
+                    std::cerr << "[WARN] Large Phase II hops: " << sol.phase2_iterations
+                              << " (initial_face_size=" << initial_face.size() << ")\n";
+                }
 
                 if (config_.verbosity >= 1)
                 {

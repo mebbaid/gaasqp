@@ -14,6 +14,7 @@ namespace geoqp
                                    double *GEOQP_RESTRICT y, int m, int n)
         {
             geoqp::timing::ScopedTimer _t_matvec(geoqp::timing::la_matvec_ns, geoqp::timing::la_matvec_count);
+            geoqp::timing::la_matvec_elems.fetch_add(static_cast<uint64_t>(static_cast<uint64_t>(m) * static_cast<uint64_t>(n)), std::memory_order_relaxed);
             for (int i = 0; i < m; ++i)
             {
                 const double *GEOQP_RESTRICT row = A + i * n;
@@ -43,9 +44,67 @@ namespace geoqp
             }
         }
 
-        double LinearAlgebra::dot(const double *GEOQP_RESTRICT x, const double *GEOQP_RESTRICT y, int n)
+    double LinearAlgebra::dot(const double *GEOQP_RESTRICT x, const double *GEOQP_RESTRICT y, int n)
         {
-            geoqp::timing::ScopedTimer _t_dot(geoqp::timing::la_dot_ns, geoqp::timing::la_dot_count);
+            geoqp::timing::la_dot_elems.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
+            geoqp::timing::la_dot_count.fetch_add(1, std::memory_order_relaxed);
+            // Fast small-size specializations to avoid loop/setup overhead for tiny vectors.
+            switch (n)
+            {
+                case 0: return 0.0;
+                case 1: return x[0]*y[0];
+                case 2: return x[0]*y[0] + x[1]*y[1];
+                case 3: return x[0]*y[0] + x[1]*y[1] + x[2]*y[2];
+                case 4: return x[0]*y[0] + x[1]*y[1] + x[2]*y[2] + x[3]*y[3];
+                case 5: return x[0]*y[0] + x[1]*y[1] + x[2]*y[2] + x[3]*y[3] + x[4]*y[4];
+                case 6: return x[0]*y[0] + x[1]*y[1] + x[2]*y[2] + x[3]*y[3] + x[4]*y[4] + x[5]*y[5];
+                case 7: return x[0]*y[0] + x[1]*y[1] + x[2]*y[2] + x[3]*y[3] + x[4]*y[4] + x[5]*y[5] + x[6]*y[6];
+                case 8: return x[0]*y[0] + x[1]*y[1] + x[2]*y[2] + x[3]*y[3] + x[4]*y[4] + x[5]*y[5] + x[6]*y[6] + x[7]*y[7];
+                case 9: {
+                    double r = 0.0;
+                    for (int i=0;i<9;++i) r += x[i]*y[i];
+                    return r;
+                }
+                case 10: {
+                    double r = 0.0;
+                    for (int i=0;i<10;++i) r += x[i]*y[i];
+                    return r;
+                }
+                case 11: {
+                    double r = 0.0;
+                    for (int i=0;i<11;++i) r += x[i]*y[i];
+                    return r;
+                }
+                case 12: {
+                    double r = 0.0;
+                    for (int i=0;i<12;++i) r += x[i]*y[i];
+                    return r;
+                }
+                case 13: {
+                    double r = 0.0;
+                    for (int i=0;i<13;++i) r += x[i]*y[i];
+                    return r;
+                }
+                case 14: {
+                    double r = 0.0;
+                    for (int i=0;i<14;++i) r += x[i]*y[i];
+                    return r;
+                }
+                case 15: {
+                    double r = 0.0;
+                    for (int i=0;i<15;++i) r += x[i]*y[i];
+                    return r;
+                }
+                case 16: {
+                    double r = 0.0;
+                    for (int i=0;i<16;++i) r += x[i]*y[i];
+                    return r;
+                }
+                default:
+                    break;
+            }
+
+            // Generic fallback: 4-way unrolled loop (no per-call timer here).
             double sum0 = 0.0;
             double sum1 = 0.0;
             double sum2 = 0.0;

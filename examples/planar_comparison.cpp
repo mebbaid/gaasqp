@@ -77,13 +77,6 @@ int main()
     std::cout << "  Constraints: Box[-2, 2] intersected with |x|+|y|<=3\n";
 
     // Geometric intuition:
-    // x_bar is at (4,1).
-    // Right wall is x=2. Distance to (2,1) is 2.0.
-    // Diagonal is x+y=3. Projection of (4,1) onto x+y=3 is (2.5, -0.5)? No.
-    // Vector to (4,1) is roughly East.
-    // The closest point should be on the Right Wall x=2, y=1.
-    // Let's check constraints at (2,1):
-    // x=2 (Active), y=1 (Inactive), x+y=3 (Active!).
     // Solution should be the vertex (2, 1).
     std::cout << "  Expected Solution: (2.0, 1.0) [Intersection of x=2 and x+y=3]\n\n";
 
@@ -96,6 +89,12 @@ int main()
 
     std::vector<Iterate> geoqp_iterates;
     geoqp_iterates.push_back({x_bar_x, x_bar_y, "Start"});
+
+    // Track GeoQP iteration stats
+    int geoqp_total_iters = -1;
+    int geoqp_phase1_iters = -1;
+    int geoqp_phase2_iters = -1;
+    int geoqp_vertices_explored = -1;
 
     {
         geoqp::Problem problem;
@@ -117,6 +116,15 @@ int main()
         {
             std::cout << "  Solution: (" << sol.x[0] << ", " << sol.x[1] << ")\n";
             std::cout << "  Active Set Size: " << sol.num_active_constraints << "\n";
+            std::cout << "  GeoQP iterations: total=" << sol.iterations
+                      << " phase1=" << sol.phase1_iterations
+                      << " phase2=" << sol.phase2_iterations
+                      << " vertices_explored=" << sol.vertices_explored << "\n";
+            // store stats for final summary
+            geoqp_total_iters = sol.iterations;
+            geoqp_phase1_iters = sol.phase1_iterations;
+            geoqp_phase2_iters = sol.phase2_iterations;
+            geoqp_vertices_explored = sol.vertices_explored;
             geoqp_iterates.push_back({sol.x[0], sol.x[1], "GeoQP"});
         }
         else
@@ -135,6 +143,7 @@ int main()
     std::vector<Iterate> qpoases_iterates;
     qpoases_iterates.push_back({x_bar_x, x_bar_y, "Start"});
 
+    int qpoases_iters = -1; // configured/work limit (nWSR)
     {
         std::vector<double> lbA(m, -1.0e10); // One-sided inequality
 
@@ -154,7 +163,11 @@ int main()
         std::vector<double> x_opt(n);
         qp.getPrimalSolution(x_opt.data());
 
-        std::cout << "  Solution: (" << x_opt[0] << ", " << x_opt[1] << ")\n";
+    // qpOASES updates nWSR on return with the number of iterations performed
+    qpoases_iters = nWSR;
+
+    std::cout << "  Solution: (" << x_opt[0] << ", " << x_opt[1] << ")\n";
+    std::cout << "  qpOASES iterations=" << nWSR << "\n";
         qpoases_iterates.push_back({x_opt[0], x_opt[1], "qpOASES"});
     }
 
@@ -226,18 +239,27 @@ int main()
     std::cout << "  Summary: Iterations\n";
     std::cout << "================================================================\n";
 
-    for (const auto &iter : geoqp_iterates)
+    // GeoQP detailed breakdown
+    if (geoqp_total_iters >= 0)
     {
-        std::cout << "GeoQP:   (" << iter.x << ", " << iter.y << ")\n";
+        std::cout << "GeoQP:   total=" << geoqp_total_iters
+                  << " phase1=" << geoqp_phase1_iters
+                  << " phase2=" << geoqp_phase2_iters
+                  << " vertices_explored=" << geoqp_vertices_explored << "\n";
     }
-    for (const auto &iter : qpoases_iterates)
+    else
     {
-        std::cout << "qpOASES: (" << iter.x << ", " << iter.y << ")\n";
+        std::cout << "GeoQP:   (no iteration info)\n";
     }
-    for (const auto &iter : osqp_iterates)
-    {
-        std::cout << "OSQP:    (" << iter.x << ", " << iter.y << ")\n";
-    }
+
+    // qpOASES: report configured/work-limit nWSR
+    if (qpoases_iters >= 0)
+        std::cout << "qpOASES: iterations=" << qpoases_iters << "\n";
+    else
+        std::cout << "qpOASES: (no iteration info)\n";
+
+    // OSQP: iteration info not exposed via this wrapper reliably
+    std::cout << "OSQP:    (iterations: unknown)\n";
 
     return 0;
 }

@@ -2,9 +2,7 @@
 #pragma once
 #include <atomic>
 #include <cstdint>
-#include <chrono>
-#include <iostream>
-#include <cstdlib>
+
 
 namespace geoqp {
 namespace timing {
@@ -68,6 +66,9 @@ inline std::atomic<uint64_t> la_matvec_ns{0};
 inline std::atomic<uint64_t> la_matvec_count{0};
 inline std::atomic<uint64_t> la_dot_ns{0};
 inline std::atomic<uint64_t> la_dot_count{0};
+// element counters for average lengths
+inline std::atomic<uint64_t> la_dot_elems{0};
+inline std::atomic<uint64_t> la_matvec_elems{0};
 inline std::atomic<uint64_t> la_cholesky_ns{0};
 inline std::atomic<uint64_t> la_cholesky_count{0};
 inline std::atomic<uint64_t> la_forward_ns{0};
@@ -83,60 +84,40 @@ inline std::atomic<uint64_t> la_extend_count{0};
 inline std::atomic<uint64_t> la_shrink_ns{0};
 inline std::atomic<uint64_t> la_shrink_count{0};
 
+// lightweight counters (increment-only) for hotspot analysis
+inline std::atomic<uint64_t> init_counter_vertices_explored{0};
+inline std::atomic<uint64_t> init_counter_frontier_picks{0};
+inline std::atomic<uint64_t> init_counter_frontier_pushes{0};
+inline std::atomic<uint64_t> init_counter_neighbor_expansions{0};
+inline std::atomic<uint64_t> init_counter_hash_checks{0};
+inline std::atomic<uint64_t> init_counter_eq_checks{0};
+inline std::atomic<uint64_t> init_counter_raycast_fallback{0};
+inline std::atomic<uint64_t> face_hops_count{0};
+// sampled per-hop timing and stats
+inline std::atomic<uint64_t> face_hop_ns_total{0};
+inline std::atomic<uint64_t> face_hop_sample_count{0};
+inline std::atomic<uint64_t> face_hop_face_size_sum{0};
+inline std::atomic<uint64_t> face_hop_projection_calls{0};
+inline std::atomic<uint64_t> face_hop_projection_failures{0};
+
 struct ScopedTimer
 {
-    std::atomic<uint64_t> &ns;
-    std::atomic<uint64_t> &count;
-    std::chrono::high_resolution_clock::time_point t0;
-    ScopedTimer(std::atomic<uint64_t> &ns_, std::atomic<uint64_t> &count_) : ns(ns_), count(count_), t0(std::chrono::high_resolution_clock::now()) {}
-    ~ScopedTimer()
-    {
-        auto t1 = std::chrono::high_resolution_clock::now();
-        uint64_t d = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
-        ns.fetch_add(d, std::memory_order_relaxed);
-        count.fetch_add(1, std::memory_order_relaxed);
-    }
+    // No-op timer: keep the same constructor signature so call sites compile,
+    // but avoid doing any timing or atomic updates to remove measurement overhead.
+    ScopedTimer(std::atomic<uint64_t> & /*ns_*/, std::atomic<uint64_t> & /*count_*/) {}
+    // Overload used in some places (no-op)
+    ScopedTimer() {}
+    ~ScopedTimer() {}
 };
 
 inline void print_report()
 {
-    using std::cout; using std::endl;
-    cout << "--- GeoQP timing report (nanoseconds / counts) ---\n";
-    cout << "Initializer: " << initializer_ns.load() << " ns over " << initializer_count.load() << " calls\n";
-    cout << "  find_initial_vertex: " << initializer_find_initial_vertex_ns.load() << " ns over " << initializer_find_initial_vertex_count.load() << " calls\n";
-    cout << "  neighbors:           " << initializer_neighbors_ns.load() << " ns over " << initializer_neighbors_count.load() << " calls\n";
-    cout << "  active_check:        " << initializer_active_ns.load() << " ns over " << initializer_active_count.load() << " calls\n";
-    cout << "  candidate_solve:     " << initializer_candidate_ns.load() << " ns over " << initializer_candidate_count.load() << " calls\n";
-    cout << "  raycast:             " << initializer_raycast_ns.load() << " ns over " << initializer_raycast_count.load() << " calls\n";
-    cout << "Polytope find_initial_vertex:\n";
-    cout << "  iter_loop:           " << poly_find_iter_ns.load() << " ns over " << poly_find_iter_count.load() << " calls\n";
-    cout << "  final_solve:         " << poly_find_solve_ns.load() << " ns over " << poly_find_solve_count.load() << " calls\n";
-    cout << "  active_check:        " << poly_find_active_ns.load() << " ns over " << poly_find_active_count.load() << " calls\n";
-    cout << "Polytope neighbors:\n";
-    cout << "  candidate_solve:     " << poly_neighbors_solve_ns.load() << " ns over " << poly_neighbors_solve_count.load() << " calls\n";
-    cout << "  feasibility_check:   " << poly_neighbors_feas_ns.load() << " ns over " << poly_neighbors_feas_count.load() << " calls\n";
-    cout << "Initializer hash/eq:\n";
-    cout << "  hash:                " << init_hash_ns.load() << " ns over " << init_hash_count.load() << " calls\n";
-    cout << "  eq:                  " << init_eq_ns.load() << " ns over " << init_eq_count.load() << " calls\n";
-    cout << "  pick:                " << initializer_pick_ns.load() << " ns over " << initializer_pick_count.load() << " calls\n";
-    cout << "  push/insert:         " << initializer_push_ns.load() << " ns over " << initializer_push_count.load() << " calls\n";
-    cout << "Projection:  " << projection_ns.load() << " ns over " << projection_count.load() << " calls\n";
-    cout << "Schur ops:   " << schur_ns.load() << " ns over " << schur_count.load() << " calls\n";
-    cout << "Solve ops:   " << solve_ns.load() << " ns over " << solve_count.load() << " calls\n";
-    cout << "Linear algebra kernels:\n";
-    cout << "  matvec:             " << la_matvec_ns.load() << " ns over " << la_matvec_count.load() << " calls\n";
-    cout << "  dot:                " << la_dot_ns.load() << " ns over " << la_dot_count.load() << " calls\n";
-    cout << "  cholesky:           " << la_cholesky_ns.load() << " ns over " << la_cholesky_count.load() << " calls\n";
-    cout << "  forward_sub:        " << la_forward_ns.load() << " ns over " << la_forward_count.load() << " calls\n";
-    cout << "  backward_sub:       " << la_backward_ns.load() << " ns over " << la_backward_count.load() << " calls\n";
-    cout << "  solve_cholesky:     " << la_solve_cholesky_ns.load() << " ns over " << la_solve_cholesky_count.load() << " calls\n";
-    cout << "  rank1_update:       " << la_rank1_ns.load() << " ns over " << la_rank1_count.load() << " calls\n";
-    cout << "  extend:             " << la_extend_ns.load() << " ns over " << la_extend_count.load() << " calls\n";
-    cout << "  shrink:             " << la_shrink_ns.load() << " ns over " << la_shrink_count.load() << " calls\n";
+    // Intentionally left empty to avoid printing lightweight counters in normal runs.
+    // Use a debugger or enable explicit diagnostics if you need these counters.
+    (void)0;
 }
 
-struct ReporterRegister { ReporterRegister() { std::atexit(print_report); } };
-static ReporterRegister _reporter_register;
+// No-op reporter registration (keep symbol but do not register atexit handler)
 
 } // namespace timing
 } // namespace geoqp

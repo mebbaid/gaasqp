@@ -415,6 +415,9 @@ namespace geoqp
                 frontier_idx[pick_i] = frontier_idx.back();
                 frontier_idx.pop_back();
 
+                // record that we picked a frontier vertex
+                ::geoqp::timing::init_counter_frontier_picks.fetch_add(1, std::memory_order_relaxed);
+
                 // compute fingerprint directly from pointer to avoid allocation
                 auto vertex_fingerprint_ptr = [&](const double *vp, double tol)->uint64_t {
                     const double use_tol = std::max(tol, 1e-12);
@@ -437,12 +440,14 @@ namespace geoqp
                 bool already_seen = false;
                 for (uint64_t hv : visited_hash)
                 {
+            ::geoqp::timing::init_counter_hash_checks.fetch_add(1, std::memory_order_relaxed);
                     if (hv == vh)
                     {
                         // verify on match
                         bool eq_found = false;
                         for (int vid : visited_idx)
                         {
+                ::geoqp::timing::init_counter_eq_checks.fetch_add(1, std::memory_order_relaxed);
                             geoqp::timing::ScopedTimer __t_eq(geoqp::timing::init_eq_ns, geoqp::timing::init_eq_count);
                             if (approx_eq_ptr(ptr_of(vid), ptr_of(vidx))) { eq_found = true; break; }
                         }
@@ -455,6 +460,7 @@ namespace geoqp
                 visited_hash.push_back(vh);
                 const double *vptr = ptr_of(vidx);
                 vertices_explored++;
+                ::geoqp::timing::init_counter_vertices_explored.fetch_add(1, std::memory_order_relaxed);
                 // check goodness
                 {
                     // create a temporary vector view for polytope API
@@ -490,13 +496,16 @@ namespace geoqp
                     const double *nvptr = vertices.data() + off;
                     uint64_t nh = vertex_fingerprint_ptr(nvptr, 1e-8);
                     bool seen2 = false;
+                    ::geoqp::timing::init_counter_neighbor_expansions.fetch_add(1, std::memory_order_relaxed);
                     for (uint64_t hv : visited_hash)
                     {
+                        ::geoqp::timing::init_counter_hash_checks.fetch_add(1, std::memory_order_relaxed);
                         if (hv == nh)
                         {
                             // verify on hash match
                             for (int vid : visited_idx)
                             {
+                                ::geoqp::timing::init_counter_eq_checks.fetch_add(1, std::memory_order_relaxed);
                                 if (approx_eq_ptr(ptr_of(vid), nvptr)) { seen2 = true; break; }
                             }
                             if (seen2) break;
@@ -506,6 +515,7 @@ namespace geoqp
                     {
                         int nidx = static_cast<int>(off / static_cast<size_t>(n_));
                         frontier_idx.push_back(nidx);
+                        ::geoqp::timing::init_counter_frontier_pushes.fetch_add(1, std::memory_order_relaxed);
                         // candidate solve check timing not needed here; small solves are timed in polytope.get_neighbors_flat via candidate construction
                     }
                 }
@@ -622,8 +632,65 @@ namespace geoqp
             for (int j = 0; j < n_; ++j)
                 furthest_v[j] = init_ptr[j] + t_max * d_ptr[j];
 
+            // Try to promote the raycast point to an actual vertex.
+            // Strategy: collect currently active (tight) constraints at furthest_v;
+            // if fewer than n, add constraints with smallest slack until we have n
+            // and attempt to solve the linear system to get a true vertex. If the
+            // solve yields a feasible point, return it; otherwise return furthest_v.
+            {
+                std::vector<int> active_at_furthest = polytope.get_active_constraints(furthest_v);
+
+                if (static_cast<int>(active_at_furthest.size()) < n_)
+                {
+                    // compute slacks and sort by absolute slack
+                    std::vector<std::pair<double,int>> slack_idx;
+                    slack_idx.reserve(m_);
+                    for (int i = 0; i < m_; ++i)
+                    {
+                        const double *a_row = A_ + i * n_;
+                        double ax = LinearAlgebra::dot(a_row, furthest_v.data(), n_);
+                        double slack = std::abs(b_[i] - ax);
+                        slack_idx.emplace_back(slack, i);
+                    }
+                    std::sort(slack_idx.begin(), slack_idx.end());
+
+                    // add smallest-slack constraints until we have n unique indices
+                    std::vector<char> is_added(m_, 0);
+                    for (int idx : active_at_furthest) is_added[idx] = 1;
+                    for (const auto &p : slack_idx)
+                    {
+                        if ((int)active_at_furthest.size() >= n_) break;
+                        int ci = p.second;
+                        if (!is_added[ci])
+                        {
+                            active_at_furthest.push_back(ci);
+                            is_added[ci] = 1;
+                        }
+                    }
+                }
+
+                if (static_cast<int>(active_at_furthest.size()) >= n_)
+                {
+                    // try all combinations of n constraints from the set if larger than n
+                    // but to keep it cheap, just take the first n (they are sorted by slack)
+                    std::vector<int> try_set(active_at_furthest.begin(), active_at_furthest.begin() + n_);
+                    std::vector<double> solved = compute_vertex_from_active_set(try_set);
+                    if (!solved.empty())
+                    {
+                        // verified feasible inside compute_vertex_from_active_set
+                        vertices_explored++;
+                        ::geoqp::timing::init_counter_vertices_explored.fetch_add(1, std::memory_order_relaxed);
+                        iterations++;
+                        ::geoqp::timing::init_counter_raycast_fallback.fetch_add(1, std::memory_order_relaxed);
+                        return solved;
+                    }
+                }
+            }
+
             vertices_explored++;
+            ::geoqp::timing::init_counter_vertices_explored.fetch_add(1, std::memory_order_relaxed);
             iterations++;
+            ::geoqp::timing::init_counter_raycast_fallback.fetch_add(1, std::memory_order_relaxed);
             return furthest_v;
         }
 

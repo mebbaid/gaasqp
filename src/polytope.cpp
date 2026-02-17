@@ -326,6 +326,9 @@ namespace geoqp
         {
             geoqp::timing::ScopedTimer _t_nei(geoqp::timing::initializer_ns, geoqp::timing::initializer_count);
 
+            // count neighbor expansion calls
+            ::geoqp::timing::init_counter_neighbor_expansions.fetch_add(1, std::memory_order_relaxed);
+
             auto active = get_active_constraints(vertex, 1e-8);
 
             std::vector<int> new_active;
@@ -398,6 +401,7 @@ namespace geoqp
 
                         if (feasible)
                         {
+                            ::geoqp::timing::init_counter_frontier_pushes.fetch_add(1, std::memory_order_relaxed);
                             size_t old = out_flat.size();
                             out_flat.resize(old + static_cast<size_t>(n_));
                             for (int t = 0; t < n_; ++t) out_flat[old + t] = new_vertex[t];
