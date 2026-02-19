@@ -314,6 +314,12 @@ namespace geoqp
                 int &iterations,
                 Timer &t) const;
 
+            int select_single_constraint(
+                const std::vector<int> &violated_constraints,
+                const std::vector<double> &x_proj,
+                const std::vector<int> &initial_face,
+                bool force_geom_adj) const;
+
             const double *Q_;
             const double *A_;
             const double *b_;

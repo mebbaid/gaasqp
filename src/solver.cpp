@@ -7,6 +7,76 @@
 
 namespace geoqp
 {
+    namespace
+    {
+        inline void print_phase2_debug(int phase2_iterations, int initial_face_size,
+                                       const std::vector<int> &initial_face,
+                                       const std::vector<double> &good_vertex,
+                                       int verbosity)
+        {
+            if (verbosity < 3)
+                return;
+
+            std::ostringstream oss;
+            oss << "[DBG] Phase2 iterations=" << phase2_iterations
+                << ", initial_face_size=" << initial_face_size << "\n";
+            oss << "[DBG] initial_face: ";
+            for (int c : initial_face)
+                oss << c << " ";
+            oss << "\n";
+            oss << "[DBG] good_vertex: ";
+            for (double xi : good_vertex)
+                oss << xi << " ";
+            oss << "\n";
+            std::cerr << oss.str();
+            std::cout << oss.str();
+            std::cout.flush();
+            std::cerr.flush();
+        }
+
+        // Helper: Print warning if Phase II hops are unexpectedly large
+        inline void print_large_phase2_warning(int phase2_iterations, int initial_face_size,
+                                               int verbosity)
+        {
+            if (verbosity >= 3 && phase2_iterations > 3)
+            {
+                std::cerr << "[WARN] Large Phase II hops: " << phase2_iterations
+                          << " (initial_face_size=" << initial_face_size << ")\n";
+            }
+        }
+
+        // Helper: Print ray intersection trace
+        inline void print_ray_trace(int best_t_min_idx, double best_t_min, int best_t_max_idx,
+                                    double best_t_max, const std::vector<int> &initial_face,
+                                    const std::vector<double> &t_vals, int verbosity)
+        {
+            std::ostringstream oss;
+            oss << "[TRACE] Computed ray t in (0,1): t_min_idx=" << best_t_min_idx
+                << " t_min=" << best_t_min
+                << " , t_max_idx=" << best_t_max_idx << " t_max=" << best_t_max << "\n";
+            oss << "[TRACE] initial_face returned: ";
+            for (int c : initial_face)
+                oss << c << " ";
+            oss << "\n";
+            std::cerr << oss.str();
+            std::cout << oss.str();
+
+            if (verbosity >= 3)
+            {
+                std::ostringstream oss2;
+                oss2 << "[TRACE] constraints with 0<t<1: ";
+                for (size_t ci = 0; ci < t_vals.size(); ++ci)
+                {
+                    double t = t_vals[ci];
+                    if (t > 0.0 && t < 1.0)
+                        oss2 << ci << ":" << t << " ";
+                }
+                oss2 << "\n";
+                std::cerr << oss2.str();
+                std::cout << oss2.str();
+            }
+        }
+    }
 
     namespace
     {
@@ -201,64 +271,62 @@ namespace geoqp
                     std::cout << "Initial face has " << initial_face.size() << " constraints\n";
                 }
 
+                // When verbose (high), compute ray intersection parameter t for each constraint
+                // to report t_min/t_max and whether initial_face matches the t_max candidate.
+                if (config_.verbosity >= 3)
+                {
+                    std::vector<double> d(problem.n);
+                    for (int i = 0; i < problem.n; ++i)
+                        d[i] = x_bar[i] - good_vertex[i];
+
+                    int best_t_min_idx = -1, best_t_max_idx = -1;
+                    double best_t_min = 1e300, best_t_max = -1e300;
+                    std::vector<double> t_vals(problem.m);
+                    for (int ci = 0; ci < problem.m; ++ci)
+                    {
+                        const double *row = problem.A.data() + ci * problem.n;
+                        double dot_g = 0.0;
+                        double dot_d = 0.0;
+                        for (int j = 0; j < problem.n; ++j)
+                        {
+                            dot_g += row[j] * good_vertex[j];
+                            dot_d += row[j] * d[j];
+                        }
+                        double numer = problem.b[ci] - dot_g;
+                        double denom = dot_d;
+                        double t = std::numeric_limits<double>::infinity();
+                        if (std::abs(denom) > 1e-18)
+                            t = numer / denom;
+                        t_vals[ci] = t;
+                        if (t > 0.0 && t < 1.0)
+                        {
+                            if (t < best_t_min)
+                            {
+                                best_t_min = t;
+                                best_t_min_idx = ci;
+                            }
+                            if (t > best_t_max)
+                            {
+                                best_t_max = t;
+                                best_t_max_idx = ci;
+                            }
+                        }
+                    }
+
+                    print_ray_trace(best_t_min_idx, best_t_min, best_t_max_idx, best_t_max,
+                                    initial_face, t_vals, config_.verbosity);
+                }
+
                 std::vector<int> optimal_face = face_hopper.find_optimal_face(
                     initial_face, sol.phase2_iterations);
 
-                // Debug: per-solve Phase II details when requested
-                const char *dbg_phase2 = std::getenv("GEOQP_DBG_PHASE2");
-                if (dbg_phase2 && std::string(dbg_phase2) == "1")
-                {
-                    std::ostringstream oss;
-                    oss << "[DBG] Phase2 iterations=" << sol.phase2_iterations
-                        << ", initial_face_size=" << initial_face.size() << "\n";
-                    oss << "[DBG] initial_face: ";
-                    for (int c : initial_face) oss << c << " ";
-                    oss << "\n";
-                    oss << "[DBG] good_vertex: ";
-                    for (double xi : good_vertex) oss << xi << " ";
-                    oss << "\n";
-                    // Print to both stderr and stdout to ensure visibility
-                    std::cerr << oss.str();
-                    std::cout << oss.str();
-                    std::cout.flush();
-                    std::cerr.flush();
-                }
-
-                // If phase2_iterations is unexpectedly large, always print a short diagnostic
-                if (sol.phase2_iterations > 3)
-                {
-                    std::cerr << "[WARN] Large Phase II hops: " << sol.phase2_iterations
-                              << " (initial_face_size=" << initial_face.size() << ")\n";
-                }
+                print_phase2_debug(sol.phase2_iterations, static_cast<int>(initial_face.size()),
+                                   initial_face, good_vertex, config_.verbosity);
+                print_large_phase2_warning(sol.phase2_iterations, static_cast<int>(initial_face.size()),
+                                          config_.verbosity);
 
                 auto phase2_end = Clock::now();
                 sol.phase2_time = std::chrono::duration<double>(phase2_end - phase2_start).count();
-
-                // Debug: per-solve Phase II details when requested (hotstart path)
-                const char *dbg_phase2_hs = std::getenv("GEOQP_DBG_PHASE2");
-                if (dbg_phase2_hs && std::string(dbg_phase2_hs) == "1")
-                {
-                    std::ostringstream oss_hs;
-                    oss_hs << "[DBG] Phase2 iterations=" << sol.phase2_iterations
-                           << ", initial_face_size=" << initial_face.size() << "\n";
-                    oss_hs << "[DBG] initial_face: ";
-                    for (int c : initial_face) oss_hs << c << " ";
-                    oss_hs << "\n";
-                    oss_hs << "[DBG] good_vertex: ";
-                    for (double xi : good_vertex) oss_hs << xi << " ";
-                    oss_hs << "\n";
-                    std::cerr << oss_hs.str();
-                    std::cout << oss_hs.str();
-                    std::cout.flush();
-                    std::cerr.flush();
-                }
-
-                // If phase2_iterations is unexpectedly large, always print a short diagnostic
-                if (sol.phase2_iterations > 3)
-                {
-                    std::cerr << "[WARN] Large Phase II hops: " << sol.phase2_iterations
-                              << " (initial_face_size=" << initial_face.size() << ")\n";
-                }
 
                 if (config_.verbosity >= 1)
                 {
@@ -291,16 +359,17 @@ namespace geoqp
 
                     std::vector<double> lambda;
                     sol.x.resize(problem.n);
-                    
+
                     // Use ProjectionSolver directly instead of Projector to leverage Q_inv
                     bool success = internal::ProjectionSolver::solve(
-                        optimal_face, problem.Q.data(), problem.A.data(), problem.b.data(), 
+                        optimal_face, problem.Q.data(), problem.A.data(), problem.b.data(),
                         x_bar, face_hopper.get_Q_chol(),
                         problem.m, problem.n, sol.x, lambda,
                         face_hopper.get_Q_inv(),
                         face_hopper.q_is_diagonal(), face_hopper.get_Q_diag());
 
-                    if (!success) {
+                    if (!success)
+                    {
                         throw NumericalException("Phase III projection failed");
                     }
 
@@ -572,6 +641,54 @@ namespace geoqp
                 else
                 {
                     initial_face = cached_face_hopper_->find_initial_face(good_vertex);
+                }
+
+                // When verbose, compute intersection parameter t for the ray from good_vertex->x_bar
+                // and report t_min/t_max and whether the returned initial_face matches the t_max constraint.
+                if (config_.verbosity >= 3)
+                {
+                    const char *dbg_phase2_hs = std::getenv("GEOQP_DBG_PHASE2");
+                    // Compute direction d = x_bar - good_vertex (ws_x_bar_ holds x_bar for hotstart)
+                    std::vector<double> d(setup_n_);
+                    for (int i = 0; i < setup_n_; ++i)
+                        d[i] = ws_x_bar_[i] - good_vertex[i];
+
+                    int best_t_min_idx = -1, best_t_max_idx = -1;
+                    double best_t_min = 1e300, best_t_max = -1e300;
+                    std::vector<double> t_vals(setup_m_);
+                    for (int ci = 0; ci < setup_m_; ++ci)
+                    {
+                        const double *row = setup_A_ + ci * setup_n_;
+                        double dot_g = 0.0;
+                        double dot_d = 0.0;
+                        for (int j = 0; j < setup_n_; ++j)
+                        {
+                            dot_g += row[j] * good_vertex[j];
+                            dot_d += row[j] * d[j];
+                        }
+                        double numer = b[ci] - dot_g;
+                        double denom = dot_d;
+                        double t = std::numeric_limits<double>::infinity();
+                        if (std::abs(denom) > 1e-18)
+                            t = numer / denom;
+                        t_vals[ci] = t;
+                        if (t > 0.0 && t < 1.0)
+                        {
+                            if (t < best_t_min)
+                            {
+                                best_t_min = t;
+                                best_t_min_idx = ci;
+                            }
+                            if (t > best_t_max)
+                            {
+                                best_t_max = t;
+                                best_t_max_idx = ci;
+                            }
+                        }
+                    }
+
+                    print_ray_trace(best_t_min_idx, best_t_min, best_t_max_idx, best_t_max,
+                                    initial_face, t_vals, true);
                 }
 
                 std::vector<int> optimal_face = cached_face_hopper_->find_optimal_face(

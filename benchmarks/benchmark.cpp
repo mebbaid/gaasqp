@@ -435,7 +435,6 @@ public:
         return result;
     }
 
-    // For benching hotstart specifically
     SolverResult solve_hotstart(const QPProblem &prob)
     {
         // Assumes setup already called
@@ -501,8 +500,7 @@ public:
     }
 };
 
-// OSQP Wrapper using separate simple bounds and general constraint bounds
-// Note: OSQP via QpSolversEigen combines variable bounds and constraints into one constraint matrix
+
 SolverResult solveOSQP(const QPProblem &prob)
 {
     SolverResult result;
@@ -635,7 +633,6 @@ SolverResult solveOSQP(const QPProblem &prob)
     return result;
 }
 
-// qpOASES Wrapper using separate simple bounds and general constraint bounds
 SolverResult solveQPOASES(const QPProblem &prob)
 {
     SolverResult result;

@@ -527,6 +527,13 @@ int main()
               << "  Sampling        : " << p.dt << " s\n"
               << "  Constraints     : " << p.N << " (2-sided ZMP) + " << p.N << " (Box Jerk)\n\n";
 
+    // Echo debug env var for Phase II diagnostics
+    const char *dbg_phase2_env = std::getenv("GEOQP_DBG_PHASE2");
+    if (dbg_phase2_env)
+        std::cout << "[INFO] GEOQP_DBG_PHASE2=" << dbg_phase2_env << "\n";
+    else
+        std::cout << "[INFO] GEOQP_DBG_PHASE2 not set\n";
+
     // Optional: run one verbose solver step for debugging face hops when env var is set
     const char *vstep = std::getenv("GEOQP_VERBOSE_STEP");
     if (vstep && std::string(vstep) == "1")
@@ -635,6 +642,16 @@ int main()
             geoqp_solvers.emplace_back(std::move(solver));
         }
 
+        // Read verbose-step index from env (optional)
+        int verbose_step_idx = -1;
+        const char *vstep_env = std::getenv("GEOQP_VERBOSE_STEP");
+        if (vstep_env && std::string(vstep_env) == "1") {
+            const char *vidx = std::getenv("GEOQP_VERBOSE_STEP_IDX");
+            if (vidx) verbose_step_idx = std::atoi(vidx);
+            else verbose_step_idx = 4; // default
+            std::cout << "[INFO] Verbose step tracing enabled for step=" << verbose_step_idx << "\n";
+        }
+
         for (int step = 0; step < num_steps; ++step)
         {
             std::vector<std::pair<double, double>> zmp_bounds;
@@ -659,8 +676,22 @@ int main()
                     b_exp[2 * i + 1] = -qp.lbA[i];
                 }
 
+                // If this is the requested verbose step, temporarily raise solver verbosity
+                geoqp::Config orig_cfg = solver.config();
+                bool raised = false;
+                if (step == verbose_step_idx) {
+                    geoqp::Config tmp = orig_cfg;
+                    tmp.verbosity = 3;
+                    tmp.timing_verbosity = 1;
+                    solver.set_config(tmp);
+                    raised = true;
+                }
+
                 auto t0 = Clock::now();
                 auto sol = solver.solve_hotstart(qp.g.data(), b_exp.data());
+
+                // Restore original config if we changed it
+                if (raised) solver.set_config(orig_cfg);
                 Result r;
                 r.name = name;
                 r.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
@@ -668,6 +699,16 @@ int main()
                 r.objective = sol.objective_value + qp.const_term;
                 r.iterations = sol.phase2_iterations;
                 r.solution = sol.x;
+                // Extra per-solve diagnostics when requested via env var
+                const char *dbg_phase2_env2 = std::getenv("GEOQP_DBG_PHASE2");
+                if (dbg_phase2_env2 && std::string(dbg_phase2_env2) == "1") {
+                    std::cout << "[DBG] step=" << step << " solver=" << name
+                              << " phase2_iterations=" << sol.phase2_iterations
+                              << " active_set_size=" << sol.active_set.size() << " ";
+                    std::cout << "active_set:";
+                    for (int c : sol.active_set) std::cout << " " << c;
+                    std::cout << "\n";
+                }
                 step_res.push_back(r);
             }
 

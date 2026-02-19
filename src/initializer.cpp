@@ -11,6 +11,85 @@ namespace geoqp
 {
     namespace internal
     {
+        // Helper: Compute squared Euclidean distance from vertex to x_bar using SIMD unrolling
+        inline double compute_distance_squared_ptr(
+            const double *vptr, const double *xbar_ptr, int n)
+        {
+            const double *GEOQP_RESTRICT v = vptr;
+            const double *GEOQP_RESTRICT xb = xbar_ptr;
+            
+            double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
+            int i = 0;
+            GEOQP_UNROLL_LOOP_4
+            for (; i + 3 < n; i += 4)
+            {
+                double d0 = v[i] - xb[i];
+                double d1 = v[i + 1] - xb[i + 1];
+                double d2 = v[i + 2] - xb[i + 2];
+                double d3 = v[i + 3] - xb[i + 3];
+                sum0 += d0 * d0;
+                sum1 += d1 * d1;
+                sum2 += d2 * d2;
+                sum3 += d3 * d3;
+            }
+            double res = (sum0 + sum1) + (sum2 + sum3);
+            for (; i < n; ++i)
+            {
+                double d = v[i] - xb[i];
+                res += d * d;
+            }
+            return res;
+        }
+
+        // Helper: Fast 64-bit fingerprint for a vertex via FNV hashing
+        inline uint64_t compute_vertex_fingerprint(const double *vptr, int n, double tol)
+        {
+            const double use_tol = std::max(tol, 1e-12);
+            uint64_t h = 14695981039346656037ULL; // FNV offset
+            for (int i = 0; i < n; ++i)
+            {
+                int64_t q = llround(vptr[i] / use_tol);
+                uint64_t x = static_cast<uint64_t>(q);
+                h ^= x;
+                h *= 1099511628211ULL; // FNV prime
+            }
+            return h;
+        }
+
+        // Helper: Check approximate equality of two vertices
+        inline bool vertices_approx_equal(const double *a, const double *b, int n, double tol)
+        {
+            for (int i = 0; i < n; ++i)
+                if (std::abs(a[i] - b[i]) > tol)
+                    return false;
+            return true;
+        }
+
+        // Helper: Check if vertex is already visited (hash + verify pattern)
+        inline bool is_vertex_visited(
+            const double *vptr, int n, double tol,
+            const std::vector<uint64_t> &visited_hash,
+            const std::vector<int> &visited_idx,
+            const std::vector<double> &vertices)
+        {
+            uint64_t vh = compute_vertex_fingerprint(vptr, n, tol);
+            for (uint64_t hv : visited_hash)
+            {
+                ::geoqp::timing::init_counter_hash_checks.fetch_add(1, std::memory_order_relaxed);
+                if (hv == vh)
+                {
+                    // Verify on hash match
+                    for (int vid : visited_idx)
+                    {
+                        ::geoqp::timing::init_counter_eq_checks.fetch_add(1, std::memory_order_relaxed);
+                        const double *visited_ptr = vertices.data() + static_cast<size_t>(vid) * static_cast<size_t>(n);
+                        if (vertices_approx_equal(visited_ptr, vptr, n, tol))
+                            return true;
+                    }
+                }
+            }
+            return false;
+        }
 
         Initializer::Initializer(
             const double *Q, const double *A, const double *b,
@@ -141,37 +220,7 @@ namespace geoqp
         double Initializer::compute_euclidean_distance_squared(
             const std::vector<double> &v) const
         {
-            const double *GEOQP_RESTRICT v_ptr = v.data();
-            const double *GEOQP_RESTRICT xbar_ptr = x_bar_.data();
-
-            double sum0 = 0.0;
-            double sum1 = 0.0;
-            double sum2 = 0.0;
-            double sum3 = 0.0;
-
-            int i = 0;
-            for (; i + 3 < n_; i += 4)
-            {
-                double d0 = v_ptr[i] - xbar_ptr[i];
-                double d1 = v_ptr[i + 1] - xbar_ptr[i + 1];
-                double d2 = v_ptr[i + 2] - xbar_ptr[i + 2];
-                double d3 = v_ptr[i + 3] - xbar_ptr[i + 3];
-
-                sum0 += d0 * d0;
-                sum1 += d1 * d1;
-                sum2 += d2 * d2;
-                sum3 += d3 * d3;
-            }
-
-            double dist_sq = (sum0 + sum1) + (sum2 + sum3);
-
-            for (; i < n_; ++i)
-            {
-                double d = v_ptr[i] - xbar_ptr[i];
-                dist_sq += d * d;
-            }
-
-            return dist_sq;
+            return compute_distance_squared_ptr(v.data(), x_bar_.data(), n_);
         }
 
         bool Initializer::is_good_vertex(
@@ -289,30 +338,6 @@ namespace geoqp
                 }
             }
 
-            auto dist_sq = [&](const std::vector<double> &v) {
-                return compute_euclidean_distance_squared(v);
-            };
-
-            auto approx_eq = [&](const std::vector<double> &a, const std::vector<double> &b, double tol = 1e-8) {
-                for (int i = 0; i < n_; ++i)
-                    if (std::abs(a[i] - b[i]) > tol) return false;
-                return true;
-            };
-
-            // Fast 64-bit fingerprint for a vertex: quantize coordinates by tol
-            auto vertex_fingerprint = [&](const std::vector<double> &v, double tol)->uint64_t {
-                const double use_tol = std::max(tol, 1e-12);
-                uint64_t h = 14695981039346656037ULL; // FNV offset
-                for (int i = 0; i < n_; ++i)
-                {
-                    int64_t q = llround(v[i] / use_tol);
-                    uint64_t x = static_cast<uint64_t>(q);
-                    h ^= x;
-                    h *= 1099511628211ULL; // FNV prime
-                }
-                return h;
-            };
-
             // Flat storage for vertices to avoid many small allocations
             const int reserve_hint = std::min(512, std::max(32, n_ * 8));
             std::vector<double> vertices;                // flat: consecutive vertex blocks of length n_
@@ -343,31 +368,10 @@ namespace geoqp
             // pointer-based helpers
             auto ptr_of = [&](int idx)->const double* { return vertices.data() + static_cast<size_t>(idx) * static_cast<size_t>(n_); };
 
-            auto dist_sq_ptr = [&](const double *vptr)->double {
-                const double *GEOQP_RESTRICT xbar_ptr = x_bar_.data();
-                double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
-                int i = 0;
-                for (; i + 3 < n_; i += 4)
-                {
-                    double d0 = vptr[i] - xbar_ptr[i];
-                    double d1 = vptr[i+1] - xbar_ptr[i+1];
-                    double d2 = vptr[i+2] - xbar_ptr[i+2];
-                    double d3 = vptr[i+3] - xbar_ptr[i+3];
-                    sum0 += d0*d0; sum1 += d1*d1; sum2 += d2*d2; sum3 += d3*d3;
-                }
-                double res = (sum0 + sum1) + (sum2 + sum3);
-                for (; i < n_; ++i) { double d = vptr[i] - x_bar_[i]; res += d*d; }
-                return res;
-            };
-
-            auto approx_eq_ptr = [&](const double *a, const double *b, double tol = 1e-8)->bool {
-                for (int i = 0; i < n_; ++i) if (std::abs(a[i] - b[i]) > tol) return false; return true;
-            };
-
             // push start
             int start_idx = push_vertex(start);
             visited_idx.push_back(start_idx);
-            visited_hash.push_back(vertex_fingerprint(start, 1e-8));
+            visited_hash.push_back(compute_vertex_fingerprint(start.data(), n_, 1e-8));
 
             // get neighbors of start into frontier using flat API and append directly into vertices
             {
@@ -394,7 +398,7 @@ namespace geoqp
                 if (is_good_vertex(start, active))
                 {
                     best_vertex = start;
-                    best_dist = dist_sq_ptr(ptr_of(start_idx));
+                    best_dist = compute_distance_squared_ptr(ptr_of(start_idx), x_bar_.data(), n_);
                 }
             }
 
@@ -406,7 +410,7 @@ namespace geoqp
                 double pick_dist = -1.0;
                 for (size_t fi = 0; fi < frontier_idx.size(); ++fi)
                 {
-                    double d = dist_sq_ptr(ptr_of(frontier_idx[fi]));
+                    double d = compute_distance_squared_ptr(ptr_of(frontier_idx[fi]), x_bar_.data(), n_);
                     if (d > pick_dist) { pick_dist = d; pick_i = static_cast<int>(fi); }
                 }
 
@@ -418,49 +422,17 @@ namespace geoqp
                 // record that we picked a frontier vertex
                 ::geoqp::timing::init_counter_frontier_picks.fetch_add(1, std::memory_order_relaxed);
 
-                // compute fingerprint directly from pointer to avoid allocation
-                auto vertex_fingerprint_ptr = [&](const double *vp, double tol)->uint64_t {
-                    const double use_tol = std::max(tol, 1e-12);
-                    uint64_t h = 14695981039346656037ULL;
-                    for (int ii = 0; ii < n_; ++ii)
-                    {
-                        int64_t q = llround(vp[ii] / use_tol);
-                        uint64_t x = static_cast<uint64_t>(q);
-                        h ^= x;
-                        h *= 1099511628211ULL;
-                    }
-                    return h;
-                };
+                const double *vptr = ptr_of(vidx);
 
-                uint64_t vh;
-                {
-                    geoqp::timing::ScopedTimer __t_hash(geoqp::timing::init_hash_ns, geoqp::timing::init_hash_count);
-                    vh = vertex_fingerprint_ptr(ptr_of(vidx), 1e-8);
-                }
-                bool already_seen = false;
-                for (uint64_t hv : visited_hash)
-                {
-            ::geoqp::timing::init_counter_hash_checks.fetch_add(1, std::memory_order_relaxed);
-                    if (hv == vh)
-                    {
-                        // verify on match
-                        bool eq_found = false;
-                        for (int vid : visited_idx)
-                        {
-                ::geoqp::timing::init_counter_eq_checks.fetch_add(1, std::memory_order_relaxed);
-                            geoqp::timing::ScopedTimer __t_eq(geoqp::timing::init_eq_ns, geoqp::timing::init_eq_count);
-                            if (approx_eq_ptr(ptr_of(vid), ptr_of(vidx))) { eq_found = true; break; }
-                        }
-                        if (eq_found) { already_seen = true; break; }
-                    }
-                }
-                if (already_seen) continue;
+                // Check if vertex was already visited
+                if (is_vertex_visited(vptr, n_, 1e-8, visited_hash, visited_idx, vertices))
+                    continue;
 
                 visited_idx.push_back(vidx);
-                visited_hash.push_back(vh);
-                const double *vptr = ptr_of(vidx);
+                visited_hash.push_back(compute_vertex_fingerprint(vptr, n_, 1e-8));
                 vertices_explored++;
                 ::geoqp::timing::init_counter_vertices_explored.fetch_add(1, std::memory_order_relaxed);
+                
                 // check goodness
                 {
                     // create a temporary vector view for polytope API
@@ -471,7 +443,7 @@ namespace geoqp
                         auto active = polytope.get_active_constraints(vview);
                         if (is_good_vertex(vview, active))
                         {
-                            double d = dist_sq_ptr(vptr);
+                            double d = compute_distance_squared_ptr(vptr, x_bar_.data(), n_);
                             if (d > best_dist)
                             {
                                 best_dist = d;
@@ -494,29 +466,14 @@ namespace geoqp
                 for (size_t off = before2; off + static_cast<size_t>(n_) <= after2; off += static_cast<size_t>(n_))
                 {
                     const double *nvptr = vertices.data() + off;
-                    uint64_t nh = vertex_fingerprint_ptr(nvptr, 1e-8);
-                    bool seen2 = false;
+                    bool seen2 = is_vertex_visited(nvptr, n_, 1e-8, visited_hash, visited_idx, vertices);
                     ::geoqp::timing::init_counter_neighbor_expansions.fetch_add(1, std::memory_order_relaxed);
-                    for (uint64_t hv : visited_hash)
-                    {
-                        ::geoqp::timing::init_counter_hash_checks.fetch_add(1, std::memory_order_relaxed);
-                        if (hv == nh)
-                        {
-                            // verify on hash match
-                            for (int vid : visited_idx)
-                            {
-                                ::geoqp::timing::init_counter_eq_checks.fetch_add(1, std::memory_order_relaxed);
-                                if (approx_eq_ptr(ptr_of(vid), nvptr)) { seen2 = true; break; }
-                            }
-                            if (seen2) break;
-                        }
-                    }
+                    
                     if (!seen2)
                     {
                         int nidx = static_cast<int>(off / static_cast<size_t>(n_));
                         frontier_idx.push_back(nidx);
                         ::geoqp::timing::init_counter_frontier_pushes.fetch_add(1, std::memory_order_relaxed);
-                        // candidate solve check timing not needed here; small solves are timed in polytope.get_neighbors_flat via candidate construction
                     }
                 }
             }
