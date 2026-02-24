@@ -9,6 +9,7 @@ namespace geoqp
 {
     namespace
     {
+#ifdef GEOQP_DEBUG
         inline void print_phase2_debug(int phase2_iterations, int initial_face_size,
                                        const std::vector<int> &initial_face,
                                        const std::vector<double> &good_vertex,
@@ -76,10 +77,8 @@ namespace geoqp
                 std::cout << oss2.str();
             }
         }
-    }
+#endif
 
-    namespace
-    {
         bool is_feasible_ptr(const double *GEOQP_RESTRICT x, const double *GEOQP_RESTRICT A,
                              const double *GEOQP_RESTRICT b, int m, int n, double tol)
         {
@@ -179,6 +178,16 @@ namespace geoqp
     public:
         explicit SolverImpl(const Config &config) : config_(config) {}
 
+        // Workspace members to eliminate per-solve heap allocations
+        std::vector<double> ws_good_vertex_;
+        std::vector<double> ws_initial_vertex_;
+        std::vector<int> ws_initial_face_;
+        std::vector<int> ws_optimal_face_;
+        std::vector<double> ws_lambda_local_;
+        std::vector<double> ws_Ax_bar_;
+        std::vector<double> ws_temp_n_; // For Cholesky-based objective computation
+        std::vector<double> ws_d_;      // For ray computation in debug paths
+
         Solution solve(const Problem &problem)
         {
             using Clock = std::chrono::high_resolution_clock;
@@ -233,7 +242,7 @@ namespace geoqp
 
                 internal::Polytope polytope(problem.A.data(), problem.b.data(),
                                             problem.m, problem.n);
-                std::vector<double> initial_vertex = polytope.find_initial_vertex();
+                ws_initial_vertex_ = polytope.find_initial_vertex();
 
                 if (config_.verbosity >= 2)
                 {
@@ -246,8 +255,8 @@ namespace geoqp
                     problem.Q.data(), problem.A.data(), problem.b.data(), x_bar,
                     problem.m, problem.n, config_);
 
-                std::vector<double> good_vertex = initializer.find_good_vertex(
-                    initial_vertex, sol.phase1_iterations, sol.vertices_explored);
+                ws_good_vertex_ = initializer.find_good_vertex(
+                    ws_initial_vertex_, sol.phase1_iterations, sol.vertices_explored);
 
                 auto phase1_end = Clock::now();
                 sol.phase1_time = std::chrono::duration<double>(phase1_end - phase1_start).count();
@@ -264,81 +273,49 @@ namespace geoqp
                     problem.Q.data(), problem.A.data(), problem.b.data(), x_bar,
                     problem.m, problem.n, config_);
 
-                std::vector<int> initial_face = face_hopper.find_initial_face(good_vertex);
+                ws_initial_face_ = face_hopper.find_initial_face(ws_good_vertex_);
 
                 if (config_.verbosity >= 2)
                 {
-                    std::cout << "Initial face has " << initial_face.size() << " constraints\n";
+                    std::cout << "Initial face has " << ws_initial_face_.size() << " constraints\n";
                 }
 
-                // When verbose (high), compute ray intersection parameter t for each constraint
-                // to report t_min/t_max and whether initial_face matches the t_max candidate.
+// Debug: When verbose, compute ray intersection parameter t
+#ifdef GEOQP_DEBUG
                 if (config_.verbosity >= 3)
                 {
-                    std::vector<double> d(problem.n);
-                    for (int i = 0; i < problem.n; ++i)
-                        d[i] = x_bar[i] - good_vertex[i];
-
-                    int best_t_min_idx = -1, best_t_max_idx = -1;
-                    double best_t_min = 1e300, best_t_max = -1e300;
-                    std::vector<double> t_vals(problem.m);
-                    for (int ci = 0; ci < problem.m; ++ci)
-                    {
-                        const double *row = problem.A.data() + ci * problem.n;
-                        double dot_g = 0.0;
-                        double dot_d = 0.0;
-                        for (int j = 0; j < problem.n; ++j)
-                        {
-                            dot_g += row[j] * good_vertex[j];
-                            dot_d += row[j] * d[j];
-                        }
-                        double numer = problem.b[ci] - dot_g;
-                        double denom = dot_d;
-                        double t = std::numeric_limits<double>::infinity();
-                        if (std::abs(denom) > 1e-18)
-                            t = numer / denom;
-                        t_vals[ci] = t;
-                        if (t > 0.0 && t < 1.0)
-                        {
-                            if (t < best_t_min)
-                            {
-                                best_t_min = t;
-                                best_t_min_idx = ci;
-                            }
-                            if (t > best_t_max)
-                            {
-                                best_t_max = t;
-                                best_t_max_idx = ci;
-                            }
-                        }
-                    }
-
-                    print_ray_trace(best_t_min_idx, best_t_min, best_t_max_idx, best_t_max,
-                                    initial_face, t_vals, config_.verbosity);
+                    compute_ax_bar(problem.A.data(), x_bar.data(), problem.m, problem.n);
+                    compute_and_print_ray_trace(problem.A.data(), x_bar, ws_good_vertex_,
+                                                problem.m, problem.n);
                 }
+#endif
 
-                std::vector<int> optimal_face = face_hopper.find_optimal_face(
-                    initial_face, sol.phase2_iterations);
+                // Phase II: Find optimal face
+                ws_optimal_face_ = face_hopper.find_optimal_face(
+                    ws_initial_face_, sol.phase2_iterations);
 
-                print_phase2_debug(sol.phase2_iterations, static_cast<int>(initial_face.size()),
-                                   initial_face, good_vertex, config_.verbosity);
-                print_large_phase2_warning(sol.phase2_iterations, static_cast<int>(initial_face.size()),
-                                          config_.verbosity);
+#ifdef GEOQP_DEBUG
+                print_phase2_debug(sol.phase2_iterations, static_cast<int>(ws_initial_face_.size()),
+                                   ws_initial_face_, ws_good_vertex_, config_.verbosity);
+                print_large_phase2_warning(sol.phase2_iterations, static_cast<int>(ws_initial_face_.size()),
+                                           config_.verbosity);
+#endif
 
                 auto phase2_end = Clock::now();
                 sol.phase2_time = std::chrono::duration<double>(phase2_end - phase2_start).count();
 
                 if (config_.verbosity >= 1)
                 {
-                    std::cout << "Phase II: Optimal face found with " << optimal_face.size()
+                    std::cout << "Phase II: Optimal face found with " << ws_optimal_face_.size()
                               << " constraints after " << sol.phase2_iterations << " face hops\n";
                 }
 
-                if (optimal_face.empty())
+                if (ws_optimal_face_.empty())
                 {
                     sol.x = x_bar;
                     sol.lambda.resize(problem.m, 0.0);
-                    sol.objective_value = compute_objective(sol.x, problem.Q, problem.g, problem.n);
+                    sol.objective_value = compute_objective_fast(x_bar.data(), problem.Q.data(),
+                                                                 problem.g.data(), problem.n);
                     sol.active_set.clear();
                     sol.num_active_constraints = 0;
 
@@ -351,22 +328,17 @@ namespace geoqp
                 {
                     auto phase3_start = Clock::now();
 
-                    internal::Projector projector(
-                        problem.Q.data(), problem.A.data(), problem.b.data(), x_bar,
-                        face_hopper.get_Q_chol(),
-                        problem.m, problem.n, config_,
-                        &face_hopper.get_Q_inv());
-
-                    std::vector<double> lambda;
+                    // Use ProjectionSolver directly to leverage Q_inv if available
+                    ws_lambda_local_.resize(ws_optimal_face_.size());
                     sol.x.resize(problem.n);
 
-                    // Use ProjectionSolver directly instead of Projector to leverage Q_inv
                     bool success = internal::ProjectionSolver::solve(
-                        optimal_face, problem.Q.data(), problem.A.data(), problem.b.data(),
+                        ws_optimal_face_, problem.Q.data(), problem.A.data(), problem.b.data(),
                         x_bar, face_hopper.get_Q_chol(),
-                        problem.m, problem.n, sol.x, lambda,
+                        problem.m, problem.n, sol.x, ws_lambda_local_,
                         face_hopper.get_Q_inv(),
-                        face_hopper.q_is_diagonal(), face_hopper.get_Q_diag());
+                        face_hopper.q_is_diagonal(),
+                        face_hopper.get_Q_diag());
 
                     if (!success)
                     {
@@ -377,14 +349,15 @@ namespace geoqp
                     sol.phase3_time = std::chrono::duration<double>(phase3_end - phase3_start).count();
 
                     sol.lambda.resize(problem.m, 0.0);
-                    for (size_t i = 0; i < optimal_face.size(); ++i)
+                    for (size_t i = 0; i < ws_optimal_face_.size(); ++i)
                     {
-                        sol.lambda[optimal_face[i]] = lambda[i];
+                        sol.lambda[ws_optimal_face_[i]] = ws_lambda_local_[i];
                     }
 
-                    sol.active_set = optimal_face;
-                    sol.num_active_constraints = static_cast<int>(optimal_face.size());
-                    sol.objective_value = compute_objective(sol.x, problem.Q, problem.g, problem.n);
+                    sol.active_set = ws_optimal_face_;
+                    sol.num_active_constraints = static_cast<int>(ws_optimal_face_.size());
+                    sol.objective_value = compute_objective_fast(sol.x.data(), problem.Q.data(),
+                                                                problem.g.data(), problem.n);
 
                     if (config_.verbosity >= 1)
                     {
@@ -444,9 +417,7 @@ namespace geoqp
             sol.solve_time = std::chrono::duration<double>(end_time - start_time).count();
 
             return sol;
-        }
-
-        const Config &config() const { return config_; }
+        }        const Config &config() const { return config_; }
         void set_config(const Config &config) { config_ = config; }
 
         void setup(int n, int m, const double *Q, const double *A)
@@ -469,10 +440,20 @@ namespace geoqp
 
             is_setup_ = true;
 
+            // Preallocate all workspace vectors to avoid per-solve allocations
             ws_x_bar_.resize(n);
             ws_neg_g_.resize(n);
             ws_lambda_.resize(m);
             ws_cholesky_temp_.resize(n);
+
+            ws_good_vertex_.resize(n);
+            ws_initial_vertex_.resize(n);
+            ws_initial_face_.reserve(m);
+            ws_optimal_face_.reserve(m);
+            ws_lambda_local_.reserve(m);
+            ws_Ax_bar_.resize(m);
+            ws_temp_n_.resize(n);
+            ws_d_.resize(n);
 
             std::vector<double> dummy_b(m, 0.0);
             std::vector<double> dummy_x_bar(n, 0.0);
@@ -497,6 +478,15 @@ namespace geoqp
             last_solution_.active_set.clear();
         }
 
+        void setup_solve_objects(int n, int m, const double *Q, const double *A)
+        {
+            // Setup cached objects if not already done, or if dimensions changed
+            if (!is_setup_ || setup_n_ != n || setup_m_ != m)
+            {
+                setup(n, m, Q, A);
+            }
+        }
+
         bool is_setup() const { return is_setup_; }
 
         void clear_setup()
@@ -514,6 +504,15 @@ namespace geoqp
             ws_neg_g_.clear();
             ws_lambda_.clear();
             ws_cholesky_temp_.clear();
+
+            ws_good_vertex_.clear();
+            ws_initial_vertex_.clear();
+            ws_initial_face_.clear();
+            ws_optimal_face_.clear();
+            ws_lambda_local_.clear();
+            ws_Ax_bar_.clear();
+            ws_temp_n_.clear();
+            ws_d_.clear();
 
             cached_polytope_.reset();
             cached_initializer_.reset();
@@ -569,14 +568,13 @@ namespace geoqp
                 }
 
                 if (is_feasible_ptr(ws_x_bar_.data(), setup_A_, b,
-                                    setup_m_, setup_n_, config_.tolerance))
+                                    setup_m_, setup_n_, config_.constraint_tolerance))
                 {
                     if (config_.verbosity >= 1)
                     {
                         std::cout << "Unconstrained minimum is feasible - optimal!\n";
                     }
-                    sol.x.resize(setup_n_);
-                    std::copy(ws_x_bar_.begin(), ws_x_bar_.end(), sol.x.begin());
+                    sol.x = ws_x_bar_;
                     sol.lambda.resize(setup_m_, 0.0);
                     sol.objective_value = compute_objective_ptr(ws_x_bar_.data(), setup_Q_, g, setup_n_);
 
@@ -590,6 +588,10 @@ namespace geoqp
                     std::cout << "Unconstrained minimum infeasible - using geometric algorithm\n";
                 }
 
+                // Compute A*x_bar for reuse
+                compute_ax_bar(setup_A_, ws_x_bar_.data(), setup_m_, setup_n_);
+
+                // Update all cached objects with new bounds and x_bar
                 cached_polytope_->update_bounds(b);
                 cached_initializer_->update(b, ws_x_bar_);
                 cached_face_hopper_->update(b, ws_x_bar_);
@@ -610,17 +612,16 @@ namespace geoqp
                 }
 
                 auto phase1_start = Clock::now();
-                std::vector<double> good_vertex;
 
                 if (config_.warm_start && !last_solution_.x.empty())
                 {
-                    good_vertex = initial_vertex;
+                    ws_good_vertex_ = initial_vertex;
                     sol.phase1_iterations = 0;
                     sol.vertices_explored = 0;
                 }
                 else
                 {
-                    good_vertex = cached_initializer_->find_good_vertex(
+                    ws_good_vertex_ = cached_initializer_->find_good_vertex(
                         initial_vertex, sol.phase1_iterations, sol.vertices_explored);
                 }
 
@@ -629,78 +630,36 @@ namespace geoqp
 
                 auto phase2_start = Clock::now();
 
-                std::vector<int> initial_face;
                 if (config_.warm_start && !last_solution_.active_set.empty())
                 {
-                    initial_face = last_solution_.active_set;
+                    ws_initial_face_ = last_solution_.active_set;
                     if (config_.verbosity >= 2)
                     {
-                        std::cout << "Warm-starting Phase II with " << initial_face.size() << " active constraints\n";
+                        std::cout << "Warm-starting Phase II with " << ws_initial_face_.size() << " active constraints\n";
                     }
                 }
                 else
                 {
-                    initial_face = cached_face_hopper_->find_initial_face(good_vertex);
+                    ws_initial_face_ = cached_face_hopper_->find_initial_face(ws_good_vertex_);
                 }
 
-                // When verbose, compute intersection parameter t for the ray from good_vertex->x_bar
-                // and report t_min/t_max and whether the returned initial_face matches the t_max constraint.
+#ifdef GEOQP_DEBUG
                 if (config_.verbosity >= 3)
                 {
-                    const char *dbg_phase2_hs = std::getenv("GEOQP_DBG_PHASE2");
-                    // Compute direction d = x_bar - good_vertex (ws_x_bar_ holds x_bar for hotstart)
-                    std::vector<double> d(setup_n_);
-                    for (int i = 0; i < setup_n_; ++i)
-                        d[i] = ws_x_bar_[i] - good_vertex[i];
-
-                    int best_t_min_idx = -1, best_t_max_idx = -1;
-                    double best_t_min = 1e300, best_t_max = -1e300;
-                    std::vector<double> t_vals(setup_m_);
-                    for (int ci = 0; ci < setup_m_; ++ci)
-                    {
-                        const double *row = setup_A_ + ci * setup_n_;
-                        double dot_g = 0.0;
-                        double dot_d = 0.0;
-                        for (int j = 0; j < setup_n_; ++j)
-                        {
-                            dot_g += row[j] * good_vertex[j];
-                            dot_d += row[j] * d[j];
-                        }
-                        double numer = b[ci] - dot_g;
-                        double denom = dot_d;
-                        double t = std::numeric_limits<double>::infinity();
-                        if (std::abs(denom) > 1e-18)
-                            t = numer / denom;
-                        t_vals[ci] = t;
-                        if (t > 0.0 && t < 1.0)
-                        {
-                            if (t < best_t_min)
-                            {
-                                best_t_min = t;
-                                best_t_min_idx = ci;
-                            }
-                            if (t > best_t_max)
-                            {
-                                best_t_max = t;
-                                best_t_max_idx = ci;
-                            }
-                        }
-                    }
-
-                    print_ray_trace(best_t_min_idx, best_t_min, best_t_max_idx, best_t_max,
-                                    initial_face, t_vals, true);
+                    compute_and_print_ray_trace(setup_A_, ws_x_bar_, ws_good_vertex_,
+                                                setup_m_, setup_n_);
                 }
+#endif
 
-                std::vector<int> optimal_face = cached_face_hopper_->find_optimal_face(
-                    initial_face, sol.phase2_iterations);
+                ws_optimal_face_ = cached_face_hopper_->find_optimal_face(
+                    ws_initial_face_, sol.phase2_iterations);
 
                 auto phase2_end = Clock::now();
                 sol.phase2_time = std::chrono::duration<double>(phase2_end - phase2_start).count();
 
-                if (optimal_face.empty())
+                if (ws_optimal_face_.empty())
                 {
-                    sol.x.resize(setup_n_);
-                    std::copy(ws_x_bar_.begin(), ws_x_bar_.end(), sol.x.begin());
+                    sol.x = ws_x_bar_;
                     sol.lambda.resize(setup_m_, 0.0);
                     sol.objective_value = compute_objective_ptr(sol.x.data(), setup_Q_, g, setup_n_);
                     sol.active_set.clear();
@@ -710,20 +669,20 @@ namespace geoqp
                 {
                     auto phase3_start = Clock::now();
 
-                    // If the face is the same as the one from Phase II, we can reuse the result
-                    sol.x = cached_projector_->project_onto_face(optimal_face, ws_lambda_);
+                    // Use cached projector to project onto the optimal face
+                    sol.x = cached_projector_->project_onto_face(ws_optimal_face_, ws_lambda_);
 
                     auto phase3_end = Clock::now();
                     sol.phase3_time = std::chrono::duration<double>(phase3_end - phase3_start).count();
 
                     sol.lambda.resize(setup_m_, 0.0);
-                    for (size_t i = 0; i < optimal_face.size(); ++i)
+                    for (size_t i = 0; i < ws_optimal_face_.size(); ++i)
                     {
-                        sol.lambda[optimal_face[i]] = ws_lambda_[i];
+                        sol.lambda[ws_optimal_face_[i]] = ws_lambda_[i];
                     }
 
-                    sol.active_set = optimal_face;
-                    sol.num_active_constraints = static_cast<int>(optimal_face.size());
+                    sol.active_set = ws_optimal_face_;
+                    sol.num_active_constraints = static_cast<int>(ws_optimal_face_.size());
                     sol.objective_value = compute_objective_ptr(sol.x.data(), setup_Q_, g, setup_n_);
                 }
 
@@ -764,6 +723,171 @@ namespace geoqp
         }
 
     private:
+        // Helper: Compute A*x_bar once for reuse in feasibility checks
+        inline void compute_ax_bar(const double *GEOQP_RESTRICT A,
+                                   const double *GEOQP_RESTRICT x_bar,
+                                   int m, int n)
+        {
+            for (int i = 0; i < m; ++i)
+            {
+                const double *GEOQP_RESTRICT row = A + i * n;
+                double sum0 = 0.0;
+                double sum1 = 0.0;
+                double sum2 = 0.0;
+                double sum3 = 0.0;
+
+                int j = 0;
+                for (; j <= n - 4; j += 4)
+                {
+                    sum0 += row[j] * x_bar[j];
+                    sum1 += row[j + 1] * x_bar[j + 1];
+                    sum2 += row[j + 2] * x_bar[j + 2];
+                    sum3 += row[j + 3] * x_bar[j + 3];
+                }
+                double ax = (sum0 + sum1) + (sum2 + sum3);
+                for (; j < n; ++j)
+                {
+                    ax += row[j] * x_bar[j];
+                }
+                ws_Ax_bar_[i] = ax;
+            }
+        }
+
+        // Fast objective computation using Cholesky factor if available
+        inline double compute_objective_fast(const double *GEOQP_RESTRICT x,
+                                             const double *GEOQP_RESTRICT Q,
+                                             const double *GEOQP_RESTRICT g,
+                                             int n)
+        {
+            // Linear part
+            double lin_sum0 = 0.0;
+            double lin_sum1 = 0.0;
+            double lin_sum2 = 0.0;
+            double lin_sum3 = 0.0;
+
+            int i = 0;
+            for (; i <= n - 4; i += 4)
+            {
+                lin_sum0 += g[i] * x[i];
+                lin_sum1 += g[i + 1] * x[i + 1];
+                lin_sum2 += g[i + 2] * x[i + 2];
+                lin_sum3 += g[i + 3] * x[i + 3];
+            }
+            double lin_obj = (lin_sum0 + lin_sum1) + (lin_sum2 + lin_sum3);
+            for (; i < n; ++i)
+            {
+                lin_obj += g[i] * x[i];
+            }
+
+            // Quadratic part - use Cholesky if available
+            double quad_obj = 0.0;
+
+            if (has_Q_chol_ && !Q_chol_.empty())
+            {
+                // Compute y = L * x
+                for (int j = 0; j < n; ++j)
+                {
+                    const double *L_row = Q_chol_.data() + j * n;
+                    double y_j = 0.0;
+                    for (int k = 0; k <= j; ++k)
+                    {
+                        y_j += L_row[k] * x[k];
+                    }
+                    ws_temp_n_[j] = y_j;
+                }
+                // Compute quad_obj = y^T * y
+                for (int j = 0; j < n; ++j)
+                {
+                    quad_obj += ws_temp_n_[j] * ws_temp_n_[j];
+                }
+            }
+            else
+            {
+                // Fallback to full quadratic computation
+                for (i = 0; i < n; ++i)
+                {
+                    const double *Q_row = Q + i * n;
+                    const double xi = x[i];
+
+                    double row_sum0 = 0.0;
+                    double row_sum1 = 0.0;
+                    double row_sum2 = 0.0;
+                    double row_sum3 = 0.0;
+
+                    int j = 0;
+                    for (; j <= n - 4; j += 4)
+                    {
+                        row_sum0 += Q_row[j] * x[j];
+                        row_sum1 += Q_row[j + 1] * x[j + 1];
+                        row_sum2 += Q_row[j + 2] * x[j + 2];
+                        row_sum3 += Q_row[j + 3] * x[j + 3];
+                    }
+
+                    double row_dot = (row_sum0 + row_sum1) + (row_sum2 + row_sum3);
+
+                    for (; j < n; ++j)
+                    {
+                        row_dot += Q_row[j] * x[j];
+                    }
+
+                    quad_obj += xi * row_dot;
+                }
+            }
+
+            return 0.5 * quad_obj + lin_obj;
+        }
+
+#ifdef GEOQP_DEBUG
+        // Debug helper: Compute and print ray intersection trace
+        inline void compute_and_print_ray_trace(const double *GEOQP_RESTRICT A,
+                                                const std::vector<double> &x_bar,
+                                                const std::vector<double> &good_vertex,
+                                                int m, int n)
+        {
+            // Compute direction d = x_bar - good_vertex
+            for (int i = 0; i < n; ++i)
+                ws_d_[i] = x_bar[i] - good_vertex[i];
+
+            int best_t_min_idx = -1, best_t_max_idx = -1;
+            double best_t_min = 1e300, best_t_max = -1e300;
+
+            std::vector<double> t_vals(m);
+            for (int ci = 0; ci < m; ++ci)
+            {
+                const double *row = A + ci * n;
+                double dot_g = 0.0;
+                double dot_d = 0.0;
+                for (int j = 0; j < n; ++j)
+                {
+                    dot_g += row[j] * good_vertex[j];
+                    dot_d += row[j] * ws_d_[j];
+                }
+                double numer = ws_Ax_bar_[ci] - dot_g;
+                double denom = dot_d;
+                double t = std::numeric_limits<double>::infinity();
+                if (std::abs(denom) > 1e-18)
+                    t = numer / denom;
+                t_vals[ci] = t;
+                if (t > 0.0 && t < 1.0)
+                {
+                    if (t < best_t_min)
+                    {
+                        best_t_min = t;
+                        best_t_min_idx = ci;
+                    }
+                    if (t > best_t_max)
+                    {
+                        best_t_max = t;
+                        best_t_max_idx = ci;
+                    }
+                }
+            }
+
+            print_ray_trace(best_t_min_idx, best_t_min, best_t_max_idx, best_t_max,
+                            ws_initial_face_, t_vals, config_.verbosity);
+        }
+#endif
+
         Config config_;
 
         bool is_setup_ = false;
