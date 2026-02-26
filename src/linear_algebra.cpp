@@ -44,64 +44,89 @@ namespace geoqp
             }
         }
 
-    double LinearAlgebra::dot(const double *GEOQP_RESTRICT x, const double *GEOQP_RESTRICT y, int n)
+        double LinearAlgebra::dot(const double *GEOQP_RESTRICT x, const double *GEOQP_RESTRICT y, int n)
         {
             geoqp::timing::la_dot_elems.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
             geoqp::timing::la_dot_count.fetch_add(1, std::memory_order_relaxed);
             // Fast small-size specializations to avoid loop/setup overhead for tiny vectors.
             switch (n)
             {
-                case 0: return 0.0;
-                case 1: return x[0]*y[0];
-                case 2: return x[0]*y[0] + x[1]*y[1];
-                case 3: return x[0]*y[0] + x[1]*y[1] + x[2]*y[2];
-                case 4: return x[0]*y[0] + x[1]*y[1] + x[2]*y[2] + x[3]*y[3];
-                case 5: return x[0]*y[0] + x[1]*y[1] + x[2]*y[2] + x[3]*y[3] + x[4]*y[4];
-                case 6: return x[0]*y[0] + x[1]*y[1] + x[2]*y[2] + x[3]*y[3] + x[4]*y[4] + x[5]*y[5];
-                case 7: return x[0]*y[0] + x[1]*y[1] + x[2]*y[2] + x[3]*y[3] + x[4]*y[4] + x[5]*y[5] + x[6]*y[6];
-                case 8: return x[0]*y[0] + x[1]*y[1] + x[2]*y[2] + x[3]*y[3] + x[4]*y[4] + x[5]*y[5] + x[6]*y[6] + x[7]*y[7];
-                case 9: {
-                    double r = 0.0;
-                    for (int i=0;i<9;++i) r += x[i]*y[i];
-                    return r;
-                }
-                case 10: {
-                    double r = 0.0;
-                    for (int i=0;i<10;++i) r += x[i]*y[i];
-                    return r;
-                }
-                case 11: {
-                    double r = 0.0;
-                    for (int i=0;i<11;++i) r += x[i]*y[i];
-                    return r;
-                }
-                case 12: {
-                    double r = 0.0;
-                    for (int i=0;i<12;++i) r += x[i]*y[i];
-                    return r;
-                }
-                case 13: {
-                    double r = 0.0;
-                    for (int i=0;i<13;++i) r += x[i]*y[i];
-                    return r;
-                }
-                case 14: {
-                    double r = 0.0;
-                    for (int i=0;i<14;++i) r += x[i]*y[i];
-                    return r;
-                }
-                case 15: {
-                    double r = 0.0;
-                    for (int i=0;i<15;++i) r += x[i]*y[i];
-                    return r;
-                }
-                case 16: {
-                    double r = 0.0;
-                    for (int i=0;i<16;++i) r += x[i]*y[i];
-                    return r;
-                }
-                default:
-                    break;
+            case 0:
+                return 0.0;
+            case 1:
+                return x[0] * y[0];
+            case 2:
+                return x[0] * y[0] + x[1] * y[1];
+            case 3:
+                return x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+            case 4:
+                return x[0] * y[0] + x[1] * y[1] + x[2] * y[2] + x[3] * y[3];
+            case 5:
+                return x[0] * y[0] + x[1] * y[1] + x[2] * y[2] + x[3] * y[3] + x[4] * y[4];
+            case 6:
+                return x[0] * y[0] + x[1] * y[1] + x[2] * y[2] + x[3] * y[3] + x[4] * y[4] + x[5] * y[5];
+            case 7:
+                return x[0] * y[0] + x[1] * y[1] + x[2] * y[2] + x[3] * y[3] + x[4] * y[4] + x[5] * y[5] + x[6] * y[6];
+            case 8:
+                return x[0] * y[0] + x[1] * y[1] + x[2] * y[2] + x[3] * y[3] + x[4] * y[4] + x[5] * y[5] + x[6] * y[6] + x[7] * y[7];
+            case 9:
+            {
+                double r = 0.0;
+                for (int i = 0; i < 9; ++i)
+                    r += x[i] * y[i];
+                return r;
+            }
+            case 10:
+            {
+                double r = 0.0;
+                for (int i = 0; i < 10; ++i)
+                    r += x[i] * y[i];
+                return r;
+            }
+            case 11:
+            {
+                double r = 0.0;
+                for (int i = 0; i < 11; ++i)
+                    r += x[i] * y[i];
+                return r;
+            }
+            case 12:
+            {
+                double r = 0.0;
+                for (int i = 0; i < 12; ++i)
+                    r += x[i] * y[i];
+                return r;
+            }
+            case 13:
+            {
+                double r = 0.0;
+                for (int i = 0; i < 13; ++i)
+                    r += x[i] * y[i];
+                return r;
+            }
+            case 14:
+            {
+                double r = 0.0;
+                for (int i = 0; i < 14; ++i)
+                    r += x[i] * y[i];
+                return r;
+            }
+            case 15:
+            {
+                double r = 0.0;
+                for (int i = 0; i < 15; ++i)
+                    r += x[i] * y[i];
+                return r;
+            }
+            case 16:
+            {
+                double r = 0.0;
+                for (int i = 0; i < 16; ++i)
+                    r += x[i] * y[i];
+                return r;
+            }
+            default:
+                break;
             }
 
             // Generic fallback: 4-way unrolled loop (no per-call timer here).
@@ -252,7 +277,8 @@ namespace geoqp
         {
             geoqp::timing::ScopedTimer _t_schol(geoqp::timing::la_solve_cholesky_ns, geoqp::timing::la_solve_cholesky_count);
             static thread_local std::vector<double> tl_workspace;
-            if (tl_workspace.size() < static_cast<size_t>(n)) tl_workspace.resize(n);
+            if (tl_workspace.size() < static_cast<size_t>(n))
+                tl_workspace.resize(n);
             forward_sub(L, b, tl_workspace.data(), n);
             backward_sub(L, tl_workspace.data(), x, n);
         }
@@ -268,7 +294,8 @@ namespace geoqp
                                             double *GEOQP_RESTRICT x, int n)
         {
             static thread_local std::vector<double> tl_L;
-            if (tl_L.size() < static_cast<size_t>(n) * static_cast<size_t>(n)) tl_L.resize(n * n);
+            if (tl_L.size() < static_cast<size_t>(n) * static_cast<size_t>(n))
+                tl_L.resize(n * n);
             cholesky(Q, tl_L.data(), n);
             solve_cholesky(tl_L.data(), b, x, n);
         }
@@ -279,8 +306,10 @@ namespace geoqp
             geoqp::timing::ScopedTimer _t_solve_full(geoqp::timing::la_cholesky_ns, geoqp::timing::la_cholesky_count);
             static thread_local std::vector<double> tl_A_copy;
             static thread_local std::vector<double> tl_b_copy;
-            if (tl_A_copy.size() < static_cast<size_t>(n) * static_cast<size_t>(n)) tl_A_copy.resize(n * n);
-            if (tl_b_copy.size() < static_cast<size_t>(n)) tl_b_copy.resize(n);
+            if (tl_A_copy.size() < static_cast<size_t>(n) * static_cast<size_t>(n))
+                tl_A_copy.resize(n * n);
+            if (tl_b_copy.size() < static_cast<size_t>(n))
+                tl_b_copy.resize(n);
             std::memcpy(tl_A_copy.data(), A, n * n * sizeof(double));
             std::memcpy(tl_b_copy.data(), b, n * sizeof(double));
             double *GEOQP_RESTRICT A_copy = tl_A_copy.data();
@@ -340,7 +369,8 @@ namespace geoqp
         {
             geoqp::timing::ScopedTimer _t_rank1(geoqp::timing::la_rank1_ns, geoqp::timing::la_rank1_count);
             static thread_local std::vector<double> tl_w;
-            if (tl_w.size() < static_cast<size_t>(k)) tl_w.resize(k);
+            if (tl_w.size() < static_cast<size_t>(k))
+                tl_w.resize(k);
             std::memcpy(tl_w.data(), v, k * sizeof(double));
 
             for (int i = 0; i < k; ++i)
@@ -393,7 +423,8 @@ namespace geoqp
             }
 
             static thread_local std::vector<double> tl_l;
-            if (tl_l.size() < static_cast<size_t>(k)) tl_l.resize(k);
+            if (tl_l.size() < static_cast<size_t>(k))
+                tl_l.resize(k);
             for (int i = 0; i < k; ++i)
             {
                 double sum = 0.0;
@@ -450,7 +481,8 @@ namespace geoqp
             }
 
             static thread_local std::vector<double> tl_L_work;
-            if (tl_L_work.size() < static_cast<size_t>(k) * static_cast<size_t>(k)) tl_L_work.resize(k * k);
+            if (tl_L_work.size() < static_cast<size_t>(k) * static_cast<size_t>(k))
+                tl_L_work.resize(k * k);
             for (int i = 0; i < k; ++i)
             {
                 for (int j = 0; j <= i; ++j)
