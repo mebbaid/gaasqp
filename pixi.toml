@@ -15,6 +15,10 @@ cxx-compiler = ">=1.11.0,<2"
 ninja = ">=1.12,<2"
 gtest = ">=1.14,<2"
 
+# conceptualization
+python = "*"
+matplotlib = "*"
+
 [target.linux-64.dependencies]
 valgrind = ">=3.26.0,<4"
 
@@ -28,6 +32,9 @@ benchmark = { cmd = "./build/benchmarks/benchmark", depends-on = ["build"] }
 benchmark-lipm = { cmd = "./build/benchmarks/benchmark_lipm_walking", depends-on = ["build"] }
 example = { cmd = "./build/examples/simple_example", depends-on = ["build"] }
 test = { cmd = "cd build && ctest --output-on-failure", depends-on = ["build"], description = "Run all tests" }
+
+
+level-sets = {cmd = "python  concept/level_sets.py"}
 
 [target.linux-64.tasks]
 valgrind = { cmd = "valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes ./build-debug/examples/simple_example", depends-on = ["build-debug"] }
