@@ -285,8 +285,31 @@ namespace geoqp
                 const double *A_ptr = has_bounds ? ws_A_exp_.data() : problem.A.data();
                 const double *b_ptr = has_bounds ? ws_b_exp_.data() : problem.b.data();
 
-                std::vector<double> x_bar = compute_unconstrained_minimum(
-                    problem.Q, problem.g, problem.n);
+                // ── Factor Q ONCE and reuse everywhere ──────────────────
+                std::vector<double> Q_chol_local(problem.n * problem.n);
+                bool has_Q_chol_local = false;
+                try
+                {
+                    internal::LinearAlgebra::cholesky(problem.Q.data(),
+                                                       Q_chol_local.data(), problem.n);
+                    has_Q_chol_local = true;
+                }
+                catch (...) {}
+
+                // Compute x̄ = -Q⁻¹ g using the Cholesky factor (avoids a second factorization)
+                std::vector<double> x_bar(problem.n);
+                if (has_Q_chol_local)
+                {
+                    std::vector<double> neg_g(problem.n);
+                    for (int i = 0; i < problem.n; ++i) neg_g[i] = -problem.g[i];
+                    internal::LinearAlgebra::solve_cholesky(
+                        Q_chol_local.data(), neg_g.data(), x_bar.data(), problem.n);
+                }
+                else
+                {
+                    x_bar = compute_unconstrained_minimum(
+                        problem.Q, problem.g, problem.n);
+                }
 
                 if (config_.verbosity >= 1)
                 {
@@ -325,17 +348,7 @@ namespace geoqp
 
                 auto phase1_start = Clock::now();
 
-                // Factor Q once here so both Initializer (Q-weighted distances / ν)
-                // and FaceHopper can share the same Cholesky factor.
-                std::vector<double> Q_chol_local(problem.n * problem.n);
-                bool has_Q_chol_local = false;
-                try
-                {
-                    internal::LinearAlgebra::cholesky(problem.Q.data(),
-                                                       Q_chol_local.data(), problem.n);
-                    has_Q_chol_local = true;
-                }
-                catch (...) {}
+                // Q_chol_local already factored above — share it with Initializer.
 
                 internal::Initializer initializer(
                     problem.Q.data(), A_ptr, b_ptr, x_bar,
@@ -361,13 +374,19 @@ namespace geoqp
 
                 auto phase2_start = Clock::now();
 
-                internal::FaceHopper face_hopper(
-                    problem.Q.data(), A_ptr, b_ptr, x_bar,
-                    m_exp, problem.n, config_);
-
-                // Re-use the Cholesky factor already computed for Phase I.
-                if (has_Q_chol_local)
-                    face_hopper.set_Q_chol(Q_chol_local);
+                // Use the pre-computed Cholesky factor when available,
+                // otherwise let FaceHopper compute its own.
+                auto make_face_hopper = [&]() -> internal::FaceHopper {
+                    if (has_Q_chol_local)
+                        return internal::FaceHopper(
+                            problem.Q.data(), A_ptr, b_ptr, x_bar,
+                            m_exp, problem.n, config_, Q_chol_local);
+                    else
+                        return internal::FaceHopper(
+                            problem.Q.data(), A_ptr, b_ptr, x_bar,
+                            m_exp, problem.n, config_);
+                };
+                internal::FaceHopper face_hopper = make_face_hopper();
 
                 ws_initial_face_ = face_hopper.find_initial_face(ws_good_vertex_);
 

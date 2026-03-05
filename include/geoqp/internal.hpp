@@ -114,6 +114,8 @@ namespace geoqp
             // Theorem 1 / Lemma 2 in the theory. No-op if not called.
             void set_Q_chol(const std::vector<double> &Q_chol);
 
+            const std::vector<double> &get_Axbar() const { return ws_Axbar_; }
+
             std::vector<double> find_good_vertex(
                 const std::vector<double> &initial_vertex,
                 int &iterations,
@@ -278,6 +280,15 @@ namespace geoqp
                 int m, int n,
                 const Config &config);
 
+            // Overload: accept a pre-computed Cholesky factor of Q to skip
+            // the O(n³) factorization inside the constructor.
+            FaceHopper(
+                const double *Q, const double *A, const double *b,
+                const std::vector<double> &x_bar,
+                int m, int n,
+                const Config &config,
+                const std::vector<double> &Q_chol);
+
             void update(const double *b, const std::vector<double> &x_bar)
             {
                 b_ = b;
@@ -304,6 +315,9 @@ namespace geoqp
 
             void set_Q_chol(const std::vector<double> &Q_chol) { Q_chol_ = Q_chol; }
 
+            // Accept a pre-computed A·x̄ vector (avoids redundant O(m·n) matvec).
+            void set_Axbar(const std::vector<double> &Axbar) { ws_Axbar_ = Axbar; }
+
         private:
             double compute_intersection_parameter(
                 const std::vector<double> &v,
@@ -329,6 +343,9 @@ namespace geoqp
                 const std::vector<double> &x_proj,
                 const std::vector<int> &initial_face,
                 bool force_geom_adj) const;
+
+            // Shared initialisation called by both constructors.
+            void init_common();
 
             const double *Q_;
             const double *A_;

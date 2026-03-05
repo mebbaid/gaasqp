@@ -34,6 +34,7 @@ namespace geoqp
             const Config &config) : Q_(Q), A_(A), b_(b), x_bar_(x_bar), m_(m), n_(n), config_(config),
                                     constraint_cache_(m, n)
         {
+            // No pre-supplied Cholesky — compute it here.
             Q_chol_.resize(n_ * n_);
             try
             {
@@ -43,12 +44,29 @@ namespace geoqp
             {
                 Q_chol_.clear();
             }
+            init_common();
+        }
 
-            int nonzero_q = 0;
+        FaceHopper::FaceHopper(
+            const double *Q, const double *A, const double *b,
+            const std::vector<double> &x_bar,
+            int m, int n,
+            const Config &config,
+            const std::vector<double> &Q_chol)
+            : Q_(Q), A_(A), b_(b), x_bar_(x_bar), m_(m), n_(n), config_(config),
+              constraint_cache_(m, n), Q_chol_(Q_chol)
+        {
+            // Q_chol already set from caller — skip O(n³) factorization.
+            init_common();
+        }
+
+        void FaceHopper::init_common()
+        {
             const int total_elements = n_ * n_;
             const double *GEOQP_RESTRICT Q_ptr = Q_;
             const double tol = 1e-12;
 
+            int nonzero_q = 0;
             int i = 0;
             GEOQP_UNROLL_LOOP_4
             for (; i + 3 < total_elements; i += 4)
@@ -99,18 +117,18 @@ namespace geoqp
             }
 
             // Preallocate all workspaces up-front
-            ws_residual_.resize(m);
-            ws_w_.resize(n);
-            ws_correction_.resize(n);
-            ws_x_star_.resize(n);
-            ws_lambda_.resize(m);
+            ws_residual_.resize(m_);
+            ws_w_.resize(n_);
+            ws_correction_.resize(n_);
+            ws_x_star_.resize(n_);
+            ws_lambda_.resize(m_);
             ws_Axbar_.resize(m_);
             ws_is_active_.assign(m_, 0);
-            ws_opt_x_star_.resize(n);
-            ws_opt_lambda_.resize(m);
-            ws_opt_violated_.reserve(m);
-            ws_opt_smaller_face_.reserve(m);
-            ws_opt_is_active_set_.resize(m, 0);
+            ws_opt_x_star_.resize(n_);
+            ws_opt_lambda_.resize(m_);
+            ws_opt_violated_.reserve(m_);
+            ws_opt_smaller_face_.reserve(m_);
+            ws_opt_is_active_set_.resize(m_, 0);
 
             LinearAlgebra::matvec(A_, x_bar_.data(), ws_Axbar_.data(), m_, n_);
 
