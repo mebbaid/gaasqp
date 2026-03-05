@@ -1075,10 +1075,10 @@ void runBenchmarkSuit(const std::string &suiteName,
 //   - sol.x_phase1 (v*) and sol.vertices_explored are meaningful
 //   - The box fast-path (Proposition 3) is exercised
 //
-// Per Lemma 2 (math.tex §2): v* = argmax_{v ∈ V_good} ‖v − x̄‖_Q²
+// Per Lemma 2: v* = argmax_{v ∈ V_good} ‖v − x̄‖_Q²
 //   For diagonal Q the fast-path achieves the exact maximum.
 //
-// Per Theorem 1 (math.tex §2): Phase II hops ≤ # faces adjacent to F₀.
+// Per Theorem 1: Phase II hops ≤ # faces adjacent to F₀.
 //   For a pure-box polytope with m = 2n bound constraints and k active at v*,
 //   the upper bound is 2*(2n − k).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1171,7 +1171,7 @@ void runBoxTheorySuite(const std::string &suiteName,
                 all_solved = false;
                 continue;
             }
-            
+
             bool xbar_outside = (sol.phase1_iterations > 0 || sol.vertices_explored > 0);
             if (!xbar_outside)
             {

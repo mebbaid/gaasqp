@@ -581,7 +581,12 @@ namespace geoqp
             cached_projector_ = std::make_unique<internal::Projector>(
                 Q, A, dummy_b.data(), dummy_x_bar,
                 has_Q_chol_ ? Q_chol_ : std::vector<double>(), m, n, config_,
-                &cached_face_hopper_->get_Q_inv());
+                &cached_face_hopper_->get_Q_inv(),
+                cached_face_hopper_->q_is_diagonal(),
+                &cached_face_hopper_->get_Q_diag(),
+                cached_face_hopper_->has_diagonal_constraints(),
+                &cached_face_hopper_->get_constraint_var(),
+                &cached_face_hopper_->get_constraint_sign());
 
             last_solution_.x.clear();
             last_solution_.active_set.clear();

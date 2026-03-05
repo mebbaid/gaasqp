@@ -4,11 +4,9 @@
 #include <cmath>
 #include <limits>
 #include <algorithm>
-#include <set>
 #include <cstring>
 #include <iostream>
 #include <chrono>
-#include <sstream>
 
 namespace geoqp
 {
@@ -27,65 +25,6 @@ namespace geoqp
                       << " calls, " << stats.compute_projection_total << " ms\n";
             std::cout << "  find_optimal_face: " << stats.find_optimal_face_calls
                       << " calls, " << stats.find_optimal_face_total << " ms\n";
-        }
-
-        // Helper: Compute constraint violation using SIMD unrolling
-        inline double compute_constraint_violation(const double *a_row, const double *x,
-                                                   double b, int n)
-        {
-            double ax = 0.0;
-            int j = 0;
-            for (; j + 3 < n; j += 4)
-            {
-                ax += a_row[j] * x[j] + a_row[j + 1] * x[j + 1] + a_row[j + 2] * x[j + 2] + a_row[j + 3] * x[j + 3];
-            }
-            for (; j < n; ++j)
-                ax += a_row[j] * x[j];
-            return ax - b;
-        }
-
-        // Helper: Compute rank of constraint matrix rows
-        static inline int compute_rank_rows(const std::vector<int> &rows, const double *A, int n)
-        {
-            const int r = static_cast<int>(rows.size());
-            if (r == 0)
-                return 0;
-            std::vector<std::vector<double>> M(r, std::vector<double>(n));
-            for (int i = 0; i < r; ++i)
-            {
-                const double *row = A + rows[i] * n;
-                std::copy(row, row + n, M[i].data());
-            }
-            int rank = 0;
-            const double eps = 1e-10;
-            for (int col = 0; col < n && rank < r; ++col)
-            {
-                int pivot = -1;
-                for (int i = rank; i < r; ++i)
-                {
-                    if (std::abs(M[i][col]) > eps)
-                    {
-                        pivot = i;
-                        break;
-                    }
-                }
-                if (pivot == -1)
-                    continue;
-                std::swap(M[rank], M[pivot]);
-                double piv = M[rank][col];
-                for (int j = col; j < n; ++j)
-                    M[rank][j] /= piv;
-                for (int i = 0; i < r; ++i)
-                    if (i != rank)
-                    {
-                        double f = M[i][col];
-                        if (std::abs(f) > eps)
-                            for (int j = col; j < n; ++j)
-                                M[i][j] -= f * M[rank][j];
-                    }
-                ++rank;
-            }
-            return rank;
         }
 
         FaceHopper::FaceHopper(
@@ -125,115 +64,90 @@ namespace geoqp
             }
             q_is_dense_ = (nonzero_q > (total_elements / 2));
 
-            // Detect diagonal Q
+            // Detect diagonal Q and extract diagonal in one pass
             q_is_diagonal_ = true;
             Q_diag_.resize(n_);
             for (int i = 0; i < n_; ++i)
             {
                 Q_diag_[i] = Q_[i * n_ + i];
-                for (int j = 0; j < n_; ++j)
+                if (q_is_diagonal_)
                 {
-                    if (i != j && std::abs(Q_[i * n_ + j]) > 1e-12)
+                    for (int j = 0; j < n_; ++j)
                     {
-                        q_is_diagonal_ = false;
-                        break;
+                        if (i != j && std::abs(Q_[i * n_ + j]) > 1e-12)
+                        {
+                            q_is_diagonal_ = false;
+                            break;
+                        }
                     }
                 }
-                if (!q_is_diagonal_)
-                    break;
             }
 
             // Precompute Q_inv if Q is dense and n is manageable
             if (q_is_dense_ && n_ <= 256 && !Q_chol_.empty())
             {
                 Q_inv_.resize(n_ * n_);
+                std::vector<double> e(n_, 0.0);
                 for (int i = 0; i < n_; ++i)
                 {
-                    std::vector<double> e(n_, 0.0);
                     e[i] = 1.0;
                     LinearAlgebra::solve_cholesky(Q_chol_.data(), e.data(), &Q_inv_[i * n_], n_);
+                    e[i] = 0.0;
                 }
                 if (config_.verbosity >= 2)
-                {
                     std::cout << "  Q is dense - precomputed Q_inv for fast access\n";
-                }
             }
 
+            // Preallocate all workspaces up-front
             ws_residual_.resize(m);
             ws_w_.resize(n);
             ws_correction_.resize(n);
             ws_x_star_.resize(n);
             ws_lambda_.resize(m);
-
             ws_Axbar_.resize(m_);
-            LinearAlgebra::matvec(A_, x_bar_.data(), ws_Axbar_.data(), m_, n_);
-
-            if (static_cast<int>(ws_is_active_.size()) < m_)
-                ws_is_active_.assign(m_, 0);
-
-            // Preallocate workspace for find_optimal_face hot loop
+            ws_is_active_.assign(m_, 0);
             ws_opt_x_star_.resize(n);
             ws_opt_lambda_.resize(m);
-            ws_opt_violated_.reserve(m);        // Reserve max possible
-            ws_opt_smaller_face_.reserve(m);    // Reserve max possible
-            ws_opt_is_active_set_.resize(m, 0); // Bitset for O(1) membership test
+            ws_opt_violated_.reserve(m);
+            ws_opt_smaller_face_.reserve(m);
+            ws_opt_is_active_set_.resize(m, 0);
 
+            LinearAlgebra::matvec(A_, x_bar_.data(), ws_Axbar_.data(), m_, n_);
+
+            // Single-pass: detect box constraints and populate constraint_var_/constraint_sign_
+            constraint_var_.resize(m_);
+            constraint_sign_.resize(m_);
             has_diagonal_constraints_ = true;
-            for (int i = 0; i < m_ && has_diagonal_constraints_; ++i)
+            for (int i = 0; i < m_; ++i)
             {
-                const double *a_row = A_ + i * n_;
-                int nonzero_count = 0;
-                int nonzero_idx = -1;
+                const double *GEOQP_RESTRICT a_row = A_ + i * n_;
+                int nz_count = 0, nz_idx = -1;
+                double nz_val = 0.0;
                 for (int j = 0; j < n_; ++j)
                 {
-                    if (std::abs(a_row[j]) > 1e-10)
+                    const double v = a_row[j];
+                    if (std::abs(v) > 1e-10)
                     {
-                        nonzero_count++;
-                        nonzero_idx = j;
-                        if (std::abs(std::abs(a_row[j]) - 1.0) > 1e-10)
+                        ++nz_count;
+                        nz_idx = j;
+                        nz_val = v;
+                        if (nz_count > 1 || std::abs(std::abs(v) - 1.0) > 1e-10)
                         {
                             has_diagonal_constraints_ = false;
+                            // still populate for later fallback paths
                             break;
                         }
                     }
                 }
-                if (nonzero_count != 1)
-                {
-                    has_diagonal_constraints_ = false;
-                }
+                constraint_var_[i]  = (nz_idx >= 0) ? nz_idx : 0;
+                constraint_sign_[i] = (nz_val > 0.0) ? 1.0 : -1.0;
+                if (nz_count != 1) has_diagonal_constraints_ = false;
             }
 
             if (has_diagonal_constraints_ && config_.verbosity >= 2)
-            {
                 std::cout << "  Detected diagonal/box constraints - using fast path\n";
-            }
-
-            // Precompute per-constraint (var, sign) pairs for O(1) feasibility checks.
-            // Only valid when has_diagonal_constraints_ == true, but we populate
-            // them unconditionally so the arrays are always sized correctly.
-            constraint_var_.resize(m_);
-            constraint_sign_.resize(m_);
-            if (has_diagonal_constraints_)
-            {
-                for (int i = 0; i < m_; ++i)
-                {
-                    const double *a_row = A_ + i * n_;
-                    for (int j = 0; j < n_; ++j)
-                    {
-                        if (std::abs(a_row[j]) > 1e-10)
-                        {
-                            constraint_var_[i]  = j;
-                            constraint_sign_[i] = a_row[j] > 0.0 ? 1.0 : -1.0;
-                            break;
-                        }
-                    }
-                }
-            }
-
             if (config_.use_caching && !Q_chol_.empty() && config_.verbosity >= 2)
-            {
                 std::cout << "  Incremental Schur complement caching enabled\n";
-            }
         }
 
         double FaceHopper::compute_intersection_parameter(
@@ -241,34 +155,43 @@ namespace geoqp
             int constraint_idx) const
         {
             Timer t;
-            const double *GEOQP_RESTRICT a_row = A_ + constraint_idx * n_;
-            const double *GEOQP_RESTRICT v_ptr = v.data();
-            const double *GEOQP_RESTRICT xbar_ptr = x_bar_.data();
+            double av, ad;
 
-            double av0 = 0.0, av1 = 0.0, av2 = 0.0, av3 = 0.0;
-            double ad0 = 0.0, ad1 = 0.0, ad2 = 0.0, ad3 = 0.0;
-
-            int j = 0;
-            for (; j + 3 < n_; j += 4)
+            if (GEOQP_LIKELY(has_diagonal_constraints_))
             {
-                av0 += a_row[j] * v_ptr[j];
-                av1 += a_row[j + 1] * v_ptr[j + 1];
-                av2 += a_row[j + 2] * v_ptr[j + 2];
-                av3 += a_row[j + 3] * v_ptr[j + 3];
-
-                ad0 += a_row[j] * (xbar_ptr[j] - v_ptr[j]);
-                ad1 += a_row[j + 1] * (xbar_ptr[j + 1] - v_ptr[j + 1]);
-                ad2 += a_row[j + 2] * (xbar_ptr[j + 2] - v_ptr[j + 2]);
-                ad3 += a_row[j + 3] * (xbar_ptr[j + 3] - v_ptr[j + 3]);
+                // O(1) fast path for box/diagonal constraints
+                const int var       = constraint_var_[constraint_idx];
+                const double sign   = constraint_sign_[constraint_idx];
+                av = sign * v[var];
+                ad = sign * (x_bar_[var] - v[var]);
             }
-
-            double av = (av0 + av1) + (av2 + av3);
-            double ad = (ad0 + ad1) + (ad2 + ad3);
-
-            for (; j < n_; ++j)
+            else
             {
-                av += a_row[j] * v_ptr[j];
-                ad += a_row[j] * (xbar_ptr[j] - v_ptr[j]);
+                const double *GEOQP_RESTRICT a_row  = A_ + constraint_idx * n_;
+                const double *GEOQP_RESTRICT v_ptr  = v.data();
+                const double *GEOQP_RESTRICT xb_ptr = x_bar_.data();
+
+                double av0 = 0.0, av1 = 0.0, av2 = 0.0, av3 = 0.0;
+                double ad0 = 0.0, ad1 = 0.0, ad2 = 0.0, ad3 = 0.0;
+                int j = 0;
+                for (; j + 3 < n_; j += 4)
+                {
+                    av0 += a_row[j]     * v_ptr[j];
+                    av1 += a_row[j + 1] * v_ptr[j + 1];
+                    av2 += a_row[j + 2] * v_ptr[j + 2];
+                    av3 += a_row[j + 3] * v_ptr[j + 3];
+                    ad0 += a_row[j]     * (xb_ptr[j]     - v_ptr[j]);
+                    ad1 += a_row[j + 1] * (xb_ptr[j + 1] - v_ptr[j + 1]);
+                    ad2 += a_row[j + 2] * (xb_ptr[j + 2] - v_ptr[j + 2]);
+                    ad3 += a_row[j + 3] * (xb_ptr[j + 3] - v_ptr[j + 3]);
+                }
+                av = (av0 + av1) + (av2 + av3);
+                ad = (ad0 + ad1) + (ad2 + ad3);
+                for (; j < n_; ++j)
+                {
+                    av += a_row[j] * v_ptr[j];
+                    ad += a_row[j] * (xb_ptr[j] - v_ptr[j]);
+                }
             }
 
             if (std::abs(ad) < 1e-14)
@@ -294,25 +217,42 @@ namespace geoqp
             const std::vector<double> &v)
         {
             Timer t;
+
+            // Active/blocking checks: O(1) per constraint for box, O(n) otherwise
             std::vector<int> active_at_v;
-            for (int i = 0; i < m_; ++i)
+            std::vector<int> blocking_at_v;
+
+            if (has_diagonal_constraints_)
             {
-                const double *a_row = A_ + i * n_;
-                double av = LinearAlgebra::dot(a_row, v.data(), n_);
-                if (std::abs(av - b_[i]) < 1e-8)
+                const int *GEOQP_RESTRICT var_ptr = constraint_var_.data();
+                const double *GEOQP_RESTRICT sgn_ptr = constraint_sign_.data();
+                const double *GEOQP_RESTRICT v_ptr = v.data();
+                const double *GEOQP_RESTRICT xb_ptr = x_bar_.data();
+                for (int i = 0; i < m_; ++i)
                 {
-                    active_at_v.push_back(i);
+                    const int var     = var_ptr[i];
+                    const double sign = sgn_ptr[i];
+                    const double av   = sign * v_ptr[var];
+                    if (std::abs(av - b_[i]) < 1e-8)
+                    {
+                        active_at_v.push_back(i);
+                        if (sign * xb_ptr[var] > b_[i] + 1e-8)
+                            blocking_at_v.push_back(i);
+                    }
                 }
             }
-
-            std::vector<int> blocking_at_v;
-            for (int i : active_at_v)
+            else
             {
-                const double *a_row = A_ + i * n_;
-                double a_xbar = LinearAlgebra::dot(a_row, x_bar_.data(), n_);
-                if (a_xbar > b_[i] + 1e-8)
+                for (int i = 0; i < m_; ++i)
                 {
-                    blocking_at_v.push_back(i);
+                    const double *a_row = A_ + i * n_;
+                    double av = LinearAlgebra::dot(a_row, v.data(), n_);
+                    if (std::abs(av - b_[i]) < 1e-8)
+                    {
+                        active_at_v.push_back(i);
+                        if (LinearAlgebra::dot(a_row, x_bar_.data(), n_) > b_[i] + 1e-8)
+                            blocking_at_v.push_back(i);
+                    }
                 }
             }
 
@@ -326,17 +266,18 @@ namespace geoqp
                 return blocking_at_v;
             }
 
-            // Prefer the largest feasible intersection parameter t in (0,1).
-            // If none exist, fall back to the previous smallest-positive-t behavior.
+            // Single pass: compute all t values, find t_max_in01 and t_min simultaneously
+            ws_t_values_.resize(m_);
             double t_max_in01 = -std::numeric_limits<double>::infinity();
+            double t_min      =  std::numeric_limits<double>::infinity();
             for (int i = 0; i < m_; ++i)
             {
-                double t = compute_intersection_parameter(v, i);
-                if (t > 1e-10 && t < 1.0 - 1e-10)
-                {
-                    if (t > t_max_in01)
-                        t_max_in01 = t;
-                }
+                const double ti = compute_intersection_parameter(v, i);
+                ws_t_values_[i] = ti;
+                if (ti > 1e-10 && ti < 1.0 - 1e-10 && ti > t_max_in01)
+                    t_max_in01 = ti;
+                if (ti > 1e-10 && ti < t_min)
+                    t_min = ti;
             }
 
             const double tol = 1e-8;
@@ -346,11 +287,8 @@ namespace geoqp
             {
                 for (int i = 0; i < m_; ++i)
                 {
-                    double t = compute_intersection_parameter(v, i);
-                    if (std::abs(t - t_max_in01) <= tol)
-                    {
+                    if (std::abs(ws_t_values_[i] - t_max_in01) <= tol)
                         initial_face.push_back(i);
-                    }
                 }
                 if (std::getenv("GEOQP_DBG_INIT_PATH") && std::string(std::getenv("GEOQP_DBG_INIT_PATH")) == "1")
                 {
@@ -360,27 +298,27 @@ namespace geoqp
             else
             {
                 // fallback: smallest positive t (legacy behavior)
-                double t_min = std::numeric_limits<double>::infinity();
-                for (int i = 0; i < m_; ++i)
-                {
-                    double t = compute_intersection_parameter(v, i);
-                    if (t > 1e-10 && t < t_min)
-                    {
-                        t_min = t;
-                    }
-                }
-
                 if (t_min > 1.0 + 1e-8)
                 {
                     bool x_bar_feasible = true;
                     for (int i = 0; i < m_; ++i)
                     {
-                        const double *a_row = A_ + i * n_;
-                        double ax = LinearAlgebra::dot(a_row, x_bar_.data(), n_);
-                        if (ax > b_[i] + config_.tolerance)
+                        if (has_diagonal_constraints_)
                         {
-                            x_bar_feasible = false;
-                            break;
+                            if (constraint_sign_[i] * x_bar_[constraint_var_[i]] > b_[i] + config_.tolerance)
+                            {
+                                x_bar_feasible = false;
+                                break;
+                            }
+                        }
+                        else
+                        {
+                            const double *a_row = A_ + i * n_;
+                            if (LinearAlgebra::dot(a_row, x_bar_.data(), n_) > b_[i] + config_.tolerance)
+                            {
+                                x_bar_feasible = false;
+                                break;
+                            }
                         }
                     }
 
@@ -407,11 +345,8 @@ namespace geoqp
 
                 for (int i = 0; i < m_; ++i)
                 {
-                    double t = compute_intersection_parameter(v, i);
-                    if (std::abs(t - t_min) <= tol)
-                    {
+                    if (std::abs(ws_t_values_[i] - t_min) <= tol)
                         initial_face.push_back(i);
-                    }
                 }
             }
 
@@ -487,62 +422,108 @@ namespace geoqp
                 return true;
             }
 
-            if (has_diagonal_constraints_)
+            if (has_diagonal_constraints_ && q_is_diagonal_)
             {
+                // ── O(k) closed-form projection for diagonal Q + box faces ──────────
+                // Each active constraint i: sign_i * x[var_i] <= b_i.
+                // KKT stationarity: Q·(x*−x̄) + Aᵀλ = 0
+                //   → q[v]·(x*[v] − x̄[v]) + sign_i·λ_i = 0   for the variable v = var_i
+                //   → x*[v] = x̄[v] − sign_i·λ_i / q[v]
+                // Primal complementarity: sign_i·x*[v] = b_i
+                //   → sign_i·(x̄[v] − sign_i·λ_i/q[v]) = b_i
+                //   → λ_i = (sign_i·x̄[v] − b_i)·q[v]          (sign_i² = 1)
+                //   → x*[v] = b_i / sign_i                      (= the bound itself)
+                //
+                // If two active constraints share the same variable (conflicting bounds),
+                // fall through to the general path.
 
-                std::vector<int> constrained_vars(k);
-                std::vector<double> signs(k);
-                std::vector<double> bounds(k);
+                x_star = x_bar_;
+                lambda.resize(k);
 
+                double *GEOQP_RESTRICT xstar_ptr = x_star.data();
+                double *GEOQP_RESTRICT lam_ptr   = lambda.data();
+
+                // Stack-allocated touched-variable list — k ≤ n_ ≤ 512 for typical problems
+                int touched_arr[512];
+                int n_touched = 0;
+                bool conflict = false;
+
+                // ws_is_active_ was pre-sized to m_ (≥ n_ for box problems); use as per-var flag
                 for (int i = 0; i < k; ++i)
                 {
-                    const int idx = face[i];
-                    const double *a_row = A_ + idx * n_;
-                    bounds[i] = b_[idx];
-                    for (int j = 0; j < n_; ++j)
+                    const int idx  = face[i];
+                    const int v    = constraint_var_[idx];
+                    const double s = constraint_sign_[idx];
+                    const double b = b_[idx];
+
+                    if (GEOQP_UNLIKELY(ws_is_active_[v]))
                     {
-                        if (std::abs(a_row[j]) > 1e-10)
+                        conflict = true;
+                        break;
+                    }
+                    ws_is_active_[v] = 1;
+                    touched_arr[n_touched++] = v;
+
+                    // λ_i = (s·x̄[v] − b)·q[v]
+                    lam_ptr[i] = (s * x_bar_[v] - b) * Q_diag_[v];
+                    // x*[v] = b / s  (snap to bound)
+                    xstar_ptr[v] = b / s;
+                }
+
+                // Restore per-variable flags (only k entries, not full O(m) fill)
+                for (int t = 0; t < n_touched; ++t)
+                    ws_is_active_[touched_arr[t]] = 0;
+
+                if (GEOQP_LIKELY(!conflict))
+                {
+                    // Mark active constraints; feasibility scan; restore — all O(k)+O(m)
+                    for (int i = 0; i < k; ++i)
+                        ws_opt_is_active_set_[face[i]] = 1;
+
+                    const int *GEOQP_RESTRICT var_ptr = constraint_var_.data();
+                    const double *GEOQP_RESTRICT sgn_ptr = constraint_sign_.data();
+                    const char *GEOQP_RESTRICT is_active = ws_opt_is_active_set_.data();
+                    bool feasible = true;
+                    for (int i = 0; i < m_; ++i)
+                    {
+                        if (is_active[i]) continue;
+                        if (sgn_ptr[i] * xstar_ptr[var_ptr[i]] > b_[i] + config_.constraint_tolerance)
                         {
-                            constrained_vars[i] = j;
-                            signs[i] = a_row[j];
+                            feasible = false;
                             break;
                         }
                     }
-                }
 
-                std::vector<double> residual(k);
-                for (int i = 0; i < k; ++i)
-                {
-                    residual[i] = signs[i] * x_bar_[constrained_vars[i]] - bounds[i];
-                }
+                    // Restore active-set flags (O(k) restore, not O(m) fill)
+                    for (int i = 0; i < k; ++i)
+                        ws_opt_is_active_set_[face[i]] = 0;
 
-                // Use workspace to avoid allocations
+                    return feasible;
+                }
+                // Fall through to general path if two constraints share a variable
+            }
+
+            if (has_diagonal_constraints_)
+            {
+                // Use workspace members — no heap allocation per call
                 if (static_cast<int>(ws_constrained_vars_.size()) < k)
                 {
                     ws_constrained_vars_.resize(k);
                     ws_signs_.resize(k);
-                    ws_residual_.resize(k);
                 }
+                if (static_cast<int>(ws_residual_.size()) < k)
+                    ws_residual_.resize(k);
 
-                int *GEOQP_RESTRICT c_vars = ws_constrained_vars_.data();
-                double *GEOQP_RESTRICT c_signs = ws_signs_.data();
+                int *GEOQP_RESTRICT c_vars   = ws_constrained_vars_.data();
+                double *GEOQP_RESTRICT c_signs   = ws_signs_.data();
                 double *GEOQP_RESTRICT c_residual = ws_residual_.data();
 
                 for (int i = 0; i < k; ++i)
                 {
-                    const int idx = face[i];
+                    const int idx  = face[i];
+                    c_vars[i]     = constraint_var_[idx];
+                    c_signs[i]    = constraint_sign_[idx];
                     c_residual[i] = ws_Axbar_[idx] - b_[idx];
-
-                    const double *GEOQP_RESTRICT a_row = A_ + idx * n_;
-                    for (int j = 0; j < n_; ++j)
-                    {
-                        if (std::abs(a_row[j]) > 1e-10)
-                        {
-                            c_vars[i] = j;
-                            c_signs[i] = a_row[j];
-                            break;
-                        }
-                    }
                 }
 
                 // Use a pre-allocated workspace for Q_inv_columns instead of std::vector
@@ -635,12 +616,9 @@ namespace geoqp
 
                 for (int i = 0; i < m_; ++i)
                 {
-                    const double *a_row = A_ + i * n_;
-                    double ax = LinearAlgebra::dot(a_row, x_star.data(), n_);
-                    if (ax > b_[i] + config_.constraint_tolerance)
-                    {
+                    const int v = constraint_var_[i];
+                    if (constraint_sign_[i] * x_star[v] > b_[i] + config_.constraint_tolerance)
                         return false;
-                    }
                 }
 
                 return true;

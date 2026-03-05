@@ -298,6 +298,9 @@ namespace geoqp
             const std::vector<double> &get_Q_inv() const { return Q_inv_; }
             const std::vector<double> &get_Q_diag() const { return Q_diag_; }
             bool q_is_diagonal() const { return q_is_diagonal_; }
+            bool has_diagonal_constraints() const { return has_diagonal_constraints_; }
+            const std::vector<int>    &get_constraint_var()  const { return constraint_var_; }
+            const std::vector<double> &get_constraint_sign() const { return constraint_sign_; }
 
             void set_Q_chol(const std::vector<double> &Q_chol) { Q_chol_ = Q_chol; }
 
@@ -355,6 +358,7 @@ namespace geoqp
             mutable std::vector<double> ws_signs_;
             mutable std::vector<double> ws_Q_inv_cols_;
             mutable std::vector<double> ws_S_;
+            mutable std::vector<double> ws_t_values_;  // cached t values for find_initial_face
 
             mutable std::vector<double> ws_opt_x_star_;
             mutable std::vector<double> ws_opt_lambda_;
@@ -416,7 +420,12 @@ namespace geoqp
                 const std::vector<double> &Q_chol,
                 int m, int n,
                 const Config &config,
-                const std::vector<double> *Q_inv = nullptr);
+                const std::vector<double> *Q_inv = nullptr,
+                bool q_is_diagonal = false,
+                const std::vector<double> *Q_diag = nullptr,
+                bool has_diagonal_constraints = false,
+                const std::vector<int> *constraint_var = nullptr,
+                const std::vector<double> *constraint_sign = nullptr);
 
             void update(const double *b, const std::vector<double> &x_bar)
             {
@@ -438,6 +447,12 @@ namespace geoqp
             int m_;
             int n_;
             Config config_;
+            // Diagonal fast-path metadata (owned by FaceHopper/Solver, non-owning pointers)
+            bool q_is_diagonal_                       = false;
+            const std::vector<double> *Q_diag_        = nullptr;
+            bool has_diagonal_constraints_            = false;
+            const std::vector<int>    *constraint_var_  = nullptr;
+            const std::vector<double> *constraint_sign_ = nullptr;
         };
 
         class KKTChecker
