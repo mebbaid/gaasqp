@@ -46,9 +46,6 @@ namespace geoqp
 
         double LinearAlgebra::dot(const double *GEOQP_RESTRICT x, const double *GEOQP_RESTRICT y, int n)
         {
-            geoqp::timing::la_dot_elems.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
-            geoqp::timing::la_dot_count.fetch_add(1, std::memory_order_relaxed);
-            // Fast small-size specializations to avoid loop/setup overhead for tiny vectors.
             switch (n)
             {
             case 0:
@@ -162,7 +159,12 @@ namespace geoqp
         void LinearAlgebra::cholesky(const double *GEOQP_RESTRICT A, double *GEOQP_RESTRICT L, int n)
         {
             geoqp::timing::ScopedTimer _t_chol(geoqp::timing::la_cholesky_ns, geoqp::timing::la_cholesky_count);
-            std::fill(L, L + n * n, 0.0);
+            // Zero only the lower-triangular portion that we write.
+            // The old std::fill(L, L+n*n, 0) wrote the full n² elements (e.g. 20 KB for
+            // n=50) but only the lower triangle is ever set; the upper stays unused.
+            for (int i = 0; i < n; ++i)
+                for (int j = 0; j <= i; ++j)
+                    L[i * n + j] = 0.0;
 
             for (int i = 0; i < n; ++i)
             {
@@ -192,9 +194,13 @@ namespace geoqp
                     if (i == j)
                     {
                         double val = A[i * n + i] - sum;
-                        if (val <= 0.0)
+                        // Round near-zero to zero before sqrt to avoid sqrt(0⁻) from
+                        // floating-point noise (same guard used in matrix_math.h CholeskyDec).
+                        if (val < 0.0)
                         {
-                            throw NumericalException("Matrix is not positive definite");
+                            if (val < -1e-9)
+                                throw NumericalException("Matrix is not positive definite");
+                            val = 0.0;
                         }
                         L[i * n + j] = std::sqrt(val);
                     }
@@ -244,31 +250,34 @@ namespace geoqp
                                          double *GEOQP_RESTRICT x, int n)
         {
             geoqp::timing::ScopedTimer _t_back(geoqp::timing::la_backward_ns, geoqp::timing::la_backward_count);
-            for (int i = n - 1; i >= 0; --i)
+            // L is lower-triangular, stored row-major.  We solve Lᵀ x = b.
+            // Naive: x[i] = (b[i] - Σ_{j>i} L[j*n+i]*x[j]) / L[i*n+i]
+            // The sum reads L column-by-column (stride n) — cache-hostile for large n.
+            //
+            // Equivalent scatter formulation: initialise x = b, then for each already-solved
+            // x[j] (j from n-1 down to 0) propagate its contribution to all i < j before
+            // dividing by the diagonal.  This accesses L row j (contiguous) each iteration.
+            for (int i = 0; i < n; ++i)
+                x[i] = b[i];
+
+            for (int j = n - 1; j >= 0; --j)
             {
-                double sum0 = 0.0;
-                double sum1 = 0.0;
-                double sum2 = 0.0;
-                double sum3 = 0.0;
+                const double *GEOQP_RESTRICT Lj = L + j * n;
+                x[j] /= Lj[j];                  // diagonal divide (Lᵀ[j][j] == L[j][j])
+                const double xj = x[j];
 
-                int j = i + 1;
-                for (; j + 3 < n; j += 4)
+                // Subtract x[j] * Lᵀ[i][j] = x[j] * L[j][i] for all i < j.
+                // L[j][i] is stored in row j, positions 0..j-1 — contiguous memory.
+                int i = 0;
+                for (; i + 3 < j; i += 4)
                 {
-                    sum0 += L[j * n + i] * x[j];
-                    sum1 += L[(j + 1) * n + i] * x[j + 1];
-                    sum2 += L[(j + 2) * n + i] * x[j + 2];
-                    sum3 += L[(j + 3) * n + i] * x[j + 3];
+                    x[i]     -= xj * Lj[i];
+                    x[i + 1] -= xj * Lj[i + 1];
+                    x[i + 2] -= xj * Lj[i + 2];
+                    x[i + 3] -= xj * Lj[i + 3];
                 }
-
-                double sum = (sum0 + sum1) + (sum2 + sum3);
-
-                for (; j < n; ++j)
-                {
-                    sum += L[j * n + i] * x[j];
-                }
-
-                const double Lii = L[i * n + i];
-                x[i] = (b[i] - sum) / Lii;
+                for (; i < j; ++i)
+                    x[i] -= xj * Lj[i];
             }
         }
 
@@ -388,9 +397,12 @@ namespace geoqp
 
                 for (int j = i + 1; j < k; ++j)
                 {
-                    double Lji = L[j * k + i];
-                    tl_w[j] = tl_w[j] - s * Lji;
-                    L[j * k + i] = (Lji + s * tl_w[j]) / c;
+                    const double Lji     = L[j * k + i];
+                    const double wj_old  = tl_w[j];
+                    // Givens update: new_w[j] = c*w[j] - s*L[j,i],  new_L[j,i] = s*w[j] + c*L[j,i]
+                    // (divided through to keep L normalised — standard rank-1 Cholesky update)
+                    tl_w[j]      = wj_old - s * Lji;          // uses old wj and old Lji
+                    L[j * k + i] = (Lji + s * wj_old) / c;   // uses old wj and old Lji
                 }
             }
             return true;

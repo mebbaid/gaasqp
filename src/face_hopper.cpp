@@ -105,7 +105,6 @@ namespace geoqp
                 Q_chol_.clear();
             }
 
-            // Optimized density check for Q
             int nonzero_q = 0;
             const int total_elements = n_ * n_;
             const double *GEOQP_RESTRICT Q_ptr = Q_;
@@ -207,6 +206,28 @@ namespace geoqp
             if (has_diagonal_constraints_ && config_.verbosity >= 2)
             {
                 std::cout << "  Detected diagonal/box constraints - using fast path\n";
+            }
+
+            // Precompute per-constraint (var, sign) pairs for O(1) feasibility checks.
+            // Only valid when has_diagonal_constraints_ == true, but we populate
+            // them unconditionally so the arrays are always sized correctly.
+            constraint_var_.resize(m_);
+            constraint_sign_.resize(m_);
+            if (has_diagonal_constraints_)
+            {
+                for (int i = 0; i < m_; ++i)
+                {
+                    const double *a_row = A_ + i * n_;
+                    for (int j = 0; j < n_; ++j)
+                    {
+                        if (std::abs(a_row[j]) > 1e-10)
+                        {
+                            constraint_var_[i]  = j;
+                            constraint_sign_[i] = a_row[j] > 0.0 ? 1.0 : -1.0;
+                            break;
+                        }
+                    }
+                }
             }
 
             if (config_.use_caching && !Q_chol_.empty() && config_.verbosity >= 2)
@@ -1208,28 +1229,45 @@ namespace geoqp
                         const double *GEOQP_RESTRICT x_ptr = ws_opt_x_star_.data();
                         const char *GEOQP_RESTRICT is_active = ws_opt_is_active_set_.data();
 
-                        for (int i = 0; i < m_; ++i)
+                        if (has_diagonal_constraints_)
                         {
-                            if (is_active[i])
-                                continue;
-
-                            const double *GEOQP_RESTRICT a_row = A_ + i * n_;
-
-                            // Inline dot product with unrolling
-                            double ax = 0.0;
-                            int j = 0;
-                            for (; j + 3 < n_; j += 4)
+                            // Fast path: each constraint i is sign_i * x[var_i] <= b[i].
+                            // No dot product needed — O(1) per constraint instead of O(n).
+                            const int *GEOQP_RESTRICT var_ptr  = constraint_var_.data();
+                            const double *GEOQP_RESTRICT sgn_ptr = constraint_sign_.data();
+                            for (int i = 0; i < m_; ++i)
                             {
-                                ax += a_row[j] * x_ptr[j] + a_row[j + 1] * x_ptr[j + 1] + a_row[j + 2] * x_ptr[j + 2] + a_row[j + 3] * x_ptr[j + 3];
+                                if (is_active[i])
+                                    continue;
+                                if (sgn_ptr[i] * x_ptr[var_ptr[i]] > b_[i] + config_.constraint_tolerance)
+                                    ws_opt_violated_.push_back(i);
                             }
-                            for (; j < n_; ++j)
+                        }
+                        else
+                        {
+                            for (int i = 0; i < m_; ++i)
                             {
-                                ax += a_row[j] * x_ptr[j];
-                            }
+                                if (is_active[i])
+                                    continue;
 
-                            if (ax > b_[i] + config_.constraint_tolerance)
-                            {
-                                ws_opt_violated_.push_back(i);
+                                const double *GEOQP_RESTRICT a_row = A_ + i * n_;
+
+                                // Inline dot product with unrolling
+                                double ax = 0.0;
+                                int j = 0;
+                                for (; j + 3 < n_; j += 4)
+                                {
+                                    ax += a_row[j] * x_ptr[j] + a_row[j + 1] * x_ptr[j + 1] + a_row[j + 2] * x_ptr[j + 2] + a_row[j + 3] * x_ptr[j + 3];
+                                }
+                                for (; j < n_; ++j)
+                                {
+                                    ax += a_row[j] * x_ptr[j];
+                                }
+
+                                if (ax > b_[i] + config_.constraint_tolerance)
+                                {
+                                    ws_opt_violated_.push_back(i);
+                                }
                             }
                         }
 
@@ -1328,28 +1366,44 @@ namespace geoqp
                     const double *GEOQP_RESTRICT x_ptr = ws_opt_x_star_.data();
                     const char *GEOQP_RESTRICT is_active = ws_opt_is_active_set_.data();
 
-                    for (int i = 0; i < m_; ++i)
+                    if (has_diagonal_constraints_)
                     {
-                        if (is_active[i])
-                            continue;
-
-                        const double *GEOQP_RESTRICT a_row = A_ + i * n_;
-
-                        // Inline dot product
-                        double ax = 0.0;
-                        int j = 0;
-                        for (; j + 3 < n_; j += 4)
+                        // Fast path: sign_i * x[var_i] <= b[i] — no dot product.
+                        const int *GEOQP_RESTRICT var_ptr  = constraint_var_.data();
+                        const double *GEOQP_RESTRICT sgn_ptr = constraint_sign_.data();
+                        for (int i = 0; i < m_; ++i)
                         {
-                            ax += a_row[j] * x_ptr[j] + a_row[j + 1] * x_ptr[j + 1] + a_row[j + 2] * x_ptr[j + 2] + a_row[j + 3] * x_ptr[j + 3];
+                            if (is_active[i])
+                                continue;
+                            if (sgn_ptr[i] * x_ptr[var_ptr[i]] > b_[i] + config_.constraint_tolerance)
+                                ws_opt_violated_.push_back(i);
                         }
-                        for (; j < n_; ++j)
+                    }
+                    else
+                    {
+                        for (int i = 0; i < m_; ++i)
                         {
-                            ax += a_row[j] * x_ptr[j];
-                        }
+                            if (is_active[i])
+                                continue;
 
-                        if (ax > b_[i] + config_.constraint_tolerance)
-                        {
-                            ws_opt_violated_.push_back(i);
+                            const double *GEOQP_RESTRICT a_row = A_ + i * n_;
+
+                            // Inline dot product
+                            double ax = 0.0;
+                            int j = 0;
+                            for (; j + 3 < n_; j += 4)
+                            {
+                                ax += a_row[j] * x_ptr[j] + a_row[j + 1] * x_ptr[j + 1] + a_row[j + 2] * x_ptr[j + 2] + a_row[j + 3] * x_ptr[j + 3];
+                            }
+                            for (; j < n_; ++j)
+                            {
+                                ax += a_row[j] * x_ptr[j];
+                            }
+
+                            if (ax > b_[i] + config_.constraint_tolerance)
+                            {
+                                ws_opt_violated_.push_back(i);
+                            }
                         }
                     }
 

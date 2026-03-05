@@ -11,35 +11,6 @@ namespace geoqp
 {
     namespace internal
     {
-        inline double compute_distance_squared_ptr(
-            const double *vptr, const double *xbar_ptr, int n)
-        {
-            const double *GEOQP_RESTRICT v = vptr;
-            const double *GEOQP_RESTRICT xb = xbar_ptr;
-
-            double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
-            int i = 0;
-            GEOQP_UNROLL_LOOP_4
-            for (; i + 3 < n; i += 4)
-            {
-                double d0 = v[i] - xb[i];
-                double d1 = v[i + 1] - xb[i + 1];
-                double d2 = v[i + 2] - xb[i + 2];
-                double d3 = v[i + 3] - xb[i + 3];
-                sum0 += d0 * d0;
-                sum1 += d1 * d1;
-                sum2 += d2 * d2;
-                sum3 += d3 * d3;
-            }
-            double res = (sum0 + sum1) + (sum2 + sum3);
-            for (; i < n; ++i)
-            {
-                double d = v[i] - xb[i];
-                res += d * d;
-            }
-            return res;
-        }
-
         inline uint64_t compute_vertex_fingerprint(const double *vptr, int n, double tol)
         {
             const double use_tol = std::max(tol, 1e-12);
@@ -101,6 +72,8 @@ namespace geoqp
             ws_Ax_.resize(m);
             ws_Ad_.resize(m);
             ws_candidate_.resize(n);
+            ws_Ldiff_.resize(n);
+            ws_nu_.resize(n, 0.0);
         }
 
         void Initializer::update(const double *b, const std::vector<double> &x_bar)
@@ -108,6 +81,12 @@ namespace geoqp
             b_ = b;
             x_bar_ = x_bar;
             compute_axbar();
+        }
+
+        void Initializer::set_Q_chol(const std::vector<double> &Q_chol)
+        {
+            Q_chol_ = Q_chol;
+            has_Q_chol_ = !Q_chol.empty();
         }
 
         void Initializer::compute_axbar()
@@ -200,23 +179,138 @@ namespace geoqp
             return vertex;
         }
 
-        double Initializer::compute_q_weighted_distance_squared(
-            const std::vector<double> &v) const
+        double Initializer::compute_q_weighted_distance_squared_ptr(const double *vptr) const
         {
-            std::vector<double> diff(n_);
-            for (int i = 0; i < n_; ++i)
+            const double *GEOQP_RESTRICT xb = x_bar_.data();
+
+            if (has_Q_chol_)
             {
-                diff[i] = v[i] - x_bar_[i];
+                // ‖v - x̄‖_Q² = ‖L(v - x̄)‖₂²  where Q = L Lᵀ.
+                // Forward substitution: solve L · w = (v - x̄).
+                // L is lower-triangular, stored row-major (L[i*n+j], j<=i).
+                const double *GEOQP_RESTRICT L = Q_chol_.data();
+                double *GEOQP_RESTRICT w = ws_Ldiff_.data();
+                for (int i = 0; i < n_; ++i)
+                {
+                    const double *GEOQP_RESTRICT Li = L + i * n_;
+                    double s = vptr[i] - xb[i];
+                    for (int j = 0; j < i; ++j)
+                        s -= Li[j] * w[j];
+                    w[i] = s / Li[i];
+                }
+                // ‖w‖₂²
+                double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
+                int i = 0;
+                for (; i + 3 < n_; i += 4)
+                {
+                    sum0 += w[i]   * w[i];
+                    sum1 += w[i+1] * w[i+1];
+                    sum2 += w[i+2] * w[i+2];
+                    sum3 += w[i+3] * w[i+3];
+                }
+                double res = (sum0 + sum1) + (sum2 + sum3);
+                for (; i < n_; ++i) res += w[i] * w[i];
+                return res;
             }
-            std::vector<double> Q_diff(n_);
-            LinearAlgebra::matvec(Q_, diff.data(), Q_diff.data(), n_, n_);
-            return LinearAlgebra::dot(diff.data(), Q_diff.data(), n_);
+            else
+            {
+                // Fallback: Q-weighted via full matvec (v - x̄)ᵀ Q (v - x̄).
+                double *GEOQP_RESTRICT w = ws_Ldiff_.data();
+                for (int i = 0; i < n_; ++i) w[i] = vptr[i] - xb[i];
+
+                const double *GEOQP_RESTRICT Q = Q_;
+                double sum = 0.0;
+                for (int i = 0; i < n_; ++i)
+                {
+                    const double *GEOQP_RESTRICT Qi = Q + i * n_;
+                    double row = 0.0;
+                    int j = 0;
+                    double r0 = 0.0, r1 = 0.0, r2 = 0.0, r3 = 0.0;
+                    for (; j + 3 < n_; j += 4)
+                    {
+                        r0 += Qi[j]   * w[j];
+                        r1 += Qi[j+1] * w[j+1];
+                        r2 += Qi[j+2] * w[j+2];
+                        r3 += Qi[j+3] * w[j+3];
+                    }
+                    row = (r0 + r1) + (r2 + r3);
+                    for (; j < n_; ++j) row += Qi[j] * w[j];
+                    sum += w[i] * row;
+                }
+                return sum;
+            }
         }
 
-        double Initializer::compute_euclidean_distance_squared(
-            const std::vector<double> &v) const
+        double Initializer::compute_separation_direction(const double *closest_boundary_pt) const
         {
-            return compute_distance_squared_ptr(v.data(), x_bar_.data(), n_);
+            // Compute ν ∝ Q(x̄ - x̂) where x̂ ≈ closest_boundary_pt.
+            // With Cholesky L available: Q(x̄ - x̂) = Lᵀ(L(x̄ - x̂)).
+            // We compute and normalise in-place into ws_nu_.
+            const double *GEOQP_RESTRICT xb = x_bar_.data();
+            double *GEOQP_RESTRICT nu = ws_nu_.data();
+
+            if (has_Q_chol_)
+            {
+                const double *GEOQP_RESTRICT L = Q_chol_.data();
+                double *GEOQP_RESTRICT w = ws_Ldiff_.data();
+                // Forward sub: L w = (x̄ - x̂)
+                for (int i = 0; i < n_; ++i)
+                {
+                    const double *GEOQP_RESTRICT Li = L + i * n_;
+                    double s = xb[i] - closest_boundary_pt[i];
+                    for (int j = 0; j < i; ++j) s -= Li[j] * w[j];
+                    w[i] = s / Li[i];
+                }
+                // Backward sub: Lᵀ nu = w  →  nu = Q(x̄ - x̂)
+                for (int i = n_ - 1; i >= 0; --i)
+                {
+                    double s = w[i];
+                    for (int j = i + 1; j < n_; ++j)
+                        s -= L[j * n_ + i] * nu[j];
+                    nu[i] = s / L[i * n_ + i];
+                }
+            }
+            else
+            {
+                // Fallback: nu = Q(x̄ - x̂) via matvec
+                const double *GEOQP_RESTRICT Q = Q_;
+                for (int i = 0; i < n_; ++i)
+                {
+                    const double *GEOQP_RESTRICT Qi = Q + i * n_;
+                    double s = 0.0;
+                    for (int j = 0; j < n_; ++j)
+                        s += Qi[j] * (xb[j] - closest_boundary_pt[j]);
+                    nu[i] = s;
+                }
+            }
+
+            // Compute L = ‖x̄ - x̂‖_Q = ‖nu‖ (before normalisation)
+            double norm_sq = 0.0;
+            for (int i = 0; i < n_; ++i) norm_sq += nu[i] * nu[i];
+            double L_val = std::sqrt(norm_sq);
+
+            if (L_val > 1e-14)
+            {
+                double inv = 1.0 / L_val;
+                for (int i = 0; i < n_; ++i) nu[i] *= inv;
+            }
+            else
+            {
+                // ν undefined — zero it so the score degenerates to pure Q-distance
+                std::fill(nu, nu + n_, 0.0);
+            }
+            return L_val;
+        }
+
+        inline double Initializer::bfs_score(const double *vptr, double two_L) const
+        {
+            // score(v) = ‖v - x̄‖_Q²  -  two_L · ⟨ν, v⟩
+            // Maximising this is equivalent to finding v* per Lemma 2.
+            double q_dist = compute_q_weighted_distance_squared_ptr(vptr);
+            const double *GEOQP_RESTRICT nu = ws_nu_.data();
+            double nu_dot = 0.0;
+            for (int i = 0; i < n_; ++i) nu_dot += nu[i] * vptr[i];
+            return q_dist - two_L * nu_dot;
         }
 
         bool Initializer::is_good_vertex(
@@ -353,13 +447,6 @@ namespace geoqp
                 return idx;
             };
 
-            auto push_vertex_ptr = [&](const double *ptr) -> int
-            {
-                int idx = static_cast<int>(vertices.size() / n_);
-                vertices.insert(vertices.end(), ptr, ptr + n_);
-                return idx;
-            };
-
             auto ptr_of = [&](int idx) -> const double *
             { return vertices.data() + static_cast<size_t>(idx) * static_cast<size_t>(n_); };
 
@@ -381,30 +468,67 @@ namespace geoqp
                 }
             }
 
+            // --- Compute separation direction ν and scaling 2·L for Lemma 2 score ---
+            // Use the closest-constraint boundary point as the proxy for x̂.
+            // This is the point on the most-violated constraint hyperplane
+            // closest to x̄, i.e.  x̂_proxy = x̄ - slack_i/‖aᵢ‖² · aᵢ.
+            double two_L = 0.0;
+            {
+                const double *GEOQP_RESTRICT xb = x_bar_.data();
+                int worst_i = -1;
+                double worst_slack = 0.0;
+                for (int i = 0; i < m_; ++i)
+                {
+                    // slack = aᵢᵀ x̄ - bᵢ  (positive means violated)
+                    double s = ws_Axbar_[i] - b_[i];
+                    if (s > worst_slack) { worst_slack = s; worst_i = i; }
+                }
+
+                if (worst_i >= 0)
+                {
+                    // Closest point on hyperplane aᵢᵀx = bᵢ  to x̄:
+                    //   x̂_proxy = x̄ - (aᵢᵀx̄ - bᵢ)/‖aᵢ‖² · aᵢ
+                    const double *GEOQP_RESTRICT ai = A_ + worst_i * n_;
+                    double ai_sq = 0.0;
+                    for (int j = 0; j < n_; ++j) ai_sq += ai[j] * ai[j];
+                    if (ai_sq > 1e-20)
+                    {
+                        double alpha = worst_slack / ai_sq;
+                        // proxy = x̄ - alpha·aᵢ  (stored in ws_direction_ temporarily)
+                        double *GEOQP_RESTRICT proxy = ws_direction_.data();
+                        for (int j = 0; j < n_; ++j) proxy[j] = xb[j] - alpha * ai[j];
+                        two_L = 2.0 * compute_separation_direction(proxy);
+                    }
+                }
+                // If two_L == 0.0, ws_nu_ is all-zeros → score degenerates to
+                // pure Q-weighted distance, which is still correct.
+            }
+
             std::vector<double> &best_vertex = ws_candidate_;
             best_vertex.assign(n_, 0.0);
-            double best_dist = -1.0;
+            double best_score = -std::numeric_limits<double>::infinity();
 
             {
                 auto active = polytope.get_active_constraints(start);
                 if (is_good_vertex(start, active))
                 {
                     best_vertex = start;
-                    best_dist = compute_distance_squared_ptr(ptr_of(start_idx), x_bar_.data(), n_);
+                    best_score = bfs_score(ptr_of(start_idx), two_L);
                 }
             }
 
             const int max_visit = std::max(100, config_.max_simplex_iterations);
             while (!frontier_idx.empty() && static_cast<int>(vertices_explored) < max_visit)
             {
+                // Pick frontier vertex with the highest Lemma-2 score.
                 int pick_i = 0;
-                double pick_dist = -1.0;
+                double pick_score = -std::numeric_limits<double>::infinity();
                 for (size_t fi = 0; fi < frontier_idx.size(); ++fi)
                 {
-                    double d = compute_distance_squared_ptr(ptr_of(frontier_idx[fi]), x_bar_.data(), n_);
-                    if (d > pick_dist)
+                    double s = bfs_score(ptr_of(frontier_idx[fi]), two_L);
+                    if (s > pick_score)
                     {
-                        pick_dist = d;
+                        pick_score = s;
                         pick_i = static_cast<int>(fi);
                     }
                 }
@@ -435,10 +559,10 @@ namespace geoqp
                         auto active = polytope.get_active_constraints(vview);
                         if (is_good_vertex(vview, active))
                         {
-                            double d = compute_distance_squared_ptr(vptr, x_bar_.data(), n_);
-                            if (d > best_dist)
+                            double s = bfs_score(vptr, two_L);
+                            if (s > best_score)
                             {
-                                best_dist = d;
+                                best_score = s;
                                 for (int i = 0; i < n_; ++i)
                                     best_vertex[i] = vptr[i];
                             }
@@ -446,13 +570,14 @@ namespace geoqp
                     }
                 }
 
-                ws_candidate_.assign(n_, 0.0);
-                for (int ii = 0; ii < n_; ++ii)
-                    ws_candidate_[ii] = vptr[ii];
+                // Expand neighbors of the current vertex.
+                // get_neighbors_flat needs a std::vector; build a view from the
+                // already-stored pointer without extra allocation.
+                std::vector<double> vview_expand(vptr, vptr + n_);
                 size_t before2 = vertices.size();
                 {
                     geoqp::timing::ScopedTimer __t_nei_sub2(geoqp::timing::initializer_neighbors_ns, geoqp::timing::initializer_neighbors_count);
-                    polytope.get_neighbors_flat(ws_candidate_, vertices);
+                    polytope.get_neighbors_flat(vview_expand, vertices);
                 }
                 size_t after2 = vertices.size();
 
@@ -471,21 +596,42 @@ namespace geoqp
                 }
             }
 
-            if (best_dist >= 0.0)
+            if (best_score > -std::numeric_limits<double>::infinity())
             {
                 iterations = 1 + static_cast<int>(visited_idx.size());
                 return best_vertex;
             }
 
             // If local search failed to find a good vertex, fall back to the
-            // previous constraint-ranking + ray casting strategy below.
+            // constraint-ranking + ray casting strategy below.
+            // Direction: ν (pointing toward the unconstrained min, away from the
+            // polytope) — use ws_nu_ if computed, otherwise fall back to
+            // (initial_vertex - x̄) normalised.
             const double *GEOQP_RESTRICT init_ptr = initial_vertex.data();
             const double *GEOQP_RESTRICT xbar_ptr = x_bar_.data();
-
             double *GEOQP_RESTRICT d_ptr = ws_direction_.data();
-            for (int j = 0; j < n_; ++j)
+
+            // Use ν as the fallback ray direction when it was successfully computed.
+            // ν points from x̂ toward x̄ (outward from the polytope), which by
+            // Proposition 1 aligns with the exit face constraints.
+            // If ν is zero (degenerate case), fall back to (init_vertex - x̄).
             {
-                d_ptr[j] = init_ptr[j] - xbar_ptr[j];
+                const double *GEOQP_RESTRICT nu = ws_nu_.data();
+                double nu_norm_sq = 0.0;
+                for (int j = 0; j < n_; ++j) nu_norm_sq += nu[j] * nu[j];
+
+                if (nu_norm_sq > 0.5) // nu is already unit-length when valid
+                {
+                    // Cast ray from initial_vertex in direction -ν
+                    // (i.e. into the polytope toward x̂, then past it).
+                    // We want to move away from x̄, so direction is -ν.
+                    for (int j = 0; j < n_; ++j) d_ptr[j] = -nu[j];
+                }
+                else
+                {
+                    for (int j = 0; j < n_; ++j)
+                        d_ptr[j] = init_ptr[j] - xbar_ptr[j];
+                }
             }
 
             double norm_d = LinearAlgebra::norm(d_ptr, n_);
@@ -637,49 +783,6 @@ namespace geoqp
             iterations++;
             ::geoqp::timing::init_counter_raycast_fallback.fetch_add(1, std::memory_order_relaxed);
             return furthest_v;
-        }
-
-        bool Initializer::is_direction_feasible(
-            const std::vector<double> &v,
-            const std::vector<double> &d,
-            const std::vector<int> &active_set,
-            double tol) const
-        {
-            for (int idx : active_set)
-            {
-                const double *a_row = A_ + idx * n_;
-                double dot = LinearAlgebra::dot(a_row, d.data(), n_);
-                if (dot > tol)
-                    return false;
-            }
-            return true;
-        }
-
-        int Initializer::find_most_violated_constraint(
-            const std::vector<double> &v,
-            const std::vector<double> &d,
-            const std::vector<int> &active_set) const
-        {
-            int most_violated = -1;
-            double max_violation = 0.0;
-            for (int idx : active_set)
-            {
-                const double *a_row = A_ + idx * n_;
-                double dot = LinearAlgebra::dot(a_row, d.data(), n_);
-                if (dot > max_violation)
-                {
-                    max_violation = dot;
-                    most_violated = idx;
-                }
-            }
-            return most_violated;
-        }
-
-        std::vector<double> Initializer::pivot_to_neighbor(
-            const std::vector<double> &v,
-            int constraint_to_drop)
-        {
-            return v;
         }
 
     } // namespace internal

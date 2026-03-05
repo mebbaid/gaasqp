@@ -109,6 +109,11 @@ namespace geoqp
 
             void update(const double *b, const std::vector<double> &x_bar);
 
+            // Supply the Cholesky factor L of Q (Q = L Lᵀ) to enable
+            // Q-weighted distances and the ν-biased BFS, as required by
+            // Theorem 1 / Lemma 2 in the theory. No-op if not called.
+            void set_Q_chol(const std::vector<double> &Q_chol);
+
             std::vector<double> find_good_vertex(
                 const std::vector<double> &initial_vertex,
                 int &iterations,
@@ -118,35 +123,29 @@ namespace geoqp
             void compute_axbar();
             void detect_box_constraints();
 
-            bool is_direction_feasible(
-                const std::vector<double> &v,
-                const std::vector<double> &d,
-                const std::vector<int> &active_set,
-                double tol = 1e-8) const;
-
-            int find_most_violated_constraint(
-                const std::vector<double> &v,
-                const std::vector<double> &d,
-                const std::vector<int> &active_set) const;
-
-            std::vector<double> pivot_to_neighbor(
-                const std::vector<double> &v,
-                int constraint_to_drop);
-
             bool is_good_vertex(
                 const std::vector<double> &v,
                 const std::vector<int> &active_set) const;
 
-            double compute_q_weighted_distance_squared(
-                const std::vector<double> &v) const;
-
-            double compute_euclidean_distance_squared(
-                const std::vector<double> &v) const;
+            // Q-weighted squared distance ‖v - x̄‖_Q² = (v-x̄)ᵀ Q (v-x̄).
+            // Uses the Cholesky factor when available (‖L(v-x̄)‖₂²) to avoid
+            // re-factoring Q on every call.
+            double compute_q_weighted_distance_squared_ptr(const double *vptr) const;
 
             std::vector<double> compute_vertex_from_active_set(
                 const std::vector<int> &active_indices) const;
 
             std::vector<double> find_good_vertex_box_fast() const;
+
+            // Compute the separation direction ν ∝ Q(x̄ - x̂) once per
+            // find_good_vertex call and store in ws_nu_.  Returns the
+            // distance L = ‖x̄ - x̂‖_Q used as the linear-proxy scaling.
+            double compute_separation_direction(const double *closest_boundary_pt) const;
+
+            // BFS vertex score from Lemma 2:
+            //   score(v) = ‖v - x̄‖_Q²  -  2·L·⟨ν, v⟩
+            // Maximising this finds v* (up to constants independent of v).
+            inline double bfs_score(const double *vptr, double two_L) const;
 
             const double *Q_;
             const double *A_;
@@ -155,6 +154,11 @@ namespace geoqp
             int m_;
             int n_;
             Config config_;
+
+            // Cholesky factor L of Q (lower-triangular), set externally.
+            // When present enables O(n²) Q-weighted distances via ‖L·d‖₂².
+            std::vector<double> Q_chol_;
+            bool has_Q_chol_ = false;
 
             bool is_box_constrained_ = false;
             std::vector<double> box_lb_;
@@ -167,6 +171,9 @@ namespace geoqp
             mutable std::vector<double> ws_Ax_;
             mutable std::vector<double> ws_Ad_;
             mutable std::vector<double> ws_candidate_;
+            // Workspace for Q-weighted distance (L·diff scratch) and ν.
+            mutable std::vector<double> ws_Ldiff_;  // size n
+            mutable std::vector<double> ws_nu_;     // separation direction ν, size n
         };
 
         class ConstraintCache
@@ -357,6 +364,13 @@ namespace geoqp
 
             bool q_is_diagonal_ = false;
             std::vector<double> Q_diag_;
+
+            // Per-constraint metadata for diagonal/box constraints (has_diagonal_constraints_==true).
+            // constraint_var_[i]  = column index j such that A[i,:] = sign * e_j
+            // constraint_sign_[i] = ±1 (the sign of that single nonzero entry)
+            // Populated in constructor; allows O(1) feasibility check per constraint.
+            std::vector<int>    constraint_var_;
+            std::vector<double> constraint_sign_;
 
             struct TimingStats
             {

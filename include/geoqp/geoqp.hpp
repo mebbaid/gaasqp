@@ -55,6 +55,7 @@ namespace geoqp
         int phase2_iterations;      
         int num_active_constraints; // Number of active constraints at solution
         int vertices_explored;      // Number of vertices explored in Phase 1
+        std::vector<double> x_phase1; // Phase I vertex v* (BFS result, before Phase II/III)
         double solve_time;
         double phase1_time;
         double phase2_time;

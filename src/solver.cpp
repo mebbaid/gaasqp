@@ -188,6 +188,74 @@ namespace geoqp
         std::vector<double> ws_temp_n_; // For Cholesky-based objective computation
         std::vector<double> ws_d_;      // For ray computation in debug paths
 
+        // Workspace for bound-constraint expansion (lb/ub → A/b rows)
+        std::vector<double> ws_A_exp_;
+        std::vector<double> ws_b_exp_;
+
+        // Expand lb/ub from `prob` into ws_A_exp_ / ws_b_exp_.
+        // Returns the expanded constraint count m_exp (>= prob.m).
+        // When neither lb nor ub is non-empty, simply aliases prob.A / prob.b
+        // with m_exp == prob.m (no copy needed — caller must distinguish).
+        int expand_bounds_into_constraints(const Problem &prob)
+        {
+            const int n   = prob.n;
+            const int m   = prob.m;
+            const bool has_lb = !prob.lb.empty();
+            const bool has_ub = !prob.ub.empty();
+
+            if (!has_lb && !has_ub)
+            {
+                // No expansion needed — signal to caller via returned m == prob.m
+                return m;
+            }
+
+            // Count how many bound rows we will add
+            int n_lb = 0, n_ub = 0;
+            if (has_lb)
+                for (int j = 0; j < n; ++j)
+                    if (prob.lb[j] > -1e30) ++n_lb;   // finite lower bound
+            if (has_ub)
+                for (int j = 0; j < n; ++j)
+                    if (prob.ub[j] <  1e30) ++n_ub;   // finite upper bound
+
+            const int m_exp = m + n_lb + n_ub;
+
+            ws_A_exp_.assign(static_cast<size_t>(m_exp) * n, 0.0);
+            ws_b_exp_.resize(static_cast<size_t>(m_exp));
+
+            // Copy original A, b
+            std::copy(prob.A.begin(), prob.A.end(), ws_A_exp_.begin());
+            std::copy(prob.b.begin(), prob.b.end(), ws_b_exp_.begin());
+
+            int row = m;
+
+            // Upper bounds:  +eⱼ x ≤ ub[j]
+            if (has_ub)
+            {
+                for (int j = 0; j < n; ++j)
+                {
+                    if (prob.ub[j] >= 1e30) continue;
+                    ws_A_exp_[static_cast<size_t>(row) * n + j] = 1.0;
+                    ws_b_exp_[row] = prob.ub[j];
+                    ++row;
+                }
+            }
+
+            // Lower bounds:  -eⱼ x ≤ -lb[j]
+            if (has_lb)
+            {
+                for (int j = 0; j < n; ++j)
+                {
+                    if (prob.lb[j] <= -1e30) continue;
+                    ws_A_exp_[static_cast<size_t>(row) * n + j] = -1.0;
+                    ws_b_exp_[row] = -prob.lb[j];
+                    ++row;
+                }
+            }
+
+            return m_exp;
+        }
+
         Solution solve(const Problem &problem)
         {
             using Clock = std::chrono::high_resolution_clock;
@@ -211,6 +279,12 @@ namespace geoqp
                     throw InvalidProblemException("Problem validation failed");
                 }
 
+                // Expand lb/ub into extra A/b rows (no-op if both are empty).
+                const int m_exp = expand_bounds_into_constraints(problem);
+                const bool has_bounds = (m_exp > problem.m);
+                const double *A_ptr = has_bounds ? ws_A_exp_.data() : problem.A.data();
+                const double *b_ptr = has_bounds ? ws_b_exp_.data() : problem.b.data();
+
                 std::vector<double> x_bar = compute_unconstrained_minimum(
                     problem.Q, problem.g, problem.n);
 
@@ -219,8 +293,9 @@ namespace geoqp
                     std::cout << "Unconstrained minimum computed\n";
                 }
 
-                if (is_feasible(x_bar, problem.A, problem.b,
-                                problem.m, problem.n, config_.constraint_tolerance))
+                // Feasibility check against the full (expanded) constraint set.
+                if (is_feasible_ptr(x_bar.data(), A_ptr, b_ptr,
+                                    m_exp, problem.n, config_.constraint_tolerance))
                 {
                     if (config_.verbosity >= 1)
                     {
@@ -240,8 +315,7 @@ namespace geoqp
                     std::cout << "Unconstrained minimum is infeasible - starting geometric algorithm\n";
                 }
 
-                internal::Polytope polytope(problem.A.data(), problem.b.data(),
-                                            problem.m, problem.n);
+                internal::Polytope polytope(A_ptr, b_ptr, m_exp, problem.n);
                 ws_initial_vertex_ = polytope.find_initial_vertex();
 
                 if (config_.verbosity >= 2)
@@ -251,12 +325,30 @@ namespace geoqp
 
                 auto phase1_start = Clock::now();
 
+                // Factor Q once here so both Initializer (Q-weighted distances / ν)
+                // and FaceHopper can share the same Cholesky factor.
+                std::vector<double> Q_chol_local(problem.n * problem.n);
+                bool has_Q_chol_local = false;
+                try
+                {
+                    internal::LinearAlgebra::cholesky(problem.Q.data(),
+                                                       Q_chol_local.data(), problem.n);
+                    has_Q_chol_local = true;
+                }
+                catch (...) {}
+
                 internal::Initializer initializer(
-                    problem.Q.data(), problem.A.data(), problem.b.data(), x_bar,
-                    problem.m, problem.n, config_);
+                    problem.Q.data(), A_ptr, b_ptr, x_bar,
+                    m_exp, problem.n, config_);
+
+                if (has_Q_chol_local)
+                    initializer.set_Q_chol(Q_chol_local);
 
                 ws_good_vertex_ = initializer.find_good_vertex(
                     ws_initial_vertex_, sol.phase1_iterations, sol.vertices_explored);
+
+                // Expose Phase I vertex (v*) for diagnostics / theory verification.
+                sol.x_phase1 = ws_good_vertex_;
 
                 auto phase1_end = Clock::now();
                 sol.phase1_time = std::chrono::duration<double>(phase1_end - phase1_start).count();
@@ -270,8 +362,12 @@ namespace geoqp
                 auto phase2_start = Clock::now();
 
                 internal::FaceHopper face_hopper(
-                    problem.Q.data(), problem.A.data(), problem.b.data(), x_bar,
-                    problem.m, problem.n, config_);
+                    problem.Q.data(), A_ptr, b_ptr, x_bar,
+                    m_exp, problem.n, config_);
+
+                // Re-use the Cholesky factor already computed for Phase I.
+                if (has_Q_chol_local)
+                    face_hopper.set_Q_chol(Q_chol_local);
 
                 ws_initial_face_ = face_hopper.find_initial_face(ws_good_vertex_);
 
@@ -284,9 +380,9 @@ namespace geoqp
 #ifdef GEOQP_DEBUG
                 if (config_.verbosity >= 3)
                 {
-                    compute_ax_bar(problem.A.data(), x_bar.data(), problem.m, problem.n);
-                    compute_and_print_ray_trace(problem.A.data(), x_bar, ws_good_vertex_,
-                                                problem.m, problem.n);
+                    compute_ax_bar(A_ptr, x_bar.data(), m_exp, problem.n);
+                    compute_and_print_ray_trace(A_ptr, x_bar, ws_good_vertex_,
+                                                m_exp, problem.n);
                 }
 #endif
 
@@ -333,9 +429,9 @@ namespace geoqp
                     sol.x.resize(problem.n);
 
                     bool success = internal::ProjectionSolver::solve(
-                        ws_optimal_face_, problem.Q.data(), problem.A.data(), problem.b.data(),
+                        ws_optimal_face_, problem.Q.data(), A_ptr, b_ptr,
                         x_bar, face_hopper.get_Q_chol(),
-                        problem.m, problem.n, sol.x, ws_lambda_local_,
+                        m_exp, problem.n, sol.x, ws_lambda_local_,
                         face_hopper.get_Q_inv(),
                         face_hopper.q_is_diagonal(),
                         face_hopper.get_Q_diag());
@@ -348,10 +444,14 @@ namespace geoqp
                     auto phase3_end = Clock::now();
                     sol.phase3_time = std::chrono::duration<double>(phase3_end - phase3_start).count();
 
+                    // sol.lambda has size problem.m (original constraint count only).
+                    // Duals for bound-expansion rows (indices >= problem.m) are internal.
                     sol.lambda.resize(problem.m, 0.0);
                     for (size_t i = 0; i < ws_optimal_face_.size(); ++i)
                     {
-                        sol.lambda[ws_optimal_face_[i]] = ws_lambda_local_[i];
+                        const int idx = ws_optimal_face_[i];
+                        if (idx < problem.m)
+                            sol.lambda[idx] = ws_lambda_local_[i];
                     }
 
                     sol.active_set = ws_optimal_face_;
@@ -367,14 +467,22 @@ namespace geoqp
 
                 if (config_.check_optimality)
                 {
+                    // Build a full-size lambda for the KKT checker — it indexes
+                    // by active_set[i] which can contain bound-expansion row
+                    // indices in [problem.m, m_exp).  sol.lambda stays sized to
+                    // problem.m for the public API.
+                    std::vector<double> lambda_kkt(m_exp, 0.0);
+                    for (size_t i = 0; i < ws_optimal_face_.size(); ++i)
+                        lambda_kkt[ws_optimal_face_[i]] = ws_lambda_local_[i];
+
                     internal::KKTChecker kkt(
                         problem.Q.data(), problem.g.data(),
-                        problem.A.data(), problem.b.data(),
-                        problem.m, problem.n, config_.tolerance);
+                        A_ptr, b_ptr,
+                        m_exp, problem.n, config_.tolerance);
 
-                    if (!kkt.check(sol.x, sol.lambda, sol.active_set))
+                    if (!kkt.check(sol.x, lambda_kkt, sol.active_set))
                     {
-                        double residual = kkt.compute_residual(sol.x, sol.lambda, sol.active_set);
+                        double residual = kkt.compute_residual(sol.x, lambda_kkt, sol.active_set);
                         if (config_.verbosity >= 1)
                         {
                             std::cout << "Warning: KKT conditions not satisfied (residual: "
@@ -467,6 +575,7 @@ namespace geoqp
             if (has_Q_chol_)
             {
                 cached_face_hopper_->set_Q_chol(Q_chol_);
+                cached_initializer_->set_Q_chol(Q_chol_);  // enable Q-metric BFS
             }
 
             cached_projector_ = std::make_unique<internal::Projector>(
