@@ -408,31 +408,35 @@ def _draw_panel(ax, x_u, subtitle):
     if x_u_in_view:
         ax.scatter(*x_u, color=C_XU, marker="x", s=120, linewidths=2.4,
                    zorder=8)
-        ax.text(x_u[0] + 0.2, x_u[1] + 0.35, r"$x_u$",
+        ax.text(x_u[0] + 0.2, x_u[1] + 0.35, r"$\bar{x}$",
                 color=C_XU, fontsize=9, zorder=9)
     else:
-        dx  = x_u[0] - _centroid[0]
-        dy  = x_u[1] - _centroid[1]
-        dn  = np.sqrt(dx**2 + dy**2)
-        ux, uy = dx / dn, dy / dn
-        ex_lbl = float(np.clip(_centroid[0] + ux * 3.0,
-                                xlim[0] + 0.4, xlim[1] - 0.4))
-        ey_lbl = float(np.clip(_centroid[1] + uy * 3.0,
-                                ylim[0] + 0.4, ylim[1] - 0.4))
-        dist   = np.linalg.norm(x_u - _centroid)
-        ax.annotate(
-            "",
-            xy=(ex_lbl, ey_lbl),
-            xytext=(ex_lbl - ux * 1.2, ey_lbl - uy * 1.2),
-            arrowprops=dict(arrowstyle="-|>", color=C_XU, lw=1.5),
-            zorder=8,
-        )
-        ax.text(ex_lbl - ux * 1.7, ey_lbl - uy * 1.7,
-                f"$x_u$\n({dist:.0f} away)",
-                color=C_XU, fontsize=7.5, ha="center", va="center",
-                bbox=dict(facecolor="white", alpha=0.88, edgecolor=C_XU,
+        # x_u is off-frame: show distance as a text note in the corner
+        dist = np.linalg.norm(x_u - _x_hat)
+        ax.text(0.97, 0.97,
+                f"$\\bar{{x}}$ off-frame\n$L = {dist:.1f}$",
+                transform=ax.transAxes, fontsize=7, ha="right", va="top",
+                color=C_XU,
+                bbox=dict(facecolor="white", alpha=0.85, edgecolor=C_XU,
                           pad=2, boxstyle="round"),
-                zorder=9)
+                zorder=10)
+
+    # ── ν arrow: from x_hat in the fixed theorem direction ────────────────────
+    # ν = H·δ/‖H·δ‖ is the steepest-descent direction of f at x_hat,
+    # i.e. the outward normal of the Q-level-set at x_hat.
+    _nu_len = 2.2   # display length in data units
+    nu_end  = _x_hat + _nu_len * _nu_unit
+    ax.annotate(
+        "", xy=nu_end, xytext=_x_hat,
+        arrowprops=dict(arrowstyle="-|>", color="#e74c3c",
+                        lw=2.0, mutation_scale=12),
+        zorder=11,
+    )
+    ax.text(nu_end[0] + 0.15, nu_end[1] + 0.15, r"$\nu$",
+            color="#e74c3c", fontsize=10, fontweight="bold", zorder=12)
+    # mark x_hat clearly
+    ax.scatter(*_x_hat, color="#e74c3c", marker="P", s=80, zorder=11,
+               edgecolors="black", linewidths=0.7)
 
     # ── Q-distance labels on vertices ─────────────────────────────────────────
     for i, v in enumerate(POLY_VERTS):
@@ -488,11 +492,16 @@ legend_elements = [
            label=r"$x_{\mathrm{ph1}}$ — Phase-I exit"),
     Line2D([0], [0], linestyle="-", color=C_BEST, lw=2.0,
            label=r"Newton ray  ($v^* \!\to x^*$ direction)"),
+    Line2D([0], [0], marker="P", color="w", markerfacecolor="#e74c3c",
+           markersize=9, markeredgecolor="black",
+           label=r"$\hat{x}$ — H-projection (fixed)"),
+    Line2D([0], [0], linestyle="-", color="#e74c3c", lw=2.0,
+           label=r"$\nu = H\delta/\|H\delta\|$ — separating normal"),
 ]
 fig.legend(
     handles=legend_elements,
     loc="lower center", bbox_to_anchor=(0.5, -0.04),
-    ncol=6, framealpha=0.95, edgecolor="0.7", fontsize=8.5,
+    ncol=4, framealpha=0.95, edgecolor="0.7", fontsize=8.5,
 )
 
 fig.suptitle(
