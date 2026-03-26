@@ -19,6 +19,7 @@ gtest = ">=1.14,<2"
 python = "*"
 matplotlib = ">=3.10.8,<4"
 pandas = ">=3.0.1,<4"
+scipy = ">=1.17.1,<2"
 
 [target.linux-64.dependencies]
 valgrind = ">=3.26.0,<4"
