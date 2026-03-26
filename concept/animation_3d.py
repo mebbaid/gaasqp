@@ -24,6 +24,7 @@ from matplotlib.colors import LinearSegmentedColormap
 from mpl_toolkits.mplot3d import Axes3D, proj3d
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection, Line3DCollection
 from scipy.spatial.transform import Rotation
+from scipy.spatial import ConvexHull
 
 # ══════════════════════════════════════════════════════════════
 # Arrow3D helper  (FancyArrowPatch projected into 3D)
@@ -77,6 +78,20 @@ N_FRAMES_TOTAL = NF_CASE * N_CASES
 # ══════════════════════════════════════════════════════════════
 # 2.  Pre-compute per-case geometry
 # ══════════════════════════════════════════════════════════════
+def cube_corners(b):
+    xlo,xhi = b['xlo'],b['xhi']
+    ylo,yhi = b['ylo'],b['yhi']
+    zlo,zhi = b['zlo'],b['zhi']
+    return np.array([
+        [xlo,ylo,zlo],[xhi,ylo,zlo],[xhi,yhi,zlo],[xlo,yhi,zlo],
+        [xlo,ylo,zhi],[xhi,ylo,zhi],[xhi,yhi,zhi],[xlo,yhi,zhi],
+    ])
+
+CORNERS = cube_corners(box)
+CUBE_EDGES = [(0,1),(1,2),(2,3),(3,0),
+              (4,5),(5,6),(6,7),(7,4),
+              (0,4),(1,5),(2,6),(3,7)]
+
 NFACE = 120   # grid resolution per face for finding near/far
 
 def sample_cube_faces(box, n=NFACE):
@@ -98,6 +113,68 @@ def sample_cube_faces(box, n=NFACE):
     return np.vstack(pts)
 
 CUBE_PTS = sample_cube_faces(box)
+
+
+def _pplus_h1_h2_faces(x_star, x_good, neg_grad_good, box):
+    """Triangulated faces of P_+ ∩ H_1 ∩ H_2 ∩ cube.
+    P_+: (x_star - x_e)·(x - c0) ≥ 0   (x_e = Euclidean proj of x_star onto cube)
+    H_1: (-∇f(v))·(x - v) ≥ 0
+    H_2: (x_star - v)·(x - v) ≥ 0
+    """
+    lo = np.array([box['xlo'], box['ylo'], box['zlo']])
+    hi = np.array([box['xhi'], box['yhi'], box['zhi']])
+    c0 = 0.5 * (lo + hi)
+    x_e = np.clip(x_star, lo, hi)
+    hs = [
+        (x_star - x_e,         c0),
+        (neg_grad_good.copy(),  x_good.copy()),
+        (x_star - x_good,       x_good.copy()),
+    ]
+    # candidate vertices: cube corners + halfplane-edge intersections
+    cands = [c.astype(float) for c in CORNERS]
+    for ia, ib in CUBE_EDGES:
+        p0, p1 = CORNERS[ia].astype(float), CORNERS[ib].astype(float)
+        d = p1 - p0
+        for n, q in hs:
+            nd = float(np.dot(n, d))
+            if abs(nd) > 1e-12:
+                t = float(np.dot(n, q - p0)) / nd
+                if 0.0 <= t <= 1.0:
+                    cands.append(p0 + t * d)
+    # pairwise halfplane intersection lines clipped to cube
+    for (n1, q1), (n2, q2) in [(hs[0], hs[1]), (hs[0], hs[2]), (hs[1], hs[2])]:
+        d_line = np.cross(n1, n2)
+        if np.linalg.norm(d_line) < 1e-10:
+            continue
+        A = np.stack([n1, n2, d_line])
+        rhs = np.array([float(np.dot(n1, q1)), float(np.dot(n2, q2)), 0.0])
+        try:
+            p_line = np.linalg.solve(A, rhs)
+        except np.linalg.LinAlgError:
+            continue
+        for dim in range(3):
+            for bnd in (lo[dim], hi[dim]):
+                if abs(d_line[dim]) > 1e-12:
+                    t = (bnd - p_line[dim]) / d_line[dim]
+                    cands.append(p_line + t * d_line)
+    eps = 1e-7
+    valid = []
+    for pt in cands:
+        pt = np.asarray(pt, dtype=float)
+        if np.all(pt >= lo - eps) and np.all(pt <= hi + eps):
+            if all(float(np.dot(n, pt - q)) >= -eps for n, q in hs):
+                valid.append(np.clip(pt, lo, hi))
+    if len(valid) < 4:
+        return None
+    pts = np.unique(np.round(np.array(valid), 9), axis=0)
+    if len(pts) < 4:
+        return None
+    try:
+        hull = ConvexHull(pts)
+        return [pts[s] for s in hull.simplices]
+    except Exception:
+        return None
+
 
 def compute_case(H, x_star):
     eigvals, eigvecs = np.linalg.eigh(H)
@@ -135,6 +212,30 @@ def compute_case(H, x_star):
     neg_grad_near = -(H @ (x_near - x_star))
     neg_grad_far  = -(H @ (x_far  - x_star))
 
+    # Euclidean-farthest good vertex
+    _lo = np.array([box['xlo'], box['ylo'], box['zlo']])
+    _hi = np.array([box['xhi'], box['yhi'], box['zhi']])
+    _all_corners = np.array([[x0, y0, z0]
+                              for x0 in (_lo[0], _hi[0])
+                              for y0 in (_lo[1], _hi[1])
+                              for z0 in (_lo[2], _hi[2])], dtype=float)
+    _good_verts = []
+    for _c in _all_corners:
+        _ok = True
+        for _i in range(3):
+            if np.isclose(_c[_i], _lo[_i]) and x_star[_i] <= _lo[_i]:
+                _ok = False; break
+            if np.isclose(_c[_i], _hi[_i]) and x_star[_i] >= _hi[_i]:
+                _ok = False; break
+        if _ok:
+            _good_verts.append(_c)
+    if _good_verts:
+        x_good = max(_good_verts, key=lambda v: float(np.dot(v - x_star, v - x_star)))
+    else:
+        x_good = _all_corners[0].copy()
+    neg_grad_good = -(H @ (x_good - x_star))
+    region_faces  = _pplus_h1_h2_faces(x_star, x_good, neg_grad_good, box)
+
     t_p1   = np.linspace(0.0,    t_near, NF_P1)
     t_p2   = np.linspace(t_near, t_end,  NF_P2)
     t_hold = np.full(NF_HOLD, t_end)
@@ -149,6 +250,8 @@ def compute_case(H, x_star):
         t_end=t_end, t_all=t_all,
         neg_grad_near=neg_grad_near,
         neg_grad_far=neg_grad_far,
+        x_good=x_good, neg_grad_good=neg_grad_good,
+        region_faces=region_faces,
     )
 
 print('Pre-computing geometry …', end=' ', flush=True)
@@ -164,19 +267,6 @@ def scaled_vec(vec):
 # ══════════════════════════════════════════════════════════════
 # 3.  Cube geometry helpers
 # ══════════════════════════════════════════════════════════════
-def cube_corners(b):
-    xlo,xhi = b['xlo'],b['xhi']
-    ylo,yhi = b['ylo'],b['yhi']
-    zlo,zhi = b['zlo'],b['zhi']
-    return np.array([
-        [xlo,ylo,zlo],[xhi,ylo,zlo],[xhi,yhi,zlo],[xlo,yhi,zlo],
-        [xlo,ylo,zhi],[xhi,ylo,zhi],[xhi,yhi,zhi],[xlo,yhi,zhi],
-    ])
-
-CORNERS = cube_corners(box)
-CUBE_EDGES = [(0,1),(1,2),(2,3),(3,0),
-              (4,5),(5,6),(6,7),(7,4),
-              (0,4),(1,5),(2,6),(3,7)]
 
 FACE_INDICES = [
     [0,1,2,3],  # bottom  z=lo
@@ -239,6 +329,23 @@ ellipsoid_surf = [ax.plot_surface(
     _dummy_surf[...,0], _dummy_surf[...,1], _dummy_surf[...,2],
     color='white', alpha=0.0, linewidth=0, antialiased=True, zorder=5)]
 
+# P_+ ∩ H_1 ∩ H_2 region (removed/recreated each case)
+region_coll   = [None]
+_last_region  = [-1]
+
+# Good vertex marker + arrows
+good_dot, = ax.plot3D([], [], [], 'p', color='#d2a8ff', markersize=12,
+                      markeredgecolor='#ffffff', markeredgewidth=0.5, zorder=15)
+good_arrow_ng = Arrow3D([0,0],[0,0],[0,0],
+    mutation_scale=14, lw=2.0, arrowstyle='->', color='#d2a8ff', zorder=16)
+ax.add_artist(good_arrow_ng)
+good_arrow_ng.set_visible(False)
+good_arrow_d  = Arrow3D([0,0],[0,0],[0,0],
+    mutation_scale=14, lw=2.0, arrowstyle='->', color='#e3b341', zorder=16)
+ax.add_artist(good_arrow_d)
+good_arrow_d.set_visible(False)
+good_lbl = fig.text(0.03, 0.14, '', color='#d2a8ff', fontsize=9.5, va='top')
+
 # Nearest contact
 near_dot, = ax.plot3D([], [], [], '*', color='#3fb950', markersize=13,
                       markeredgecolor='#ffffff', markeredgewidth=0.5, zorder=15)
@@ -290,6 +397,23 @@ def update(frame):
     else:
         alpha_main = 1.0
 
+    # ── P_+ ∩ H_1 ∩ H_2 region (rebuild when case changes) ────
+    if case_idx != _last_region[0]:
+        _last_region[0] = case_idx
+        if region_coll[0] is not None:
+            region_coll[0].remove()
+            region_coll[0] = None
+        faces = g['region_faces']
+        if faces is not None:
+            rc = Poly3DCollection(faces,
+                facecolor='#7ee787', edgecolor='none',
+                alpha=0.0, zorder=3)
+            ax.add_collection3d(rc)
+            region_coll[0] = rc
+
+    if region_coll[0] is not None:
+        region_coll[0].set_alpha(0.30 * alpha_main)
+
     # ── ellipsoid surface ─────────────────────────────────────
     ellipsoid_surf[0].remove()
     if t > 0.05 and alpha_main > 0:
@@ -328,6 +452,31 @@ def update(frame):
     phase_txt.set_alpha(alpha_main)
 
     # ── nearest contact ───────────────────────────────────────
+    if near_revealed and alpha_main > 0:
+        # good vertex + arrows
+        vg  = g['x_good']
+        good_dot.set_data_3d([vg[0]], [vg[1]], [vg[2]])
+        good_dot.set_alpha(alpha_main)
+        vn = scaled_vec(g['neg_grad_good'])
+        good_arrow_ng.set_verts3d([vg[0], vg[0]+vn[0]],
+                                   [vg[1], vg[1]+vn[1]],
+                                   [vg[2], vg[2]+vn[2]])
+        good_arrow_ng.set_alpha(alpha_main)
+        good_arrow_ng.set_visible(True)
+        vd = scaled_vec(g['x_star'] - vg)
+        good_arrow_d.set_verts3d([vg[0], vg[0]+vd[0]],
+                                  [vg[1], vg[1]+vd[1]],
+                                  [vg[2], vg[2]+vd[2]])
+        good_arrow_d.set_alpha(alpha_main)
+        good_arrow_d.set_visible(True)
+        good_lbl.set_text(f'v_good = ({vg[0]:.1f},{vg[1]:.1f},{vg[2]:.1f})')
+        good_lbl.set_alpha(alpha_main)
+    else:
+        good_dot.set_data_3d([], [], [])
+        good_arrow_ng.set_visible(False)
+        good_arrow_d.set_visible(False)
+        good_lbl.set_text('')
+
     if near_revealed and alpha_main > 0:
         flash_n = 1.0 + 0.4*np.exp(-0.12*(local_f-(NF_P1-1))) \
                       * abs(np.sin((local_f-(NF_P1-1))*0.9))
