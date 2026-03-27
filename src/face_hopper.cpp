@@ -266,7 +266,55 @@ namespace geoqp
 
             Timer t;
 
-            // Active/blocking checks: O(1) per constraint for box, O(n) otherwise
+            // ── Box fast-path: compute F₀ via ray-exit (Proposition 3) ───────
+            // For box constraints with a good vertex v̂, the ray r(t)=v̂+t·d
+            // (d=x̄−v̂) enters the interior immediately.  The exit facet F₀ is
+            // the far facet i₀ = argmin_i t_i, where
+            //   t_i = (b_i − sign_i · v̂[var_i]) / (sign_i · d[var_i])
+            // for far constraints (those NOT active at v̂).
+            // Corollary: at most 1 further hop from F₀ to F★.
+            if (has_vhat_hint_)
+            {
+                const double *GEOQP_RESTRICT d_ptr   = ws_d_vhat_.data();
+                const double *GEOQP_RESTRICT v_ptr   = v.data();
+                const int    *GEOQP_RESTRICT var_ptr = constraint_var_.data();
+                const double *GEOQP_RESTRICT sgn_ptr = constraint_sign_.data();
+
+                double t_exit = std::numeric_limits<double>::infinity();
+                int    f0_idx = -1;
+
+                for (int i = 0; i < m_; ++i)
+                {
+                    const int    var  = var_ptr[i];
+                    const double sign = sgn_ptr[i];
+                    const double residual = b_[i] - sign * v_ptr[var];
+
+                    // Skip near constraints (active at v̂): residual ≈ 0
+                    if (residual < 1e-8) continue;
+
+                    const double denom = sign * d_ptr[var];
+                    if (denom < 1e-14) continue;   // ray parallel or away
+
+                    const double ti = residual / denom;
+                    if (ti < t_exit)
+                    {
+                        t_exit = ti;
+                        f0_idx = i;
+                    }
+                }
+
+                if (f0_idx >= 0)
+                {
+                    if (config_.timing_verbosity > 0)
+                    {
+                        timing_stats_.find_initial_face_total += t.elapsed_ms();
+                        ++timing_stats_.find_initial_face_calls;
+                    }
+                    return {f0_idx};
+                }
+            }
+
+            // ── General fallback: active / blocking scan ─────────────────────
             std::vector<int> active_at_v;
             std::vector<int> blocking_at_v;
 
@@ -779,9 +827,11 @@ namespace geoqp
         std::vector<int> FaceHopper::find_optimal_face_cached(
             const std::vector<int> &initial_face,
             int &iterations,
+            int &facet_hops,
             Timer &t) const
         {
             iterations = 0;
+            facet_hops = 0;
             const int max_iter = config_.max_iterations;
 
             if (!schur_manager_.initialize(initial_face, A_, Q_chol_.data(), n_, constraint_cache_))
@@ -789,6 +839,7 @@ namespace geoqp
                 // We need to use the non-cached projection method instead
                 std::vector<int> current_face = initial_face;
                 std::vector<double> x_proj, lambda;
+                bool last_was_add = false;
 
                 for (int iter = 0; iter < config_.max_iterations; ++iter)
                 {
@@ -811,6 +862,8 @@ namespace geoqp
 
                     if (most_neg >= 0)
                     {
+                        if (last_was_add) ++facet_hops;
+                        last_was_add = false;
                         current_face.erase(current_face.begin() + most_neg);
                         iterations++;
                         continue;
@@ -844,6 +897,7 @@ namespace geoqp
                         return current_face;
                     }
 
+                    last_was_add = true;
                     for (int idx : violated)
                     {
                         current_face.push_back(idx);
@@ -855,6 +909,7 @@ namespace geoqp
                 return current_face;
             }
 
+            bool last_was_add_schur = false;
             while (iterations < max_iter)
             {
                 const auto prev_face = schur_manager_.get_active_constraints();
@@ -948,6 +1003,7 @@ namespace geoqp
 
                 if (!primal_feasible && most_violated >= 0)
                 {
+                    last_was_add_schur = true;
                     std::vector<int> to_add;
                     for (int i = 0; i < m_; ++i)
                     {
@@ -1055,6 +1111,9 @@ namespace geoqp
 
                 if (drop_idx >= 0)
                 {
+                    if (last_was_add_schur) ++facet_hops;
+                    last_was_add_schur = false;
+
                     if (!schur_manager_.remove_constraint(drop_idx))
                     {
                         std::vector<int> fallback_face = schur_manager_.get_active_constraints();
@@ -1139,10 +1198,12 @@ namespace geoqp
 
         std::vector<int> FaceHopper::find_optimal_face(
             const std::vector<int> &initial_face,
-            int &iterations)
+            int &iterations,
+            int &facet_hops)
         {
             Timer t;
             iterations = 0;
+            facet_hops = 0;
 
             if (initial_face.empty())
             {
@@ -1172,12 +1233,13 @@ namespace geoqp
                                                       constraint_cache_, schur_manager_, Q_chol_.data());
                 case FaceHoppingStrategy::STANDARD:
                 default:
-                    return find_optimal_face_cached(initial_face, iterations, t);
+                    return find_optimal_face_cached(initial_face, iterations, facet_hops, t);
                 }
             }
 
             std::vector<int> current_face = initial_face;
             const int max_iter = config_.max_iterations;
+            bool last_was_add = false;  // Track add→drop transitions for facet-hop counting
 
             while (iterations < max_iter)
             {
@@ -1224,6 +1286,10 @@ namespace geoqp
 
                     if (most_negative_idx >= 0)
                     {
+                        // DROP: remove constraint with most negative multiplier
+                        if (last_was_add) ++facet_hops;
+                        last_was_add = false;
+
                         // Use workspace to build smaller face (avoid allocation)
                         ws_opt_smaller_face_.clear();
                         for (int j = 0; j < face_size; ++j)
@@ -1353,6 +1419,9 @@ namespace geoqp
                         }
                         else
                         {
+                            // ADD: violated constraints found — enter new facets
+                            last_was_add = true;
+
                             // Adaptive strategy: add all violated if safe, else add most violated
                             const int current_size = static_cast<int>(current_face.size());
                             const int violated_size = static_cast<int>(ws_opt_violated_.size());
@@ -1412,7 +1481,9 @@ namespace geoqp
                 }
                 else
                 {
-                    // Infeasible projection - need to add violated constraints
+                    // Infeasible projection - need to add violated constraints (ADD)
+                    last_was_add = true;
+
                     std::fill(ws_opt_is_active_set_.begin(), ws_opt_is_active_set_.end(), 0);
                     for (int idx : current_face)
                     {

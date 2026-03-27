@@ -53,6 +53,7 @@ namespace geoqp
         int iterations;
         int phase1_iterations;
         int phase2_iterations;      
+        int phase2_facet_hops;      // Facet-adjacency hops (add→drop transitions) in Phase II
         int num_active_constraints; // Number of active constraints at solution
         int vertices_explored;      // Number of vertices explored in Phase 1
         std::vector<double> x_phase1; // Phase I vertex v* (BFS result, before Phase II/III)

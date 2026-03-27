@@ -848,9 +848,11 @@ void run_hop_analysis()
     print_subheader("(a) Hop count vs n — box QP (diag and dense Q)");
     std::cout << std::setw(6)   << "n"
               << std::setw(12)  << "Q type"
+              << std::setw(10)  << "AvgPivot"
+              << std::setw(10)  << "MaxPivot"
               << std::setw(10)  << "AvgHops"
               << std::setw(10)  << "MaxHops"
-              << std::setw(12)  << "AdjBound"
+              << std::setw(12)  << "HopBound"
               << std::setw(12)  << "BoundOK?"
               << std::setw(12)  << "Ph1/Ph2%"
               << std::setw(12)  << "Time(us)"
@@ -864,9 +866,9 @@ void run_hop_analysis()
 
     auto check_hops = [&](int n, bool diagonal)
     {
-        double sum_hops = 0, sum_time = 0;
+        double sum_pivots = 0, sum_hops = 0, sum_time = 0;
         double sum_ph1us = 0, sum_ph2us = 0;
-        int max_hops = 0;
+        int max_pivots = 0, max_hops = 0;
         bool bounded = true;
         int ct = 0;
 
@@ -885,15 +887,16 @@ void run_hop_analysis()
             ++ct;
 
             double us = std::chrono::duration<double, std::micro>(t1 - t0).count();
-            sum_time  += us;
-            sum_hops  += sol.phase2_iterations;
-            max_hops   = std::max(max_hops, sol.phase2_iterations);
-            sum_ph1us += sol.phase1_time * 1e6;
-            sum_ph2us += sol.phase2_time * 1e6;
+            sum_time   += us;
+            sum_pivots += sol.phase2_iterations;
+            max_pivots  = std::max(max_pivots, sol.phase2_iterations);
+            sum_hops   += sol.phase2_facet_hops;
+            max_hops    = std::max(max_hops, sol.phase2_facet_hops);
+            sum_ph1us  += sol.phase1_time * 1e6;
+            sum_ph2us  += sol.phase2_time * 1e6;
 
-            int k   = (int)sol.active_set.size();
-            int adj = 2 * (2 * n - k);
-            if (sol.phase2_iterations > adj) bounded = false;
+            // Corollary bound: ≤ 2 facet-adjacency hops (1 to F₀, ≤1 from F₀ to F★)
+            if (sol.phase2_facet_hops > 2) bounded = false;
         }
 
         if (!bounded) all_pass = false;
@@ -904,9 +907,12 @@ void run_hop_analysis()
         std::cout << std::setw(6)   << n
                   << std::setw(12)  << (diagonal ? "diagonal" : "dense")
                   << std::setw(10)  << std::fixed << std::setprecision(1)
+                     << (sum_pivots * inv)
+                  << std::setw(10)  << max_pivots
+                  << std::setw(10)  << std::setprecision(1)
                      << (sum_hops * inv)
                   << std::setw(10)  << max_hops
-                  << std::setw(12)  << "2(2n-k)"
+                  << std::setw(12)  << "<=2"
                   << std::setw(12)  << (bounded ? "OK" : "FAIL")
                   << std::setw(11)  << std::setprecision(0) << ph1pct << "%"
                   << std::setw(12)  << std::setprecision(1) << (sum_time * inv)
@@ -924,6 +930,8 @@ void run_hop_analysis()
     print_subheader("(b) Separation sweep (n=10 dense Q): larger g → larger L → fewer hops expected");
     std::cout << std::setw(10)  << "scale_g"
               << std::setw(10)  << "avg ‖v‖"
+              << std::setw(10)  << "AvgPivot"
+              << std::setw(10)  << "MaxPivot"
               << std::setw(10)  << "AvgHops"
               << std::setw(10)  << "MaxHops"
               << std::setw(10)  << "Ph2(us)"
@@ -935,8 +943,8 @@ void run_hop_analysis()
     {
         std::mt19937 rng2(42);
         int n = 10;
-        double sum_v = 0, sum_h = 0, sum_ph2 = 0;
-        int mx = 0, ct = 0;
+        double sum_v = 0, sum_p = 0, sum_h = 0, sum_ph2 = 0;
+        int mp = 0, mh = 0, ct = 0;
         for (int t = 0; t < 30; ++t)
         {
             QPProblem qp = makeBoxQP(n, rng2, sg);
@@ -949,15 +957,19 @@ void run_hop_analysis()
             Eigen::VectorXd xbar = compute_xbar(qp.H, qp.g);
             Eigen::VectorXd xe   = project_onto_box(xbar, qp.lbX, qp.ubX);
             sum_v   += (xbar - xe).norm();
-            sum_h   += sol.phase2_iterations;
+            sum_p   += sol.phase2_iterations;
+            mp = std::max(mp, sol.phase2_iterations);
+            sum_h   += sol.phase2_facet_hops;
+            mh = std::max(mh, sol.phase2_facet_hops);
             sum_ph2 += sol.phase2_time * 1e6;
-            mx = std::max(mx, sol.phase2_iterations);
         }
         double inv = ct > 0 ? 1.0 / ct : 0.0;
         std::cout << std::setw(10) << std::fixed << std::setprecision(1) << sg
                   << std::setw(10) << std::setprecision(2) << (sum_v * inv)
+                  << std::setw(10) << std::setprecision(1) << (sum_p * inv)
+                  << std::setw(10) << mp
                   << std::setw(10) << std::setprecision(1) << (sum_h * inv)
-                  << std::setw(10) << mx
+                  << std::setw(10) << mh
                   << std::setw(10) << std::setprecision(1) << (sum_ph2 * inv)
                   << std::setw(10) << ct
                   << "\n";
@@ -966,6 +978,8 @@ void run_hop_analysis()
     // (c) Condition number sweep — ill-conditioned Q
     print_subheader("(c) Q condition number sweep (n=15, dense Q)");
     std::cout << std::setw(12)  << "cond(Q)"
+              << std::setw(10)  << "AvgPivot"
+              << std::setw(10)  << "MaxPivot"
               << std::setw(10)  << "AvgHops"
               << std::setw(10)  << "MaxHops"
               << std::setw(12)  << "ObjDiff"
@@ -977,8 +991,8 @@ void run_hop_analysis()
     {
         std::mt19937 rng3(55);
         int n = 15;
-        double sh = 0, sod = 0;
-        int mh = 0, ct = 0;
+        double sp = 0, sh = 0, sod = 0;
+        int mp = 0, mh = 0, ct = 0;
 
         for (int t = 0; t < 20; ++t)
         {
@@ -988,15 +1002,46 @@ void run_hop_analysis()
             auto sol = solver.solve(gp);
             if (sol.status != geoqp::Status::SUCCESS) continue;
             ++ct;
-            sh += sol.phase2_iterations;
-            mh = std::max(mh, sol.phase2_iterations);
+            sp += sol.phase2_iterations;
+            mp = std::max(mp, sol.phase2_iterations);
+            sh += sol.phase2_facet_hops;
+            mh = std::max(mh, sol.phase2_facet_hops);
+
+            // Diagnostic: dump problem when hops > 2
+            if (sol.phase2_facet_hops > 2)
+            {
+                std::cout << "\n*** HOP BOUND VIOLATION: cond=" << cond
+                          << " trial=" << t
+                          << " pivots=" << sol.phase2_iterations
+                          << " hops=" << sol.phase2_facet_hops
+                          << " active_set_size=" << sol.active_set.size()
+                          << "\n";
+                std::cout << "    Q (upper triangle):\n    ";
+                for (int r = 0; r < n; ++r)
+                    for (int c2 = r; c2 < n; ++c2)
+                        std::cout << std::setprecision(6) << qp.H(r, c2) << " ";
+                std::cout << "\n    g: ";
+                for (int i = 0; i < n; ++i) std::cout << qp.g(i) << " ";
+                std::cout << "\n    lb: ";
+                for (int i = 0; i < n; ++i) std::cout << qp.lbX(i) << " ";
+                std::cout << "\n    ub: ";
+                for (int i = 0; i < n; ++i) std::cout << qp.ubX(i) << " ";
+                std::cout << "\n    x*: ";
+                for (int i = 0; i < n; ++i) std::cout << sol.x[i] << " ";
+                std::cout << "\n    active_set: ";
+                for (int idx : sol.active_set) std::cout << idx << " ";
+                std::cout << "\n";
+            }
+
             auto ref = solveQPOASES(qp);
             if (ref.success)
                 sod += std::abs(sol.objective_value - ref.obj);
         }
         double inv = ct > 0 ? 1.0 / ct : 0.0;
         std::cout << std::setw(12) << std::scientific << std::setprecision(0) << cond
-                  << std::setw(10) << std::fixed << std::setprecision(1) << (sh * inv)
+                  << std::setw(10) << std::fixed << std::setprecision(1) << (sp * inv)
+                  << std::setw(10) << mp
+                  << std::setw(10) << std::setprecision(1) << (sh * inv)
                   << std::setw(10) << mh
                   << std::setw(12) << std::scientific << std::setprecision(1)
                      << (sod * inv)
@@ -1097,7 +1142,8 @@ void run_affine_image()
     std::cout << std::setw(6)   << "n"
               << std::setw(12)  << "AvgVerts"
               << std::setw(12)  << "Ph1iters"
-              << std::setw(10)  << "Ph2Hops"
+              << std::setw(10)  << "Pivots"
+              << std::setw(10)  << "Hops"
               << std::setw(12)  << "Total(us)"
               << std::setw(12)  << "ObjDiff"
               << std::setw(10)  << "#Solved"
@@ -1110,7 +1156,7 @@ void run_affine_image()
     // Dense T BFS is O(2^n) worst-case; keep n small
     for (int n : {3, 4, 5, 6, 7, 8, 10, 12})
     {
-        double sv = 0, sp1 = 0, sp2 = 0, stime = 0, sod = 0;
+        double sv = 0, sp1 = 0, sp2 = 0, sh = 0, stime = 0, sod = 0;
         int ct = 0, ne = 0;
 
         for (int t = 0; t < trials_b; ++t)
@@ -1129,6 +1175,7 @@ void run_affine_image()
             sv    += sol.vertices_explored;
             sp1   += sol.phase1_iterations;
             sp2   += sol.phase2_iterations;
+            sh    += sol.phase2_facet_hops;
             stime += us;
 
             auto ref = solveQPOASES(qp);
@@ -1141,6 +1188,7 @@ void run_affine_image()
                   << std::setw(12) << std::fixed << std::setprecision(1) << (sv * inv)
                   << std::setw(12) << (sp1 * inv)
                   << std::setw(10) << (sp2 * inv)
+                  << std::setw(10) << (sh * inv)
                   << std::setw(12) << (stime * inv)
                   << std::setw(12) << std::scientific << std::setprecision(1)
                      << (sod * inv)
@@ -1169,8 +1217,9 @@ void run_timing_breakdown()
               << std::setw(8)   << "Ph1%"
               << std::setw(8)   << "Ph2%"
               << std::setw(8)   << "Ph3%"
+              << std::setw(8)   << "Pivots"
               << std::setw(8)   << "Hops"
-              << std::setw(10)  << "us/hop"
+              << std::setw(10)  << "us/pvt"
               << "\n";
     std::cout << std::string(W, '-') << "\n";
 
@@ -1179,7 +1228,7 @@ void run_timing_breakdown()
 
     auto profile = [&](int n, bool diagonal)
     {
-        double ttot = 0, tph1 = 0, tph2 = 0, tph3 = 0, hops = 0;
+        double ttot = 0, tph1 = 0, tph2 = 0, tph3 = 0, pivots = 0, hops = 0;
         int solved = 0;
 
         for (int t = 0; t < trials; ++t)
@@ -1199,12 +1248,13 @@ void run_timing_breakdown()
             tph1 += sol.phase1_time * 1e6;
             tph2 += sol.phase2_time * 1e6;
             tph3 += sol.phase3_time * 1e6;
-            hops += sol.phase2_iterations;
+            pivots += sol.phase2_iterations;
+            hops   += sol.phase2_facet_hops;
         }
         if (!solved) return;
         double inv = 1.0 / solved;
         double at = ttot * inv, a1 = tph1 * inv, a2 = tph2 * inv, a3 = tph3 * inv;
-        double ah = hops * inv;
+        double ap = pivots * inv, ah = hops * inv;
         std::cout << std::setw(6)  << n
                   << std::setw(12) << (diagonal ? "diagonal" : "dense")
                   << std::setw(12) << std::fixed << std::setprecision(1) << at
@@ -1215,8 +1265,9 @@ void run_timing_breakdown()
                      << (at > 0 ? 100.0 * a1 / at : 0) << "%"
                   << std::setw(7)  << (at > 0 ? 100.0 * a2 / at : 0) << "%"
                   << std::setw(7)  << (at > 0 ? 100.0 * a3 / at : 0) << "%"
-                  << std::setw(8)  << std::setprecision(1) << ah
-                  << std::setw(10) << (ah > 0.01 ? a2 / ah : 0.0)
+                  << std::setw(8)  << std::setprecision(1) << ap
+                  << std::setw(8)  << ah
+                  << std::setw(10) << (ap > 0.01 ? a2 / ap : 0.0)
                   << "\n";
     };
 
@@ -1242,6 +1293,7 @@ void run_performance()
               << std::setw(10)  << "Geo(us)"
               << std::setw(12)  << "qpOAS(us)"
               << std::setw(10)  << "Geo/qpO"
+              << std::setw(10)  << "AvgPivot"
               << std::setw(10)  << "AvgHops"
               << std::setw(12)  << "ObjDiff"
               << std::setw(10)  << "Result"
@@ -1254,7 +1306,7 @@ void run_performance()
     auto bench = [&](int n, const std::string &label,
                       std::function<QPProblem(int, std::mt19937 &)> gen)
     {
-        double tg = 0, tq = 0, hops = 0, max_od = 0;
+        double tg = 0, tq = 0, pivots = 0, hops = 0, max_od = 0;
         int geo_ok = 0;
 
         for (int t = 0; t < trials; ++t)
@@ -1268,7 +1320,8 @@ void run_performance()
             auto t1 = Clock::now();
             tg += std::chrono::duration<double, std::micro>(t1 - t0).count();
             if (sol.status == geoqp::Status::SUCCESS) geo_ok++;
-            hops += sol.phase2_iterations;
+            pivots += sol.phase2_iterations;
+            hops   += sol.phase2_facet_hops;
 
             bool success; double qobj;
             tq += solveQPOASES_time(qp, success, qobj);
@@ -1284,7 +1337,8 @@ void run_performance()
                   << std::setw(10) << std::fixed << std::setprecision(1) << (tg * inv)
                   << std::setw(12) << (tq * inv)
                   << std::setw(9)  << std::setprecision(3) << ratio << "x"
-                  << std::setw(10) << std::setprecision(1) << (hops * inv)
+                  << std::setw(10) << std::setprecision(1) << (pivots * inv)
+                  << std::setw(10) << (hops * inv)
                   << std::setw(12) << std::scientific << std::setprecision(1) << max_od
                   << std::setw(10) << res
                   << "\n";
@@ -1321,6 +1375,7 @@ void run_hotstart()
               << std::setw(12)  << "Geo(us)"
               << std::setw(13)  << "qpOAS(us)"
               << std::setw(10)  << "Geo/qpO"
+              << std::setw(10)  << "AvgPivot"
               << std::setw(10)  << "AvgHops"
               << std::setw(12)  << "ObjDiff"
               << "\n";
@@ -1365,7 +1420,7 @@ void run_hotstart()
         qpoases_qp.init(H_vec.data(), g0.data(), nullptr,
                         lbX.data(), ubX.data(), nullptr, nullptr, nWSR0);
 
-        double tg = 0, tq = 0, hops = 0, sod = 0;
+        double tg = 0, tq = 0, pivots = 0, hops = 0, sod = 0;
         bool geo_ok = true;
         std::normal_distribution<> gdist(0.0, 5.0);
         std::vector<double> g_flat(n);
@@ -1379,7 +1434,8 @@ void run_hotstart()
             auto t1 = Clock::now();
             tg += std::chrono::duration<double, std::micro>(t1 - t0).count();
             if (sol.status != geoqp::Status::SUCCESS) geo_ok = false;
-            hops += sol.phase2_iterations;
+            pivots += sol.phase2_iterations;
+            hops   += sol.phase2_facet_hops;
             double geo_obj = sol.objective_value;
 
             int nWSR_hs = 2000;
@@ -1398,7 +1454,8 @@ void run_hotstart()
                   << std::setw(12) << std::fixed << std::setprecision(2) << (tg * inv)
                   << std::setw(13) << (tq * inv)
                   << std::setw(9)  << std::setprecision(3) << ratio << "x"
-                  << std::setw(10) << std::setprecision(1) << (hops * inv)
+                  << std::setw(10) << std::setprecision(1) << (pivots * inv)
+                  << std::setw(10) << (hops * inv)
                   << std::setw(12) << std::scientific << std::setprecision(1)
                      << (sod * inv)
                   << (geo_ok ? "" : "  [ERR]")

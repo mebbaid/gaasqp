@@ -300,7 +300,8 @@ namespace geoqp
 
             std::vector<int> find_optimal_face(
                 const std::vector<int> &initial_face,
-                int &iterations);
+                int &iterations,
+                int &facet_hops);
 
             const std::vector<double> &get_last_x() const { return ws_x_star_; }
             const std::vector<double> &get_last_lambda() const { return ws_lambda_; }
@@ -336,6 +337,7 @@ namespace geoqp
             std::vector<int> find_optimal_face_cached(
                 const std::vector<int> &initial_face,
                 int &iterations,
+                int &facet_hops,
                 Timer &t) const;
 
             int select_single_constraint(

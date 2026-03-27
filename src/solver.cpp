@@ -266,6 +266,7 @@ namespace geoqp
             sol.iterations = 0;
             sol.phase1_iterations = 0;
             sol.phase2_iterations = 0;
+            sol.phase2_facet_hops = 0;
             sol.vertices_explored = 0;
             sol.num_active_constraints = 0;
             sol.phase1_time = 0.0;
@@ -407,7 +408,7 @@ namespace geoqp
 
                 // Phase II: Find optimal face
                 ws_optimal_face_ = face_hopper.find_optimal_face(
-                    ws_initial_face_, sol.phase2_iterations);
+                    ws_initial_face_, sol.phase2_iterations, sol.phase2_facet_hops);
 
 #ifdef GEOQP_DEBUG
                 print_phase2_debug(sol.phase2_iterations, static_cast<int>(ws_initial_face_.size()),
@@ -670,6 +671,7 @@ namespace geoqp
             sol.iterations = 0;
             sol.phase1_iterations = 0;
             sol.phase2_iterations = 0;
+            sol.phase2_facet_hops = 0;
             sol.vertices_explored = 0;
             sol.num_active_constraints = 0;
             sol.phase1_time = 0.0;
@@ -785,7 +787,7 @@ namespace geoqp
 #endif
 
                 ws_optimal_face_ = cached_face_hopper_->find_optimal_face(
-                    ws_initial_face_, sol.phase2_iterations);
+                    ws_initial_face_, sol.phase2_iterations, sol.phase2_facet_hops);
 
                 auto phase2_end = Clock::now();
                 sol.phase2_time = std::chrono::duration<double>(phase2_end - phase2_start).count();

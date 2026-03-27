@@ -1,13 +1,14 @@
 /**
  * @file test_theory_verification.cpp
- * @brief Verifies the theoretical guarantees of GeoQP against math.tex:
+ * @brief Verifies the theoretical guarantees of GeoQP against box_antipodal.tex:
  *
- *   - Proposition 3: Box fast-path visits exactly 1 "vertex" (O(n) Phase I)
- *                    and places v* at the correct bound per dimension.
- *   - Lemma 2:       v* returned by the BFS maximises the score
- *                    score(v) = ‖v - x̄‖_Q² − 2L⟨ν, v⟩ over all box vertices.
- *   - Theorem 1:     Phase II hops from the initial face to F* ≤ number of
- *                    faces adjacent to the initial face in the box polytope.
+ *   - BoxAntipodal:       Phase I box fast-path visits exactly 1 vertex in O(n)
+ *                         and places v̂ at the Euclidean-farthest good vertex
+ *                         (Lemma part ii + Proposition 2 in box_antipodal.tex).
+ *   - FarthestGoodVertex: v̂ = argmax_{v ∈ V_good} ‖v − x̄‖₂  (Proposition 2:
+ *                         "farthest in Euclidean sense").
+ *   - PhaseIIHopBound:    Phase II hops from initial face to F* ≤ number of
+ *                         faces adjacent to the initial face in the box polytope.
  */
 
 #include <gtest/gtest.h>
@@ -63,20 +64,29 @@ std::vector<double> compute_xbar(const std::vector<double> &Q,
     return x;
 }
 
-// Q-weighted squared distance ‖v − x̄‖_Q²
-double q_dist2(const std::vector<double> &v,
-               const std::vector<double> &xbar,
-               const std::vector<double> &Q, int n)
+// Euclidean squared distance ‖v − x̄‖₂²
+double eucl_dist2(const std::vector<double> &v,
+                  const std::vector<double> &xbar, int n)
 {
     double d = 0.0;
-    for (int i = 0; i < n; ++i)
-    {
-        double qi = 0.0;
-        for (int j = 0; j < n; ++j)
-            qi += Q[i * n + j] * (v[j] - xbar[j]);
-        d += (v[i] - xbar[i]) * qi;
-    }
+    for (int j = 0; j < n; ++j)
+        d += (v[j] - xbar[j]) * (v[j] - xbar[j]);
     return d;
+}
+
+// True iff box vertex v is a good vertex w.r.t. x̄ (Definition 1, box_antipodal.tex):
+//   ∀j: (v_j = lb_j → x̄_j > lb_j)  AND  (v_j = ub_j → x̄_j < ub_j).
+bool is_good_box_vertex(const std::vector<double> &v,
+                        const std::vector<double> &xbar,
+                        const std::vector<double> &lb,
+                        const std::vector<double> &ub, int n)
+{
+    for (int j = 0; j < n; ++j)
+    {
+        if (std::abs(v[j] - lb[j]) < 1e-10 && xbar[j] <= lb[j] + 1e-10) return false;
+        if (std::abs(v[j] - ub[j]) < 1e-10 && xbar[j] >= ub[j] - 1e-10) return false;
+    }
+    return true;
 }
 
 // Enumerate all 2^n vertices of the box [lb, ub] (for small n only).
@@ -190,27 +200,19 @@ BoxVerificationResult run_box_verification(
     {
         auto xbar = compute_xbar(Q, g, n);
 
-        // We don't have direct access to ν, so we verify a necessary condition:
-        // v* must have the highest Q-weighted distance ‖v - x̄‖_Q² among all
-        // good vertices (vertices v s.t. the segment [v, x̄] crosses a
-        // constraint boundary — i.e. v ≠ x̄ and is not strictly feasible).
-        //
-        // For a pure box problem the unconstrained minimum x̄ is outside the
-        // box (otherwise the solver returns immediately). So every box vertex
-        // is a "good" vertex (it lies on the boundary by construction).
-        // We therefore simply check that v* achieves the maximum Q-weighted
-        // distance among all box vertices.
+        // Proposition 2 (box_antipodal.tex): v̂ = argmax_{v ∈ V_good} ‖v − x̄‖₂.
+        // The box fast-path places v̂_j at the Euclidean-farthest bound for each
+        // coordinate j (Lemma, part ii: antipodal construction).
+        // We enumerate all 2^n box vertices, filter to good vertices (Definition 1),
+        // and verify v̂ achieves the maximum Euclidean distance (within 1% tolerance).
         auto all_verts = enumerate_box_vertices(lb, ub, n);
         double best_dist = -1.0;
         for (auto &v : all_verts)
-            best_dist = std::max(best_dist, q_dist2(v, xbar, Q, n));
+            if (is_good_box_vertex(v, xbar, lb, ub, n))
+                best_dist = std::max(best_dist, eucl_dist2(v, xbar, n));
 
-        // The box fast-path picks the vertex per-coordinate based on
-        // Euclidean distance from x̄ (currently) — the Lemma 2 score
-        // additionally requires the ν term.  We verify the weaker necessary
-        // condition: ‖v* − x̄‖_Q² ≥ 0.99 * best_dist (within 1% of optimum).
-        double vstar_dist = q_dist2(r.x_phase1, xbar, Q, n);
-        r.vstar_is_optimal = (vstar_dist >= 0.99 * best_dist);
+        double vstar_dist = eucl_dist2(r.x_phase1, xbar, n);
+        r.vstar_is_optimal = (best_dist < 0.0) || (vstar_dist >= 0.99 * best_dist);
     }
 
     // Theorem 1: Phase II hops ≤ # adjacent faces of initial face.
@@ -231,9 +233,9 @@ BoxVerificationResult run_box_verification(
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ── Proposition 3: box fast-path fires ──────────────────────────────────────
+// ── BoxAntipodal: O(n) fast-path fires (Lemma, box_antipodal.tex) ─────────────
 
-TEST(Proposition3, DiagonalQ_SmallBox)
+TEST(BoxAntipodal, DiagonalQ_SmallBox)
 {
     int n = 5;
     auto Q = make_diag_Q({2.0, 3.0, 1.5, 4.0, 2.5});
@@ -246,7 +248,7 @@ TEST(Proposition3, DiagonalQ_SmallBox)
         << "Expected vertices_explored==1 (box fast-path), got " << r.vertices_explored;
 }
 
-TEST(Proposition3, DiagonalQ_AsymmetricBounds)
+TEST(BoxAntipodal, DiagonalQ_AsymmetricBounds)
 {
     int n = 8;
     auto Q = make_diag_Q({1.0, 2.0, 0.5, 3.0, 1.5, 2.5, 4.0, 1.0});
@@ -260,7 +262,7 @@ TEST(Proposition3, DiagonalQ_AsymmetricBounds)
         << "Expected vertices_explored==1 (box fast-path), got " << r.vertices_explored;
 }
 
-TEST(Proposition3, DenseQ_MediumBox)
+TEST(BoxAntipodal, DenseQ_MediumBox)
 {
     int n = 10;
     auto Q = make_dense_Q(n, 42, 2.0);
@@ -274,7 +276,7 @@ TEST(Proposition3, DenseQ_MediumBox)
         << "Expected vertices_explored==1, got " << r.vertices_explored;
 }
 
-TEST(Proposition3, LargeBox_StillOneFastPathVertex)
+TEST(BoxAntipodal, LargeBox_StillOneFastPathVertex)
 {
     int n = 50;
     auto Q = make_diag_Q(std::vector<double>(n, 1.0));
@@ -289,12 +291,11 @@ TEST(Proposition3, LargeBox_StillOneFastPathVertex)
         << "Expected vertices_explored==1, got " << r.vertices_explored;
 }
 
-// ── Proposition 3: v* coordinates at the correct bound ──────────────────────
-// For a diagonal Q = diag(q_j), x̄_j = -g_j / q_j.
-// The box fast-path should place v*_j at lb_j if x̄_j > midpoint, else ub_j.
-// But the solver uses per-coordinate Euclidean distance: v*_j = lb_j if
-// |x̄_j - lb_j| > |x̄_j - ub_j|, else ub_j.
-TEST(Proposition3, VstarCoordinatesCorrect_DiagonalQ)
+// ── Lemma (box_antipodal.tex): v̂ coordinates at the Euclidean-farthest bound ──
+// For a pure box (T=I, c=0), the antipodal construction (Lemma, part ii) places
+// v̂_j at the bound farther from x̄_j: v̂_j = lb_j if |x̄_j−lb_j| > |x̄_j−ub_j|,
+// else ub_j.  This satisfies the good-vertex condition: v̂_j=lb_j ⟹ x̄_j>lb_j.
+TEST(BoxAntipodal, VstarCoordinatesCorrect)
 {
     int n = 6;
     std::vector<double> diag = {1.0, 2.0, 3.0, 1.5, 2.5, 4.0};
@@ -314,14 +315,14 @@ TEST(Proposition3, VstarCoordinatesCorrect_DiagonalQ)
         double expected = (std::abs(xbar[j] - lb[j]) > std::abs(xbar[j] - ub[j]))
                           ? lb[j] : ub[j];
         EXPECT_NEAR(r.x_phase1[j], expected, 1e-6)
-            << "v*[" << j << "] = " << r.x_phase1[j]
+            << "v̂[" << j << "] = " << r.x_phase1[j]
             << " but expected " << expected
             << " (x̄[" << j << "] = " << xbar[j] << ")";
     }
 }
 
-// ── Lemma 2: v* achieves near-maximum Q-weighted distance ───────────────────
-TEST(Lemma2, VstarMaximisesQWeightedDistance_DiagQ_n5)
+// ── Proposition 2 (box_antipodal.tex): v̂ = Euclidean-farthest good vertex ────
+TEST(FarthestGoodVertex, DiagQ_n5)
 {
     int n = 5;
     auto Q = make_diag_Q({2.0, 1.0, 3.0, 0.5, 4.0});
@@ -331,10 +332,10 @@ TEST(Lemma2, VstarMaximisesQWeightedDistance_DiagQ_n5)
     auto r = run_box_verification(Q, g, lb, ub);
     ASSERT_TRUE(r.solved);
     EXPECT_TRUE(r.vstar_is_optimal)
-        << "v* does not achieve near-maximum Q-weighted distance over box vertices";
+        << "v̂ is not the Euclidean-farthest good vertex (Proposition 2)";
 }
 
-TEST(Lemma2, VstarMaximisesQWeightedDistance_DenseQ_n8)
+TEST(FarthestGoodVertex, DenseQ_n8)
 {
     int n = 8;
     auto Q = make_dense_Q(n, 123, 1.0);
@@ -345,11 +346,11 @@ TEST(Lemma2, VstarMaximisesQWeightedDistance_DenseQ_n8)
     auto r = run_box_verification(Q, g, lb, ub);
     ASSERT_TRUE(r.solved);
     EXPECT_TRUE(r.vstar_is_optimal)
-        << "v* does not achieve near-maximum Q-weighted distance";
+        << "v̂ is not the Euclidean-farthest good vertex (Proposition 2)";
 }
 
-// ── Theorem 1: Phase II hops ≤ # adjacent faces ─────────────────────────────
-TEST(Theorem1, Phase2HopsWithinAdjacencyBound_SmallBox)
+// ── Phase II hop bound: hops ≤ # adjacent faces ──────────────────────────────
+TEST(PhaseIIHopBound, SmallBox)
 {
     int n = 5;
     auto Q = make_diag_Q({1.0, 2.0, 3.0, 1.5, 2.5});
@@ -363,7 +364,7 @@ TEST(Theorem1, Phase2HopsWithinAdjacencyBound_SmallBox)
         << " exceeds adjacency bound for active_set size=" << r.active_set.size();
 }
 
-TEST(Theorem1, Phase2HopsWithinAdjacencyBound_DenseQ_n10)
+TEST(PhaseIIHopBound, DenseQ_n10)
 {
     int n = 10;
     auto Q = make_dense_Q(n, 77, 1.5);
@@ -378,7 +379,7 @@ TEST(Theorem1, Phase2HopsWithinAdjacencyBound_DenseQ_n10)
         << " exceeds adjacency bound";
 }
 
-TEST(Theorem1, Phase2HopsWithinAdjacencyBound_n20)
+TEST(PhaseIIHopBound, n20)
 {
     int n = 20;
     auto Q = make_dense_Q(n, 99, 2.0);
@@ -416,9 +417,9 @@ TEST(Regression, UnconstrainedMinFeasible_ZeroHops)
 
 // ── Combined: verify all three properties together ──────────────────────────
 // Uses a diagonal Q so that all three theoretical properties hold provably:
-//   - Proposition 3: box fast-path O(n) (vertices_explored == 1)
-//   - Lemma 2: Euclidean per-coord fast-path == Q-weighted for diagonal Q
-//   - Theorem 1: Phase II hops ≤ adjacency bound
+//   - BoxAntipodal:       box fast-path O(n) (vertices_explored == 1)
+//   - FarthestGoodVertex: Euclidean-farthest good vertex (per-coord greedy)
+//   - PhaseIIHopBound:    Phase II hops ≤ adjacency bound
 TEST(Combined, AllThreePropertiesHold_n8)
 {
     int n = 8;
@@ -434,7 +435,7 @@ TEST(Combined, AllThreePropertiesHold_n8)
     EXPECT_TRUE(r.box_fast_path_used)
         << "Proposition 3 violated: vertices_explored=" << r.vertices_explored;
     EXPECT_TRUE(r.vstar_is_optimal)
-        << "Lemma 2 violated: v* not near-maximiser of Q-weighted distance";
+        << "Proposition 2 violated: v̂ is not Euclidean-farthest good vertex";
     EXPECT_TRUE(r.phase2_within_adjacency_bound)
         << "Theorem 1 violated: phase2_iterations=" << r.phase2_iterations
         << " > adjacency bound, active_set.size()=" << r.active_set.size();
