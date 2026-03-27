@@ -4,6 +4,20 @@ find_package(QpSolversEigen QUIET)
 find_package(qpOASES QUIET)
 
 # RANDOM GENERATED PROBLEMS AND LIPM-MPC-LIKE Problem
+if(qpOASES_FOUND)
+    message(STATUS "Building box-focused benchmark")
+
+    add_executable(benchmark_box benchmark-box.cpp)
+    target_include_directories(benchmark_box PRIVATE ${qpOASES_INCLUDE_DIR})
+    target_link_libraries(benchmark_box PRIVATE
+        geoqp
+        ${qpOASES_LIBRARY})
+    target_compile_features(benchmark_box PRIVATE cxx_std_17)
+
+    install(TARGETS benchmark_box
+        RUNTIME DESTINATION bin)
+endif()
+
 if(QpSolversEigen_FOUND AND qpOASES_FOUND)
     message(STATUS "Building Unified Benchmark")
 

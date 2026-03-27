@@ -234,6 +234,36 @@ namespace geoqp
         std::vector<int> FaceHopper::find_initial_face(
             const std::vector<double> &v)
         {
+            // ── Precompute H1/H2 hint vectors (Proposition 2) ────────────────────
+            // These are fixed for the entire Phase II loop.
+            //   d         = x̄ − v̂               (H2 inward normal, O(n))
+            //   -∇f(v̂)   = Q·d = Q(x̄ − v̂)      (H1 inward normal, O(n) or O(n²))
+            // Stored in ws_d_vhat_ / ws_neg_grad_vhat_; guarded by has_vhat_hint_.
+            has_vhat_hint_ = false;
+            if (has_diagonal_constraints_)
+            {
+                ws_d_vhat_.resize(n_);
+                ws_neg_grad_vhat_.resize(n_);
+                const double *GEOQP_RESTRICT xb  = x_bar_.data();
+                const double *GEOQP_RESTRICT vp  = v.data();
+                double       *GEOQP_RESTRICT dv  = ws_d_vhat_.data();
+                for (int j = 0; j < n_; ++j)
+                    dv[j] = xb[j] - vp[j];
+                if (q_is_diagonal_)
+                {
+                    const double *GEOQP_RESTRICT qd = Q_diag_.data();
+                    double       *GEOQP_RESTRICT ng = ws_neg_grad_vhat_.data();
+                    for (int j = 0; j < n_; ++j)
+                        ng[j] = qd[j] * dv[j];
+                }
+                else
+                {
+                    // Dense Q: one matvec Q·d, O(n²) — done once per solve.
+                    LinearAlgebra::matvec(Q_, dv, ws_neg_grad_vhat_.data(), n_, n_);
+                }
+                has_vhat_hint_ = true;
+            }
+
             Timer t;
 
             // Active/blocking checks: O(1) per constraint for box, O(n) otherwise
@@ -1227,16 +1257,47 @@ namespace geoqp
 
                         if (has_diagonal_constraints_)
                         {
-                            // Fast path: each constraint i is sign_i * x[var_i] <= b[i].
-                            // No dot product needed — O(1) per constraint instead of O(n).
-                            const int *GEOQP_RESTRICT var_ptr  = constraint_var_.data();
+                            // O(1) per constraint via box metadata.
+                            // H1/H2 filter (Proposition 2): only add violated constraint i
+                            // if its normal a_i = s_i·e_j satisfies
+                            //   H2: (x̄_j − v̂_j)·s_i ≥ 0   and
+                            //   H1: [Q(x̄−v̂)]_j  ·s_i ≥ 0.
+                            // Fallback to unfiltered scan when hint is absent or filter
+                            // removes all candidates (degenerate / numerical case).
+                            const int    *GEOQP_RESTRICT var_ptr = constraint_var_.data();
                             const double *GEOQP_RESTRICT sgn_ptr = constraint_sign_.data();
-                            for (int i = 0; i < m_; ++i)
+                            if (has_vhat_hint_)
                             {
-                                if (is_active[i])
-                                    continue;
-                                if (sgn_ptr[i] * x_ptr[var_ptr[i]] > b_[i] + config_.constraint_tolerance)
-                                    ws_opt_violated_.push_back(i);
+                                const double *GEOQP_RESTRICT ng = ws_neg_grad_vhat_.data();
+                                const double *GEOQP_RESTRICT dv = ws_d_vhat_.data();
+                                for (int i = 0; i < m_; ++i)
+                                {
+                                    if (is_active[i]) continue;
+                                    const int    j = var_ptr[i];
+                                    const double s = sgn_ptr[i];
+                                    if (s * x_ptr[j] > b_[i] + config_.constraint_tolerance &&
+                                        dv[j] * s >= -config_.tolerance &&
+                                        ng[j]  * s >= -config_.tolerance)
+                                        ws_opt_violated_.push_back(i);
+                                }
+                                if (ws_opt_violated_.empty()) // fallback
+                                {
+                                    for (int i = 0; i < m_; ++i)
+                                    {
+                                        if (is_active[i]) continue;
+                                        if (sgn_ptr[i] * x_ptr[var_ptr[i]] > b_[i] + config_.constraint_tolerance)
+                                            ws_opt_violated_.push_back(i);
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                for (int i = 0; i < m_; ++i)
+                                {
+                                    if (is_active[i]) continue;
+                                    if (sgn_ptr[i] * x_ptr[var_ptr[i]] > b_[i] + config_.constraint_tolerance)
+                                        ws_opt_violated_.push_back(i);
+                                }
                             }
                         }
                         else
@@ -1364,15 +1425,41 @@ namespace geoqp
 
                     if (has_diagonal_constraints_)
                     {
-                        // Fast path: sign_i * x[var_i] <= b[i] — no dot product.
-                        const int *GEOQP_RESTRICT var_ptr  = constraint_var_.data();
+                        // O(1) per constraint; H1/H2 filter applied when hint is available.
+                        const int    *GEOQP_RESTRICT var_ptr = constraint_var_.data();
                         const double *GEOQP_RESTRICT sgn_ptr = constraint_sign_.data();
-                        for (int i = 0; i < m_; ++i)
+                        if (has_vhat_hint_)
                         {
-                            if (is_active[i])
-                                continue;
-                            if (sgn_ptr[i] * x_ptr[var_ptr[i]] > b_[i] + config_.constraint_tolerance)
-                                ws_opt_violated_.push_back(i);
+                            const double *GEOQP_RESTRICT ng = ws_neg_grad_vhat_.data();
+                            const double *GEOQP_RESTRICT dv = ws_d_vhat_.data();
+                            for (int i = 0; i < m_; ++i)
+                            {
+                                if (is_active[i]) continue;
+                                const int    j = var_ptr[i];
+                                const double s = sgn_ptr[i];
+                                if (s * x_ptr[j] > b_[i] + config_.constraint_tolerance &&
+                                    dv[j] * s >= -config_.tolerance &&
+                                    ng[j]  * s >= -config_.tolerance)
+                                    ws_opt_violated_.push_back(i);
+                            }
+                            if (ws_opt_violated_.empty()) // fallback
+                            {
+                                for (int i = 0; i < m_; ++i)
+                                {
+                                    if (is_active[i]) continue;
+                                    if (sgn_ptr[i] * x_ptr[var_ptr[i]] > b_[i] + config_.constraint_tolerance)
+                                        ws_opt_violated_.push_back(i);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            for (int i = 0; i < m_; ++i)
+                            {
+                                if (is_active[i]) continue;
+                                if (sgn_ptr[i] * x_ptr[var_ptr[i]] > b_[i] + config_.constraint_tolerance)
+                                    ws_opt_violated_.push_back(i);
+                            }
                         }
                     }
                     else

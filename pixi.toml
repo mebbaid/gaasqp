@@ -31,6 +31,8 @@ build = { cmd = "cmake --build build -j$(nproc)", depends-on = ["configure"] }
 configure-debug = { cmd = "cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug" }
 build-debug = { cmd = "cmake --build build-debug -j$(nproc)", depends-on = ["configure-debug"] }
 benchmark = { cmd = "./build/benchmarks/benchmark", depends-on = ["build"] }
+
+benchmark-box = {cmd = "./build/benchmarks/benchmark_box", depends-on = ["build"] }
 benchmark-lipm = { cmd = "./build/benchmarks/benchmark_lipm_walking", depends-on = ["build"] }
 example = { cmd = "./build/examples/simple_example", depends-on = ["build"] }
 test = { cmd = "cd build && ctest --output-on-failure", depends-on = ["build"], description = "Run all tests" }

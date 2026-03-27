@@ -393,6 +393,23 @@ namespace geoqp
             std::vector<int>    constraint_var_;
             std::vector<double> constraint_sign_;
 
+            // ── H1/H2 theory-guided hint (Proposition 2) ─────────────────────────
+            // Populated once in find_initial_face when has_diagonal_constraints_.
+            // Fixed for the entire Phase II loop; never changes between hops.
+            //
+            //   v_hat_             : good vertex v̂ (antipodal, from Phase I)
+            //   ws_neg_grad_vhat_  : −∇f(v̂) = Q(x̄ − v̂)  (H1 inward normal)
+            //   ws_d_vhat_         : d = x̄ − v̂            (H2 inward normal)
+            //
+            // H1 filter for adding box constraint i (var j, sign s):
+            //   ws_neg_grad_vhat_[j] * s ≥ 0
+            // H2 filter:
+            //   ws_d_vhat_[j]       * s ≥ 0
+            bool has_vhat_hint_ = false;
+            std::vector<double> v_hat_;
+            mutable std::vector<double> ws_neg_grad_vhat_;
+            mutable std::vector<double> ws_d_vhat_;
+
             struct TimingStats
             {
                 double compute_intersection_total = 0.0;
