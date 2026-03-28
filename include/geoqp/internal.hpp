@@ -289,6 +289,18 @@ namespace geoqp
                 const Config &config,
                 const std::vector<double> &Q_chol);
 
+            // Overload: like above but skips the O(n³) Q_inv precomputation.
+            // Use for cold-start solves where Q changes every call; projection
+            // uses per-column Cholesky solves (O(kn²)) which are cheaper overall
+            // when the number of active constraints k << n.
+            FaceHopper(
+                const double *Q, const double *A, const double *b,
+                const std::vector<double> &x_bar,
+                int m, int n,
+                const Config &config,
+                const std::vector<double> &Q_chol,
+                bool precompute_q_inv);
+
             void update(const double *b, const std::vector<double> &x_bar)
             {
                 b_ = b;
@@ -347,7 +359,7 @@ namespace geoqp
                 bool force_geom_adj) const;
 
             // Shared initialisation called by both constructors.
-            void init_common();
+            void init_common(bool precompute_q_inv = true);
 
             const double *Q_;
             const double *A_;

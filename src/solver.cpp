@@ -379,9 +379,12 @@ namespace geoqp
                 // otherwise let FaceHopper compute its own.
                 auto make_face_hopper = [&]() -> internal::FaceHopper {
                     if (has_Q_chol_local)
+                        // Cold-start: Q_chol available but skip O(n³) Q_inv
+                        // precomputation — per-column solves (O(k n²)) are cheaper
+                        // when k << n and Q changes every call.
                         return internal::FaceHopper(
                             problem.Q.data(), A_ptr, b_ptr, x_bar,
-                            m_exp, problem.n, config_, Q_chol_local);
+                            m_exp, problem.n, config_, Q_chol_local, /*precompute_q_inv=*/false);
                     else
                         return internal::FaceHopper(
                             problem.Q.data(), A_ptr, b_ptr, x_bar,

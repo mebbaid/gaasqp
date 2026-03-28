@@ -60,7 +60,22 @@ namespace geoqp
             init_common();
         }
 
-        void FaceHopper::init_common()
+        FaceHopper::FaceHopper(
+            const double *Q, const double *A, const double *b,
+            const std::vector<double> &x_bar,
+            int m, int n,
+            const Config &config,
+            const std::vector<double> &Q_chol,
+            bool precompute_q_inv)
+            : Q_(Q), A_(A), b_(b), x_bar_(x_bar), m_(m), n_(n), config_(config),
+              constraint_cache_(m, n), Q_chol_(Q_chol)
+        {
+            // Q_chol already set from caller — skip O(n³) factorization.
+            // Caller controls whether Q_inv is also precomputed.
+            init_common(precompute_q_inv);
+        }
+
+        void FaceHopper::init_common(bool precompute_q_inv)
         {
             const int total_elements = n_ * n_;
             const double *GEOQP_RESTRICT Q_ptr = Q_;
@@ -101,8 +116,11 @@ namespace geoqp
                 }
             }
 
-            // Precompute Q_inv if Q is dense and n is manageable
-            if (q_is_dense_ && n_ <= 256 && !Q_chol_.empty())
+            // Precompute Q_inv if Q is dense and n is manageable.
+            // Skipped for cold-start paths (precompute_q_inv=false) where Q changes
+            // every call; per-column Cholesky solves (O(k n²)) are cheaper overall
+            // than full Q_inv precomputation (O(n³)) when k << n.
+            if (precompute_q_inv && q_is_dense_ && n_ <= 256 && !Q_chol_.empty())
             {
                 Q_inv_.resize(n_ * n_);
                 std::vector<double> e(n_, 0.0);

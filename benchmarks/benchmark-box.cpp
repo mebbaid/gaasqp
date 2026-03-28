@@ -34,6 +34,11 @@
 
 #include <qpOASES.hpp>
 #include <Eigen/Dense>
+#include <Eigen/Sparse>
+
+#ifdef HAVE_OSQP
+#include <OsqpEigen/Solver.hpp>
+#endif
 
 #include <iostream>
 #include <iomanip>
@@ -99,6 +104,26 @@ static std::vector<double> eigen_to_vec(const Eigen::VectorXd &v)
 static Eigen::VectorXd compute_xbar(const Eigen::MatrixXd &Q, const Eigen::VectorXd &g)
 {
     return -Q.ldlt().solve(g);
+}
+
+// Ensure that x̄ = -Q⁻¹g lies strictly outside the box [lb, ub] by at least
+// `min_viol` times the per-dimension half-width from the box centre.
+// When randomPD produces eigenvalues O(n), x̄ shrinks as O(1/n) and can fall
+// inside the box for large n.  Scaling g uniformly preserves problem structure.
+static void ensure_xbar_infeasible(
+    const Eigen::MatrixXd &H, Eigen::VectorXd &g,
+    const Eigen::VectorXd &lb, const Eigen::VectorXd &ub,
+    double min_viol = 2.0)
+{
+    Eigen::VectorXd xbar = -H.ldlt().solve(g);
+    Eigen::VectorXd centre   = 0.5 * (lb + ub);
+    Eigen::VectorXd halfwidth = 0.5 * (ub - lb);
+    double max_rel = 0.0;
+    for (int i = 0; i < xbar.size(); ++i)
+        max_rel = std::max(max_rel,
+            std::abs(xbar(i) - centre(i)) / std::max(halfwidth(i), 1e-12));
+    if (max_rel < min_viol)
+        g *= (min_viol / std::max(max_rel, 1e-14));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -240,6 +265,9 @@ static QPProblem makeBoxQP(int n, std::mt19937 &rng, double scale_g = 5.0,
     for (int i = 0; i < n; ++i) p.g(i) = d(rng) * scale_g;
     p.lbX = -bound * Eigen::VectorXd::Ones(n);
     p.ubX =  bound * Eigen::VectorXd::Ones(n);
+    // randomPD eigenvalues are O(n) so x̄ = -Q⁻¹g ≈ O(1/n) for large n;
+    // scale g to guarantee x̄ lies outside the box.
+    ensure_xbar_infeasible(p.H, p.g, p.lbX, p.ubX);
     p.A = Eigen::MatrixXd(0, n);
     p.b = Eigen::VectorXd(0);
     return p;
@@ -302,6 +330,8 @@ static QPProblem makeDiagAffineBoxQP(int n, std::mt19937 &rng, double scale_g = 
     for (int i = 0; i < n; ++i) { t(i) = td(rng); c(i) = d(rng) * 0.5; }
     p.lbX = (-1.0 * t) + c;  // t_i * (-1) + c_i
     p.ubX = (       t) + c;  // t_i *   1  + c_i
+    // Same O(n) eigenvalue scaling issue — guarantee x̄ outside the affine box.
+    ensure_xbar_infeasible(p.H, p.g, p.lbX, p.ubX);
     p.A = Eigen::MatrixXd(0, n);
     p.b = Eigen::VectorXd(0);
     return p;
@@ -456,7 +486,8 @@ static RefSolution solveQPOASES(const QPProblem &prob)
     return ref;
 }
 
-static double solveQPOASES_time(const QPProblem &prob, bool &success, double &objVal)
+static double solveQPOASES_time(const QPProblem &prob, bool &success, double &objVal,
+                                int *nWSR_out = nullptr)
 {
     int n = prob.n, m = prob.m;
     std::vector<double> H_vec(n * n), g_vec(n), A_vec(m * n);
@@ -485,8 +516,66 @@ static double solveQPOASES_time(const QPProblem &prob, bool &success, double &ob
     auto t1 = Clock::now();
     success = (st == qpOASES::SUCCESSFUL_RETURN);
     objVal  = success ? qp.getObjVal() : 0.0;
+    if (nWSR_out) *nWSR_out = nWSR;
     return std::chrono::duration<double, std::micro>(t1 - t0).count();
 }
+
+#ifdef HAVE_OSQP
+// Returns solve time in microseconds.  Sets success=false and returns 0 on
+// any setup/solver failure.  objVal is set to the optimal objective.
+// osqpIter is set to the number of ADMM iterations taken.
+static double solveOSQP_time(const QPProblem &prob, bool &success, double &objVal,
+                             int &osqpIter)
+{
+    int n = prob.n;
+    // For box QPs: build a 2n-row constraint matrix [I; I] with bounds
+    // expressed as  lb <= x <= ub, which OSQP takes as  lb <= Cx <= ub.
+    Eigen::SparseMatrix<double> C(2 * n, n);
+    C.reserve(Eigen::VectorXi::Constant(n, 2));
+    for (int i = 0; i < n; ++i) { C.insert(i, i) = 1.0; C.insert(n + i, i) = 1.0; }
+    C.makeCompressed();
+
+    Eigen::VectorXd lb(2 * n), ub(2 * n);
+    for (int i = 0; i < n; ++i) {
+        lb(i)     = prob.lbX(i);  ub(i)     = prob.ubX(i);
+        lb(n + i) = prob.lbX(i);  ub(n + i) = prob.ubX(i);
+    }
+
+    // OSQP takes upper-triangular H — materialize to dense first, then sparse
+    Eigen::MatrixXd H_upper = prob.H.triangularView<Eigen::Upper>();
+    Eigen::SparseMatrix<double> H_sp = H_upper.sparseView();
+    H_sp.makeCompressed();
+
+    Eigen::VectorXd g = prob.g;
+
+    OsqpEigen::Solver solver;
+    solver.settings()->setVerbosity(false);
+    solver.data()->setNumberOfVariables(n);
+    solver.data()->setNumberOfConstraints(2 * n);
+    success = solver.data()->setHessianMatrix(H_sp)
+           && solver.data()->setGradient(g)
+           && solver.data()->setLinearConstraintsMatrix(C)
+           && solver.data()->setLowerBound(lb)
+           && solver.data()->setUpperBound(ub);
+    if (!success) { osqpIter = 0; return 0.0; }
+
+    auto t0 = Clock::now();
+    success = solver.initSolver();
+    if (success) {
+        auto st = solver.solveProblem();
+        success = (st == OsqpEigen::ErrorExitFlag::NoError);
+    }
+    auto t1 = Clock::now();
+    osqpIter = success ? static_cast<int>(solver.solver()->info->iter) : 0;
+    if (success) {
+        Eigen::VectorXd x = solver.getSolution().cast<double>();
+        objVal = 0.5 * x.dot(prob.H * x) + prob.g.dot(x);
+    } else {
+        objVal = 0.0;
+    }
+    return std::chrono::duration<double, std::micro>(t1 - t0).count();
+}
+#endif  // HAVE_OSQP
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Print helpers
@@ -1292,8 +1381,15 @@ void run_performance()
               << std::setw(16)  << "type"
               << std::setw(10)  << "Geo(us)"
               << std::setw(12)  << "qpOAS(us)"
+#ifdef HAVE_OSQP
+              << std::setw(12)  << "OSQP(us)"
+#endif
               << std::setw(10)  << "Geo/qpO"
               << std::setw(10)  << "AvgPivot"
+              << std::setw(10)  << "qpO_iter"
+#ifdef HAVE_OSQP
+              << std::setw(10)  << "OSQP_iter"
+#endif
               << std::setw(10)  << "AvgHops"
               << std::setw(12)  << "ObjDiff"
               << std::setw(10)  << "Result"
@@ -1307,7 +1403,11 @@ void run_performance()
                       std::function<QPProblem(int, std::mt19937 &)> gen)
     {
         double tg = 0, tq = 0, pivots = 0, hops = 0, max_od = 0;
-        int geo_ok = 0;
+        int geo_ok = 0, qpo_iters = 0;
+#ifdef HAVE_OSQP
+        double to = 0;
+        int osqp_iters = 0;
+#endif
 
         for (int t = 0; t < trials; ++t)
         {
@@ -1323,10 +1423,17 @@ void run_performance()
             pivots += sol.phase2_iterations;
             hops   += sol.phase2_facet_hops;
 
-            bool success; double qobj;
-            tq += solveQPOASES_time(qp, success, qobj);
+            bool success; double qobj; int nwsr = 0;
+            tq += solveQPOASES_time(qp, success, qobj, &nwsr);
+            qpo_iters += nwsr;
             if (sol.status == geoqp::Status::SUCCESS && success)
                 max_od = std::max(max_od, std::abs(sol.objective_value - qobj));
+
+#ifdef HAVE_OSQP
+            bool osqp_ok; double osqp_obj; int osqp_iter_t = 0;
+            to += solveOSQP_time(qp, osqp_ok, osqp_obj, osqp_iter_t);
+            osqp_iters += osqp_iter_t;
+#endif
         }
 
         double inv = 1.0 / trials;
@@ -1336,8 +1443,15 @@ void run_performance()
                   << std::setw(16) << label
                   << std::setw(10) << std::fixed << std::setprecision(1) << (tg * inv)
                   << std::setw(12) << (tq * inv)
+#ifdef HAVE_OSQP
+                  << std::setw(12) << (to * inv)
+#endif
                   << std::setw(9)  << std::setprecision(3) << ratio << "x"
                   << std::setw(10) << std::setprecision(1) << (pivots * inv)
+                  << std::setw(10) << std::setprecision(1) << (qpo_iters * inv)
+#ifdef HAVE_OSQP
+                  << std::setw(10) << std::setprecision(1) << (osqp_iters * inv)
+#endif
                   << std::setw(10) << (hops * inv)
                   << std::setw(12) << std::scientific << std::setprecision(1) << max_od
                   << std::setw(10) << res
