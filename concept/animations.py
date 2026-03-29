@@ -333,19 +333,6 @@ good_to_xstar_label = ax.text(
     bbox=dict(boxstyle='round,pad=0.2', facecolor='#0d1117cc',
               edgecolor='#e3b34166', lw=0.8), zorder=15)
 
-# Projection arrow: component of (x*-v) along -∇f, i.e. ⟨-∇f, x*-v⟩/‖-∇f‖
-good_ip_arrow = FancyArrowPatch(
-    posA=(0, 0), posB=(0, 0),
-    arrowstyle='->', color='#39d0d8',
-    linewidth=2.2, mutation_scale=16, linestyle='dashed', zorder=14)
-ax.add_patch(good_ip_arrow)
-good_ip_arrow.set_visible(False)
-
-good_ip_label = ax.text(
-    0, 0, '', color='#39d0d8', fontsize=9, visible=False,
-    bbox=dict(boxstyle='round,pad=0.2', facecolor='#0d1117cc',
-              edgecolor='#39d0d866', lw=0.8), zorder=15)
-
 # Phase / cost / case labels
 phase_label = ax.text(0.03, 0.97, '', transform=ax.transAxes,
                       color='#e6edf3', fontsize=10, va='top',
@@ -404,7 +391,6 @@ ALL_DYNAMIC = (ellipse_line, ellipse_fill,
                ray_line, exit_dot, exit_text,
                good_arrow, good_arrow_label,
                good_to_xstar_arrow, good_to_xstar_label,
-               good_ip_arrow, good_ip_label,
                phase_label, cost_label, case_badge,
                bar_seg1, bar_seg2)
 
@@ -436,8 +422,6 @@ def init():
     good_arrow_label.set_visible(False)
     good_to_xstar_arrow.set_visible(False)
     good_to_xstar_label.set_visible(False)
-    good_ip_arrow.set_visible(False)
-    good_ip_label.set_visible(False)
     phase_label.set_text('');  cost_label.set_text('');  case_badge.set_text('')
     bar_seg1.set_data([], []);  bar_seg2.set_data([], [])
     return (*ALL_DYNAMIC, *glow_artists)
@@ -693,26 +677,6 @@ def update(frame):
         good_to_xstar_label.set_position(label_pos_toward)
         good_to_xstar_label.set_alpha(alpha_main)
         good_to_xstar_label.set_visible(True)
-
-        # ⟨-∇f, x*-v⟩: arrow bisecting the angle between -∇f and (x*-v),
-        # starting at v, so it visually sits between the two other arrows.
-        ng     = g['neg_grad_good']
-        ng_norm = np.linalg.norm(ng)
-        ng_hat  = ng / ng_norm if ng_norm > 1e-10 else ng
-        d_vec   = g['x_star'] - g['x_good']
-        d_norm  = np.linalg.norm(d_vec)
-        d_hat   = d_vec / d_norm if d_norm > 1e-10 else d_vec
-        ip_val  = float(np.dot(ng, d_vec))          # scalar inner product
-        bisector = ng_hat + d_hat
-        bis_norm = np.linalg.norm(bisector)
-        ip_disp  = (ARROW_LEN / bis_norm) * bisector if bis_norm > 1e-10 else np.zeros(2)
-        good_ip_arrow.set_positions(tuple(g['x_good']), tuple(g['x_good'] + ip_disp))
-        good_ip_arrow.set_alpha(alpha_main)
-        good_ip_arrow.set_visible(True)
-        good_ip_label.set_text(r'$\langle{-\nabla f,\,x^*\!-v}\rangle$' + f'\n= {ip_val:.2f}')
-        good_ip_label.set_position(g['x_good'] + ip_disp * 1.18)
-        good_ip_label.set_alpha(alpha_main)
-        good_ip_label.set_visible(True)
     else:
         good_dot.set_data([], [])
         good_text.set_visible(False)
@@ -734,8 +698,6 @@ def update(frame):
         good_arrow_label.set_visible(False)
         good_to_xstar_arrow.set_visible(False)
         good_to_xstar_label.set_visible(False)
-        good_ip_arrow.set_visible(False)
-        good_ip_label.set_visible(False)
 
     # ── progress bar ──────────────────────────────────────────
     p1_end   = NF_P1 / NF_CASE
@@ -762,6 +724,210 @@ anim = FuncAnimation(fig, update, frames=N_FRAMES_TOTAL,
                      init_func=init, interval=50, blit=True)
 
 plt.tight_layout()
+
+
+def save_journal_figures(dpi=300):
+    """Save the final hold-frame of each case as a white-background journal figure."""
+    _cx = 0.5 * (box['xlo'] + box['xhi'])
+    N_fan = 40
+    for case_idx in range(N_CASES):
+        g = geo[case_idx]
+
+        fig_j, ax_j = plt.subplots(figsize=(7, 7), facecolor='white')
+        ax_j.set_facecolor('white')
+        ax_j.set_xlim(*xlim)
+        ax_j.set_ylim(*ylim)
+        ax_j.set_aspect('equal')
+        ax_j.tick_params(colors='#444444')
+        for sp in ax_j.spines.values():
+            sp.set_color('#bbbbbb')
+        ax_j.set_xlabel('$x_1$', fontsize=13, color='#333333')
+        ax_j.set_ylabel('$x_2$', fontsize=13, color='#333333')
+        ax_j.set_title(
+            rf'Case {case_idx + 1}: {CASES[case_idx]["label"]}',
+            color='#111111', fontsize=14, pad=10)
+
+        # Background cost contour
+        ZZ_bg_j = g['cost_grid'](XX_bg, YY_bg)
+        levels_j = np.linspace(0, g['c_far'] * 1.5, 28)
+        ax_j.contourf(XX_bg, YY_bg, ZZ_bg_j, levels=levels_j,
+                      cmap='YlOrBr_r', alpha=0.22, zorder=1)
+        ax_j.contour(XX_bg, YY_bg, ZZ_bg_j, levels=levels_j,
+                     colors='#aaaaaa', alpha=0.30, linewidths=0.4, zorder=2)
+
+        # Feasible box
+        bw = box['xhi'] - box['xlo']
+        bh_j = box['yhi'] - box['ylo']
+        feas_j = patches.FancyBboxPatch(
+            (box['xlo'], box['ylo']), bw, bh_j,
+            boxstyle="square,pad=0", linewidth=2.2,
+            edgecolor='#0969da', facecolor='#dbeafe', zorder=3)
+        ax_j.add_patch(feas_j)
+        ax_j.text(box['xhi'] + 0.07, box['yhi'] + 0.07, 'Feasible set',
+                  color='#0969da', fontsize=10, ha='left', va='bottom', zorder=5)
+
+        # x* marker
+        ax_j.plot(*g['x_star'], 'o', color='#0969da', alpha=0.15,
+                  markersize=26, zorder=6, markeredgewidth=0)
+        ax_j.plot(*g['x_star'], 'o', color='#0550ae', markersize=7,
+                  markeredgecolor='#000000', markeredgewidth=0.8, zorder=7)
+        ax_j.annotate(r'$x^*$',
+                      xy=g['x_star'], xytext=g['x_star'] + np.array([0.28, -0.45]),
+                      color='#0550ae', fontsize=10, zorder=8)
+
+        # Nearest point
+        x_near = g['x_near']
+        ring_n = g['ellipse_pts'](g['t_near'])
+        ax_j.plot(ring_n[:, 0], ring_n[:, 1], '--', color='#1a7f37',
+                  lw=1.4, alpha=0.7, zorder=7)
+        ax_j.plot(*x_near, '*', color='#1a7f37', markersize=15,
+                  markeredgecolor='#000000', markeredgewidth=0.6, zorder=12)
+        dx_n = 0.14 if x_near[0] < _cx else -0.60
+        dy_n = -0.32 if x_near[1] > 0 else 0.18
+        ax_j.text(x_near[0] + dx_n, x_near[1] + dy_n,
+                  'Constrained\noptimum\n(nearest)', color='#1a7f37', fontsize=9,
+                  bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffffffee',
+                            edgecolor='#1a7f3755', lw=0.8), zorder=13)
+        vec_n = scaled_vec(g['neg_grad_near'])
+        ax_j.add_patch(FancyArrowPatch(
+            posA=tuple(x_near), posB=tuple(x_near + vec_n),
+            arrowstyle='->', color='#1a7f37', linewidth=2.2,
+            mutation_scale=16, zorder=14))
+        ax_j.text(*(x_near + vec_n * 1.22), r'$-\nabla f$',
+                  color='#1a7f37', fontsize=10,
+                  bbox=dict(boxstyle='round,pad=0.2', facecolor='#ffffffee',
+                            edgecolor='#1a7f3766', lw=0.8), zorder=15)
+
+        # Farthest point
+        x_far = g['x_far']
+        ring_f = g['ellipse_pts'](g['t_far'])
+        ax_j.plot(ring_f[:, 0], ring_f[:, 1], '--', color='#cf222e',
+                  lw=1.4, alpha=0.7, zorder=7)
+        ax_j.plot(*x_far, 'D', color='#cf222e', markersize=11,
+                  markeredgecolor='#000000', markeredgewidth=0.6, zorder=12)
+        dx_f = 0.14 if x_far[0] < _cx else -0.52
+        dy_f = 0.18 if x_far[1] > 0 else -0.30
+        ax_j.text(x_far[0] + dx_f, x_far[1] + dy_f,
+                  'Farthest\nbox point', color='#cf222e', fontsize=9,
+                  bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffffffee',
+                            edgecolor='#cf222e55', lw=0.8), zorder=13)
+        vec_f = scaled_vec(g['neg_grad_far'])
+        ax_j.add_patch(FancyArrowPatch(
+            posA=tuple(x_far), posB=tuple(x_far + vec_f),
+            arrowstyle='->', color='#cf222e', linewidth=2.2,
+            mutation_scale=16, zorder=14))
+        ax_j.text(*(x_far + vec_f * 1.22), r'$-\nabla f$',
+                  color='#cf222e', fontsize=10,
+                  bbox=dict(boxstyle='round,pad=0.2', facecolor='#ffffffee',
+                            edgecolor='#cf222e66', lw=0.8), zorder=15)
+
+        # Good (antipodal) vertex
+        x_good = g['x_good']
+        ring_g = g['ellipse_pts'](g['t_good'])
+        ax_j.plot(ring_g[:, 0], ring_g[:, 1], '--', color='#8250df',
+                  lw=1.4, alpha=0.7, zorder=7)
+        ax_j.fill(ring_g[:, 0], ring_g[:, 1], facecolor='#8250df',
+                  alpha=0.08, zorder=4)
+        ax_j.plot(*x_good, 'p', color='#8250df', markersize=14,
+                  markeredgecolor='#000000', markeredgewidth=0.6, zorder=12)
+        dx_g = 0.14 if x_good[0] < _cx else -0.72
+        dy_g = 0.18 if x_good[1] > 0 else -0.42
+        ax_j.text(x_good[0] + dx_g, x_good[1] + dy_g,
+                  'Antipodal\ngood vertex', color='#8250df', fontsize=9,
+                  bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffffffee',
+                            edgecolor='#8250df55', lw=0.8), zorder=13)
+        vec_g = scaled_vec(g['neg_grad_good'])
+        ax_j.add_patch(FancyArrowPatch(
+            posA=tuple(x_good), posB=tuple(x_good + vec_g),
+            arrowstyle='->', color='#8250df', linewidth=2.2,
+            mutation_scale=16, zorder=14))
+        ax_j.text(*(x_good + vec_g * 1.22), r'$-\nabla f$',
+                  color='#8250df', fontsize=10,
+                  bbox=dict(boxstyle='round,pad=0.2', facecolor='#ffffffee',
+                            edgecolor='#8250df66', lw=0.8), zorder=15)
+
+        # Arrow from good vertex toward x*
+        vec_toward = scaled_vec(g['x_star'] - x_good)
+        ax_j.add_patch(FancyArrowPatch(
+            posA=tuple(x_good), posB=tuple(x_good + vec_toward),
+            arrowstyle='->', color='#b68206', linewidth=2.2,
+            mutation_scale=16, zorder=14))
+        ax_j.text(*(x_good + vec_toward * 1.22), r'$x^*\!-v$',
+                  color='#b68206', fontsize=10,
+                  bbox=dict(boxstyle='round,pad=0.2', facecolor='#ffffffee',
+                            edgecolor='#b6820666', lw=0.8), zorder=15)
+
+        # Cone wedge between -∇f and (x*-v)
+        ng_j = g['neg_grad_good']
+        ng_hat_j = ng_j / np.linalg.norm(ng_j) if np.linalg.norm(ng_j) > 1e-10 else ng_j
+        d_vec_j = g['x_star'] - x_good
+        d_hat_j = d_vec_j / np.linalg.norm(d_vec_j) if np.linalg.norm(d_vec_j) > 1e-10 else d_vec_j
+        fan_pts_j = [x_good]
+        for _k in range(N_fan + 1):
+            _s = _k / N_fan
+            _dir = (1 - _s) * ng_hat_j + _s * d_hat_j
+            _dn = np.linalg.norm(_dir)
+            if _dn > 1e-10:
+                _dir /= _dn
+            fan_pts_j.append(x_good + ARROW_LEN * 1.6 * _dir)
+        ax_j.add_patch(plt.Polygon(
+            np.array(fan_pts_j), closed=True,
+            facecolor='#e3b341', edgecolor='none', alpha=0.28, zorder=3))
+
+        # P_+ half-box fill
+        ax_j.add_patch(plt.Polygon(
+            g['p_plus_poly'], closed=True,
+            facecolor='#388bfd', edgecolor='#388bfd', alpha=0.12, lw=0.0, zorder=3))
+
+        # Cone ∩ P_+ intersection (bright green highlight)
+        _big_fan_j = [x_good]
+        for _k in range(N_fan + 1):
+            _s = _k / N_fan
+            _dir = (1 - _s) * ng_hat_j + _s * d_hat_j
+            _dn = np.linalg.norm(_dir)
+            if _dn > 1e-10:
+                _dir /= _dn
+            _big_fan_j.append(x_good + 8.0 * _dir)
+        _clip_j = np.array(_big_fan_j)
+        for _nrm_j, _bpt_j in [
+            (np.array([ 1., 0.]), np.array([box['xlo'], 0.])),
+            (np.array([-1., 0.]), np.array([box['xhi'], 0.])),
+            (np.array([0.,  1.]), np.array([0., box['ylo']])),
+            (np.array([0., -1.]), np.array([0., box['yhi']])),
+            (g['x_star'] - np.clip(g['x_star'],
+                                   np.array([box['xlo'], box['ylo']]),
+                                   np.array([box['xhi'], box['yhi']])),
+             np.array([0.5*(box['xlo']+box['xhi']), 0.5*(box['ylo']+box['yhi'])])),
+        ]:
+            _clip_j = _sh_clip(_clip_j, _bpt_j, _nrm_j)
+            if len(_clip_j) < 3:
+                break
+        if len(_clip_j) >= 3:
+            ax_j.add_patch(plt.Polygon(
+                _clip_j, closed=True,
+                facecolor='#1a7f37', edgecolor='#1a7f37', alpha=0.35, lw=1.0, zorder=5))
+
+        # Ray + exit point
+        x_exit = g['x_exit']
+        ax_j.plot([x_good[0], x_exit[0]], [x_good[1], x_exit[1]],
+                  '--', color='#b68206', lw=1.8, alpha=0.85, zorder=8)
+        ax_j.plot(*x_exit, 'X', color='#cf222e', markersize=13,
+                  markeredgecolor='#000000', markeredgewidth=0.7, zorder=12)
+        _edx = 0.12 if x_exit[0] < _cx else -0.52
+        _edy = 0.14 if x_exit[1] < 0 else -0.46
+        ax_j.text(x_exit[0] + _edx, x_exit[1] + _edy,
+                  'Ray exit', color='#cf222e', fontsize=9,
+                  bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffffffee',
+                            edgecolor='#cf222e55', lw=0.8), zorder=13)
+
+        fig_j.tight_layout()
+        fname = f'case_{case_idx + 1}_journal.png'
+        fig_j.savefig(fname, dpi=dpi, bbox_inches='tight', facecolor='white')
+        print(f'Saved {fname}')
+        plt.close(fig_j)
+
+
+save_journal_figures()
 
 # anim.save('quadratic_animation.gif', writer='pillow', fps=25, dpi=120)
 plt.show()
