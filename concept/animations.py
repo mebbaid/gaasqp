@@ -30,7 +30,7 @@ def _sh_clip(polygon, halfplane_pt, halfplane_normal):
     return np.array(out, dtype=float) if out else np.zeros((0, 2), dtype=float)
 
 
-def make_H(theta_deg, lam_max=50.0, lam_min=1.0):
+def make_H(theta_deg, lam_max=500.0, lam_min=1.0):
     """Rotated PD Hessian:  H = R(θ) diag(λ) R(θ)ᵀ"""
     th = theta_deg * np.pi / 180
     R  = np.array([[np.cos(th), -np.sin(th)],
@@ -130,11 +130,13 @@ def compute_case(H, x_star):
     _t_exit = min(_ts_exit) if _ts_exit else 1.0
     x_exit  = x_good + _t_exit * _d_ray
 
-    # P_+ half-box: {x in P : v·(x-c0) >= 0} where v = x_star - x_e,
-    # x_e = Euclidean projection of x_star onto the box (componentwise clip)
+    # P_+ half-box: normalized-coordinate split
+    # n_i = s_i / h_i,  s_i = sign(x_star_i - c0_i),  h_i = (u_i - l_i)/2
+    # P_+ = {x in P : sum_i n_i*(x_i - c0_i) >= 0}
     _c0_pp    = np.array([0.5*(box['xlo']+box['xhi']), 0.5*(box['ylo']+box['yhi'])])
-    _x_e_pp   = np.clip(x_star, _ell, _u)   # Euclidean nearest box point
-    _v_pp     = x_star - _x_e_pp             # outward normal v = x_star - x_e
+    _h_pp     = 0.5 * (_u - _ell)                       # half-widths
+    _s_pp     = np.sign(x_star - _c0_pp)                # ±1 per coordinate
+    _v_pp     = _s_pp / _h_pp                            # normalized normal
     _box_rect = np.array([[box['xlo'], box['ylo']], [box['xhi'], box['ylo']],
                           [box['xhi'], box['yhi']], [box['xlo'], box['yhi']]])
     _pp = _sh_clip(_box_rect, _c0_pp, _v_pp)
@@ -636,15 +638,15 @@ def update(frame):
                 _dir /= _dn
             _big_fan.append(g['x_good'] + 8.0 * _dir)   # extend beyond box
         _clip = np.array(_big_fan)
+        _c0_anim = np.array([0.5*(box['xlo']+box['xhi']), 0.5*(box['ylo']+box['yhi'])])
+        _h_anim  = np.array([0.5*(box['xhi']-box['xlo']), 0.5*(box['yhi']-box['ylo'])])
+        _vnorm_anim = np.sign(g['x_star'] - _c0_anim) / _h_anim
         for _nrm, _bpt in [
             (np.array([ 1., 0.]), np.array([box['xlo'], 0.])),
             (np.array([-1., 0.]), np.array([box['xhi'], 0.])),
             (np.array([0.,  1.]), np.array([0., box['ylo']])),
             (np.array([0., -1.]), np.array([0., box['yhi']])),
-            (g['x_star'] - np.clip(g['x_star'],
-                                    np.array([box['xlo'], box['ylo']]),
-                                    np.array([box['xhi'], box['yhi']])),
-             np.array([0.5*(box['xlo']+box['xhi']), 0.5*(box['ylo']+box['yhi'])])),
+            (_vnorm_anim, _c0_anim),
         ]:
             _clip = _sh_clip(_clip, _bpt, _nrm)
             if len(_clip) < 3:
@@ -743,9 +745,9 @@ def save_journal_figures(dpi=300):
             sp.set_color('#bbbbbb')
         ax_j.set_xlabel('$x_1$', fontsize=13, color='#333333')
         ax_j.set_ylabel('$x_2$', fontsize=13, color='#333333')
-        ax_j.set_title(
-            rf'Case {case_idx + 1}: {CASES[case_idx]["label"]}',
-            color='#111111', fontsize=14, pad=10)
+        # ax_j.set_title(
+        #     rf'Case {case_idx + 1}: {CASES[case_idx]["label"]}',
+        #     color='#111111', fontsize=14, pad=10)
 
         # Background cost contour
         ZZ_bg_j = g['cost_grid'](XX_bg, YY_bg)
@@ -771,7 +773,7 @@ def save_journal_figures(dpi=300):
                   markersize=26, zorder=6, markeredgewidth=0)
         ax_j.plot(*g['x_star'], 'o', color='#0550ae', markersize=7,
                   markeredgecolor='#000000', markeredgewidth=0.8, zorder=7)
-        ax_j.annotate(r'$x^*$',
+        ax_j.annotate(r'$x^\star$',
                       xy=g['x_star'], xytext=g['x_star'] + np.array([0.28, -0.45]),
                       color='#0550ae', fontsize=10, zorder=8)
 
@@ -785,7 +787,7 @@ def save_journal_figures(dpi=300):
         dx_n = 0.14 if x_near[0] < _cx else -0.60
         dy_n = -0.32 if x_near[1] > 0 else 0.18
         ax_j.text(x_near[0] + dx_n, x_near[1] + dy_n,
-                  'Constrained\noptimum\n(nearest)', color='#1a7f37', fontsize=9,
+                  'Constrained\noptimum', color='#1a7f37', fontsize=9,
                   bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffffffee',
                             edgecolor='#1a7f3755', lw=0.8), zorder=13)
         vec_n = scaled_vec(g['neg_grad_near'])
@@ -808,7 +810,7 @@ def save_journal_figures(dpi=300):
         dx_f = 0.14 if x_far[0] < _cx else -0.52
         dy_f = 0.18 if x_far[1] > 0 else -0.30
         ax_j.text(x_far[0] + dx_f, x_far[1] + dy_f,
-                  'Farthest\nbox point', color='#cf222e', fontsize=9,
+                  'Farthest Q point', color='#cf222e', fontsize=9,
                   bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffffffee',
                             edgecolor='#cf222e55', lw=0.8), zorder=13)
         vec_f = scaled_vec(g['neg_grad_far'])
@@ -832,7 +834,7 @@ def save_journal_figures(dpi=300):
                   markeredgecolor='#000000', markeredgewidth=0.6, zorder=12)
         dx_g = 0.14 if x_good[0] < _cx else -0.72
         dy_g = 0.18 if x_good[1] > 0 else -0.42
-        ax_j.text(x_good[0] + dx_g, x_good[1] + dy_g,
+        ax_j.text(x_good[0] - 0.5* dx_g, x_good[1] + dy_g,
                   'Antipodal\ngood vertex', color='#8250df', fontsize=9,
                   bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffffffee',
                             edgecolor='#8250df55', lw=0.8), zorder=13)
@@ -879,7 +881,7 @@ def save_journal_figures(dpi=300):
             g['p_plus_poly'], closed=True,
             facecolor='#388bfd', edgecolor='#388bfd', alpha=0.12, lw=0.0, zorder=3))
 
-        # Cone ∩ P_+ intersection (bright green highlight)
+        # Cone ∩ P_+ intersection 
         _big_fan_j = [x_good]
         for _k in range(N_fan + 1):
             _s = _k / N_fan
@@ -889,15 +891,15 @@ def save_journal_figures(dpi=300):
                 _dir /= _dn
             _big_fan_j.append(x_good + 8.0 * _dir)
         _clip_j = np.array(_big_fan_j)
+        _c0_j = np.array([0.5*(box['xlo']+box['xhi']), 0.5*(box['ylo']+box['yhi'])])
+        _h_j  = np.array([0.5*(box['xhi']-box['xlo']), 0.5*(box['yhi']-box['ylo'])])
+        _vnorm_j = np.sign(g['x_star'] - _c0_j) / _h_j
         for _nrm_j, _bpt_j in [
             (np.array([ 1., 0.]), np.array([box['xlo'], 0.])),
             (np.array([-1., 0.]), np.array([box['xhi'], 0.])),
             (np.array([0.,  1.]), np.array([0., box['ylo']])),
             (np.array([0., -1.]), np.array([0., box['yhi']])),
-            (g['x_star'] - np.clip(g['x_star'],
-                                   np.array([box['xlo'], box['ylo']]),
-                                   np.array([box['xhi'], box['yhi']])),
-             np.array([0.5*(box['xlo']+box['xhi']), 0.5*(box['ylo']+box['yhi'])])),
+            (_vnorm_j, _c0_j),
         ]:
             _clip_j = _sh_clip(_clip_j, _bpt_j, _nrm_j)
             if len(_clip_j) < 3:
@@ -906,7 +908,13 @@ def save_journal_figures(dpi=300):
             ax_j.add_patch(plt.Polygon(
                 _clip_j, closed=True,
                 facecolor='#1a7f37', edgecolor='#1a7f37', alpha=0.35, lw=1.0, zorder=5))
-
+            _label_pt = _clip_j.mean(axis=0)
+            ax_j.text(_label_pt[0], _label_pt[1],
+                      r'$P_+\!\cap H_1\!\cap H_2$', color='#1a7f37', fontsize=8,
+                      ha='center', va='center',
+                      bbox=dict(boxstyle='round,pad=0.2', facecolor='#ffffffee',
+                                edgecolor='#1a7f3755', lw=0.8), zorder=13)
+        
         # Ray + exit point
         x_exit = g['x_exit']
         ax_j.plot([x_good[0], x_exit[0]], [x_good[1], x_exit[1]],
@@ -919,6 +927,33 @@ def save_journal_figures(dpi=300):
                   'Ray exit', color='#cf222e', fontsize=9,
                   bbox=dict(boxstyle='round,pad=0.3', facecolor='#ffffffee',
                             edgecolor='#cf222e55', lw=0.8), zorder=13)
+
+        # Face labels: F_0 on exit face, F* on minimizer face
+        _tol = 1e-4
+        def _face_mid_norm(pt):
+            if abs(pt[1] - box['yhi']) < _tol:
+                return np.array([0.5*(box['xlo']+box['xhi']), box['yhi']]), np.array([0.,  1.])
+            elif abs(pt[1] - box['ylo']) < _tol:
+                return np.array([0.5*(box['xlo']+box['xhi']), box['ylo']]), np.array([0., -1.])
+            elif abs(pt[0] - box['xhi']) < _tol:
+                return np.array([box['xhi'], 0.5*(box['ylo']+box['yhi'])]), np.array([ 1., 0.])
+            else:
+                return np.array([box['xlo'], 0.5*(box['ylo']+box['yhi'])]), np.array([-1., 0.])
+
+        _face_off = 0.24
+        _fm0, _fn0 = _face_mid_norm(x_exit)
+        ax_j.text(*(_fm0 + _face_off * _fn0), r'$F_0$',
+                  color='#cf222e', fontsize=12, ha='center', va='center',
+                  fontweight='bold',
+                  bbox=dict(boxstyle='round,pad=0.25', facecolor='#ffffffee',
+                            edgecolor='#cf222e66', lw=1.0), zorder=16)
+
+        _fms, _fns = _face_mid_norm(x_near)
+        ax_j.text(*(_fms + _face_off * _fns), r'$F^\star$',
+                  color='#1a7f37', fontsize=12, ha='center', va='center',
+                  fontweight='bold',
+                  bbox=dict(boxstyle='round,pad=0.25', facecolor='#ffffffee',
+                            edgecolor='#1a7f3766', lw=1.0), zorder=16)
 
         fig_j.tight_layout()
         fname = f'case_{case_idx + 1}_journal.png'
