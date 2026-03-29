@@ -30,7 +30,7 @@ def _sh_clip(polygon, halfplane_pt, halfplane_normal):
     return np.array(out, dtype=float) if out else np.zeros((0, 2), dtype=float)
 
 
-def make_H(theta_deg, lam_max=500.0, lam_min=1.0):
+def make_H(theta_deg, lam_max=50.0, lam_min=1):
     """Rotated PD Hessian:  H = R(θ) diag(λ) R(θ)ᵀ"""
     th = theta_deg * np.pi / 180
     R  = np.array([[np.cos(th), -np.sin(th)],
@@ -108,13 +108,23 @@ def compute_case(H, x_star):
                 _good_verts.append(_v)
     if _good_verts:
         _gv_costs = [0.5 * ((v - x_star) @ H @ (v - x_star)) for v in _good_verts]
-        _best     = int(np.argmax(_gv_costs))
+        _best     = int(np.argmax(_gv_costs))   # farthest in Q-norm = highest f(v)
         x_good    = _good_verts[_best]
         t_good    = np.sqrt(2.0 * _gv_costs[_best])
     else:
         x_good = x_star.copy()
         t_good = 0.0
     neg_grad_good = -(H @ (x_good - x_star))
+
+    # H_1: normal to level-set f(v̂) at v̂  =  -∇f(v̂)  (proved to contain x*)
+    # H_2: tangent to level-set f(v̂) at v̂  =  90° rotation of ∇f(v̂),
+    #       oriented so that x* lies on the positive side.
+    _grad_good = -neg_grad_good              # ∇f(v̂) = H(v̂ - x*)
+    _t_ccw     = np.array([-_grad_good[1],  _grad_good[0]])   # CCW rotation
+    if np.dot(_t_ccw, x_star - x_good) >= 0:
+        h2_normal = _t_ccw
+    else:
+        h2_normal = -_t_ccw
 
     # Ray exit: first box-boundary crossing of r(t)=x_good+t*(x_star-x_good) for t>0
     _d_ray  = x_star - x_good
@@ -155,6 +165,7 @@ def compute_case(H, x_star):
         t_end=t_end, t_all=t_all, c_near=c_near, c_far=c_far,
         neg_grad_near=neg_grad_near, neg_grad_far=neg_grad_far,
         x_good=x_good, t_good=t_good, neg_grad_good=neg_grad_good,
+        h2_normal=h2_normal,
         x_exit=x_exit, p_plus_poly=p_plus_poly,
     )
 
@@ -295,7 +306,7 @@ ax.add_patch(p_plus_fill)
 # Cone ∩ P_+ intersection (bright green highlight)
 cone_p_plus_fill = plt.Polygon([[0, 0]], closed=True,
                                 facecolor='#7ee787', edgecolor='#7ee787',
-                                alpha=0.0, lw=1.0, zorder=5)
+                                alpha=0.0, lw=1.0, zorder=6)
 ax.add_patch(cone_p_plus_fill)
 
 # Ray from good vertex to exit point
@@ -331,7 +342,7 @@ ax.add_patch(good_to_xstar_arrow)
 good_to_xstar_arrow.set_visible(False)
 
 good_to_xstar_label = ax.text(
-    0, 0, r'$x^*\!-v$', color='#e3b341', fontsize=10, visible=False,
+    0, 0, r'$t(\hat{v})$', color='#e3b341', fontsize=10, visible=False,
     bbox=dict(boxstyle='round,pad=0.2', facecolor='#0d1117cc',
               edgecolor='#e3b34166', lw=0.8), zorder=15)
 
@@ -606,17 +617,17 @@ def update(frame):
         exit_text.set_alpha(alpha_main)
         exit_text.set_visible(True)
 
-        # ── cone wedge between -∇f and (x*-v) ─────────────────────
+        # ── cone between −∇f and H_2 direction (v → v_opp) ─────────────
         ng      = g['neg_grad_good']
         ng_hat  = ng / np.linalg.norm(ng) if np.linalg.norm(ng) > 1e-10 else ng
-        d_vec   = g['x_star'] - g['x_good']
-        d_hat   = d_vec / np.linalg.norm(d_vec) if np.linalg.norm(d_vec) > 1e-10 else d_vec
+        h2_vec  = g['h2_normal']
+        h2_hat  = h2_vec / np.linalg.norm(h2_vec) if np.linalg.norm(h2_vec) > 1e-10 else h2_vec
         L_cone  = ARROW_LEN * 1.6
         N_fan   = 40
         fan_pts = [g['x_good']]
         for _k in range(N_fan + 1):
             _s    = _k / N_fan
-            _dir  = (1 - _s) * ng_hat + _s * d_hat
+            _dir  = (1 - _s) * ng_hat + _s * h2_hat
             _dnrm = np.linalg.norm(_dir)
             if _dnrm > 1e-10:
                 _dir /= _dnrm
@@ -624,33 +635,20 @@ def update(frame):
         cone_fill.set_xy(np.array(fan_pts))
         cone_fill.set_alpha(0.18 * alpha_main)
 
-        # ── P_+ half-box fill ────────────────────────────
         p_plus_fill.set_xy(g['p_plus_poly'])
-        p_plus_fill.set_alpha(0.10 * alpha_main)
+        p_plus_fill.set_alpha(0.12 * alpha_main)
 
-        # ── cone ∩ P_+ intersection ───────────────────────
-        _big_fan = [g['x_good']]
-        for _k in range(N_fan + 1):
-            _s   = _k / N_fan
-            _dir = (1 - _s) * ng_hat + _s * d_hat
-            _dn  = np.linalg.norm(_dir)
-            if _dn > 1e-10:
-                _dir /= _dn
-            _big_fan.append(g['x_good'] + 8.0 * _dir)   # extend beyond box
-        _clip = np.array(_big_fan)
+        # ── P_+ ∩ H_1 ∩ H_2 intersection ──────────────────────────────────
         _c0_anim = np.array([0.5*(box['xlo']+box['xhi']), 0.5*(box['ylo']+box['yhi'])])
         _h_anim  = np.array([0.5*(box['xhi']-box['xlo']), 0.5*(box['yhi']-box['ylo'])])
         _vnorm_anim = np.sign(g['x_star'] - _c0_anim) / _h_anim
-        for _nrm, _bpt in [
-            (np.array([ 1., 0.]), np.array([box['xlo'], 0.])),
-            (np.array([-1., 0.]), np.array([box['xhi'], 0.])),
-            (np.array([0.,  1.]), np.array([0., box['ylo']])),
-            (np.array([0., -1.]), np.array([0., box['yhi']])),
-            (_vnorm_anim, _c0_anim),
-        ]:
-            _clip = _sh_clip(_clip, _bpt, _nrm)
-            if len(_clip) < 3:
-                break
+        _box_rect_anim = np.array([[box['xlo'], box['ylo']], [box['xhi'], box['ylo']],
+                                   [box['xhi'], box['yhi']], [box['xlo'], box['yhi']]])
+        _clip = _sh_clip(_box_rect_anim, _c0_anim, _vnorm_anim)        # clip to P_+
+        if len(_clip) >= 3:
+            _clip = _sh_clip(_clip, g['x_good'], g['neg_grad_good'])   # clip to H_1
+        if len(_clip) >= 3:
+            _clip = _sh_clip(_clip, g['x_good'], g['h2_normal'])       # clip to H_2
         if len(_clip) >= 3:
             cone_p_plus_fill.set_xy(_clip)
             cone_p_plus_fill.set_alpha(0.35 * alpha_main)
@@ -670,13 +668,13 @@ def update(frame):
         good_arrow_label.set_alpha(alpha_main)
         good_arrow_label.set_visible(True)
 
-        # Arrow from good vertex toward x*
-        vec_toward = scaled_vec(g['x_star'] - g['x_good'])
-        good_to_xstar_arrow.set_positions(tuple(g['x_good']), tuple(g['x_good'] + vec_toward))
+        # H_2 arrow: from good vertex toward opposite corner
+        vec_h2 = scaled_vec(g['h2_normal'])
+        good_to_xstar_arrow.set_positions(tuple(g['x_good']), tuple(g['x_good'] + vec_h2))
         good_to_xstar_arrow.set_alpha(alpha_main)
         good_to_xstar_arrow.set_visible(True)
-        label_pos_toward = g['x_good'] + vec_toward * 1.18
-        good_to_xstar_label.set_position(label_pos_toward)
+        label_pos_h2 = g['x_good'] + vec_h2 * 1.18
+        good_to_xstar_label.set_position(label_pos_h2)
         good_to_xstar_label.set_alpha(alpha_main)
         good_to_xstar_label.set_visible(True)
     else:
@@ -731,7 +729,6 @@ plt.tight_layout()
 def save_journal_figures(dpi=300):
     """Save the final hold-frame of each case as a white-background journal figure."""
     _cx = 0.5 * (box['xlo'] + box['xhi'])
-    N_fan = 40
     for case_idx in range(N_CASES):
         g = geo[case_idx]
 
@@ -848,26 +845,14 @@ def save_journal_figures(dpi=300):
                   bbox=dict(boxstyle='round,pad=0.2', facecolor='#ffffffee',
                             edgecolor='#8250df66', lw=0.8), zorder=15)
 
-        # Arrow from good vertex toward x*
-        vec_toward = scaled_vec(g['x_star'] - x_good)
-        ax_j.add_patch(FancyArrowPatch(
-            posA=tuple(x_good), posB=tuple(x_good + vec_toward),
-            arrowstyle='->', color='#b68206', linewidth=2.2,
-            mutation_scale=16, zorder=14))
-        ax_j.text(*(x_good + vec_toward * 1.22), r'$x^*\!-v$',
-                  color='#b68206', fontsize=10,
-                  bbox=dict(boxstyle='round,pad=0.2', facecolor='#ffffffee',
-                            edgecolor='#b6820666', lw=0.8), zorder=15)
-
-        # Cone wedge between -∇f and (x*-v)
-        ng_j = g['neg_grad_good']
+        # Cone between −∇f and H_2 direction
+        ng_j     = g['neg_grad_good']
         ng_hat_j = ng_j / np.linalg.norm(ng_j) if np.linalg.norm(ng_j) > 1e-10 else ng_j
-        d_vec_j = g['x_star'] - x_good
-        d_hat_j = d_vec_j / np.linalg.norm(d_vec_j) if np.linalg.norm(d_vec_j) > 1e-10 else d_vec_j
+        h2_hat_j = g['h2_normal'] / np.linalg.norm(g['h2_normal'])
         fan_pts_j = [x_good]
-        for _k in range(N_fan + 1):
-            _s = _k / N_fan
-            _dir = (1 - _s) * ng_hat_j + _s * d_hat_j
+        for _k in range(41):
+            _s = _k / 40
+            _dir = (1 - _s) * ng_hat_j + _s * h2_hat_j
             _dn = np.linalg.norm(_dir)
             if _dn > 1e-10:
                 _dir /= _dn
@@ -875,42 +860,40 @@ def save_journal_figures(dpi=300):
         ax_j.add_patch(plt.Polygon(
             np.array(fan_pts_j), closed=True,
             facecolor='#e3b341', edgecolor='none', alpha=0.28, zorder=3))
+        # H_2 arrow (v → v_opp)
+        vec_h2_j = scaled_vec(g['h2_normal'])
+        ax_j.add_patch(FancyArrowPatch(
+            posA=tuple(x_good), posB=tuple(x_good + vec_h2_j),
+            arrowstyle='->', color='#e3b341', linewidth=2.2,
+            mutation_scale=16, zorder=14))
+        ax_j.text(*(x_good + vec_h2_j * 1.22), r'$t(\hat{v})$',
+                  color='#e3b341', fontsize=10,
+                  bbox=dict(boxstyle='round,pad=0.2', facecolor='#ffffffee',
+                            edgecolor='#e3b34166', lw=0.8), zorder=15)
 
-        # P_+ half-box fill
+        # P_+ half-box fill (light blue)
         ax_j.add_patch(plt.Polygon(
             g['p_plus_poly'], closed=True,
-            facecolor='#388bfd', edgecolor='#388bfd', alpha=0.12, lw=0.0, zorder=3))
+            facecolor='#388bfd', edgecolor='#388bfd', alpha=0.12, lw=0.0, zorder=4))
 
-        # Cone ∩ P_+ intersection 
-        _big_fan_j = [x_good]
-        for _k in range(N_fan + 1):
-            _s = _k / N_fan
-            _dir = (1 - _s) * ng_hat_j + _s * d_hat_j
-            _dn = np.linalg.norm(_dir)
-            if _dn > 1e-10:
-                _dir /= _dn
-            _big_fan_j.append(x_good + 8.0 * _dir)
-        _clip_j = np.array(_big_fan_j)
+        # P_+ ∩ H_1 ∩ H_2 intersection
         _c0_j = np.array([0.5*(box['xlo']+box['xhi']), 0.5*(box['ylo']+box['yhi'])])
         _h_j  = np.array([0.5*(box['xhi']-box['xlo']), 0.5*(box['yhi']-box['ylo'])])
         _vnorm_j = np.sign(g['x_star'] - _c0_j) / _h_j
-        for _nrm_j, _bpt_j in [
-            (np.array([ 1., 0.]), np.array([box['xlo'], 0.])),
-            (np.array([-1., 0.]), np.array([box['xhi'], 0.])),
-            (np.array([0.,  1.]), np.array([0., box['ylo']])),
-            (np.array([0., -1.]), np.array([0., box['yhi']])),
-            (_vnorm_j, _c0_j),
-        ]:
-            _clip_j = _sh_clip(_clip_j, _bpt_j, _nrm_j)
-            if len(_clip_j) < 3:
-                break
+        _box_rect_j = np.array([[box['xlo'], box['ylo']], [box['xhi'], box['ylo']],
+                                 [box['xhi'], box['yhi']], [box['xlo'], box['yhi']]])
+        _clip_j = _sh_clip(_box_rect_j, _c0_j, _vnorm_j)               # clip to P_+
+        if len(_clip_j) >= 3:
+            _clip_j = _sh_clip(_clip_j, x_good, g['neg_grad_good'])    # clip to H_1
+        if len(_clip_j) >= 3:
+            _clip_j = _sh_clip(_clip_j, x_good, g['h2_normal'])        # clip to H_2
         if len(_clip_j) >= 3:
             ax_j.add_patch(plt.Polygon(
                 _clip_j, closed=True,
-                facecolor='#1a7f37', edgecolor='#1a7f37', alpha=0.35, lw=1.0, zorder=5))
+                facecolor='#1a7f37', edgecolor='#1a7f37', alpha=0.35, lw=1.0, zorder=6))
             _label_pt = _clip_j.mean(axis=0)
             ax_j.text(_label_pt[0], _label_pt[1],
-                      r'$P_+\!\cap H_1\!\cap H_2$', color='#1a7f37', fontsize=8,
+                      r'$\mathcal{P}_+\!\cap H_1\!\cap H_2$', color='#1a7f37', fontsize=8,
                       ha='center', va='center',
                       bbox=dict(boxstyle='round,pad=0.2', facecolor='#ffffffee',
                                 edgecolor='#1a7f3755', lw=0.8), zorder=13)
