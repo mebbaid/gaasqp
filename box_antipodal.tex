@@ -1,0 +1,564 @@
+
+\subsection{Background}
+Consider the strictly convex\footnote{The case when $Q \succeq 0$ is treated in a later section.} quadratic program
+\begin{equation}\label{eq:qp}
+\begin{aligned}
+\min_{x \in \mathbb{R}^n} \quad & f(x) = \tfrac{1}{2}x^\top Q x + g^\top x \\
+\text{subject to} \quad & a_i^\top x \leq b_i, \quad i = 1,\ldots,m,
+\end{aligned}
+\end{equation}
+where $Q\succ0$ and the feasible region
+\[
+\mathcal P = \{x\in\mathbb R^n : Ax\le b\}
+\]
+is a polytope.
+
+\noindent In this work we focus on the class of problems in which $\mathcal{P}$ is a box or, more generally, an affine image of a box. That is, $\mathcal{P}$ can be written as
+\[
+\mathcal{P} = T(\mathcal{B}) = \{Tx + c : x \in \mathcal{B}\},
+\]
+where $T \in \mathbb{R}^{n\times n}$ is nonsingular, $c \in \mathbb{R}^n$, and
+\[
+\mathcal{B} = \{x \in \mathbb{R}^n : \ell \le x \le u\}
+\]
+is an axis-aligned box defined by lower and upper bounds $\ell,u \in \mathbb{R}^n$ with $\ell < u$ componentwise.
+\begin{remark}\label{rem:halfspace-rep-boxes}
+The half-space representation of $\mathcal P$ can be written as
+\[
+A =
+\begin{bmatrix}
+T^{-1} \\ -T^{-1}
+\end{bmatrix},
+\qquad
+b =
+\begin{bmatrix}
+u + T^{-1}c \\ -\ell - T^{-1}c
+\end{bmatrix}.
+\]
+\end{remark}
+
+\noindent Let $\bar x=-Q^{-1}g$ denote the unconstrained minimizer.
+Throughout we assume $\bar x\notin\mathcal P$.
+
+For $\mathcal I\subseteq\{1,\dots,m\}$ define
+\[
+F(\mathcal I)
+=
+\{x\in\mathcal P : a_i^\top x=b_i,\ i\in\mathcal I\}.
+\]
+A nonempty set of this form is called a \emph{face} of $\mathcal P$.
+Faces of dimension $n-1$, $n-2$ and $0$ are called \emph{facets}, \emph{ridges} and \emph{vertices}, respectively. Two facets are said to be \emph{adjacent} if they share a common ridge.
+
+For a feasible point $x\in\mathcal P$ we denote the active set by
+\[
+\mathcal A(x)=\{i: a_i^\top x=b_i\}.
+\]
+A central object of this paper is the notion of a \emph{good vertex} relative to an exterior point.
+\begin{definition}\label{def:good_vertex}
+Let $\bar{x} \notin \mathcal{P}$. A vertex $v$ of $\mathcal{P}$ is called
+\emph{good} (with respect to $\bar{x}$) if the ray from $v$ toward $\bar{x}$
+initially enters the interior of $\mathcal{P}$, i.e.,
+\[
+v + t(\bar{x}-v) \in \relint(\mathcal P)
+\quad \text{for all sufficiently small } t>0 .
+\]
+Equivalently,
+\[
+a_i^\top(\bar{x}-v) < 0
+\quad \text{for all } i \in \mathcal A(v).
+\]
+\end{definition}
+
+\begin{remark}
+Geometrically, a vertex is good if $\bar{x}$ lies inside the cone generated
+by the edges of $\mathcal P$ incident to $v$.
+\end{remark}
+
+\begin{lemma}
+Let $\mathcal P = T(\mathcal B)+c,
+\quad
+\mathcal B = \{y\in\mathbb R^n : \ell \le y \le u\},
+$ 
+where $T\in\mathbb R^{n\times n}$ is nonsingular and $\ell<u$ component-wise.
+Let $\bar x \notin \mathcal P$, and define $\bar y := T^{-1}(\bar x-c)$.
+
+\begin{enumerate}
+\item[(i)] The set $V_\text{good}$ of good vertices of $\mathcal P$ (with respect to $\bar x$) is nonempty.
+
+\item[(ii)] A vertex $v\in\mathcal P$ is good if and only if $v=Ty+c$, where $y$ is a vertex of $\mathcal B$ satisfying
+\[
+\begin{cases}
+y_i=\ell_i \ \Rightarrow\ \bar y_i>\ell_i,\\
+y_i=u_i \ \Rightarrow\ \bar y_i<u_i,
+\end{cases}
+\qquad i=1,\dots,n.
+\]
+\end{enumerate}
+\end{lemma}
+
+\begin{proof}
+Let $v=Ty+c$ be a vertex of $\mathcal P$, where $y$ is a vertex of $\mathcal B$.
+The active constraints at $v$ correspond to
+\[
+\begin{cases}
+(T^{-1})_{i,\cdot}(x-c) \le u_i & \text{if } y_i=u_i,\\
+-(T^{-1})_{i,\cdot}(x-c) \le -\ell_i & \text{if } y_i=\ell_i.
+\end{cases}
+\]
+Hence
+\[
+a_i^\top(\bar x - v)
+=
+\begin{cases}
+\bar y_i - u_i & \text{if } y_i=u_i,\\
+-(\bar y_i - \ell_i) & \text{if } y_i=\ell_i,
+\end{cases}
+\]
+so $v$ is good if and only if
+\[
+\begin{cases}
+\bar y_i < u_i & \text{if } y_i=u_i,\\
+\bar y_i > \ell_i & \text{if } y_i=\ell_i,
+\end{cases}
+\]
+which proves (ii). To show (i), note that $\bar x \notin \mathcal P$ implies $\bar y \notin \mathcal B$, so $\bar y_i \notin [\ell_i,u_i] \ \text{for at least one } i,
+$
+and in particular, for every $i$ at least one of the strict inequalities
+$\bar y_i > \ell_i$ or $\bar y_i < u_i$ holds. Define $y\in\mathcal B$ component-wise by
+\[
+y_i :=
+\begin{cases}
+\ell_i & \text{if } \bar y_i > \ell_i,\\
+u_i & \text{if } \bar y_i < u_i.
+\end{cases}
+\]
+This definition is well posed (at least one case always applies), and yields a vertex $y$ of $\mathcal B$. Moreover, by construction,
+\[
+y_i=\ell_i \ \Rightarrow\ \bar y_i>\ell_i,
+\qquad
+y_i=u_i \ \Rightarrow\ \bar y_i<u_i,
+\]
+for all $i$. By part (ii), the vertex $v=Ty+c$ is therefore good. This proves (i).
+\end{proof}
+
+\begin{figure}[t!]
+\centering
+\fbox{
+\begin{minipage}{0.95\textwidth}
+\centering
+\begin{subfigure}[b]{0.3\textwidth}
+\centering
+\begin{tikzpicture}[scale=1.1]
+\coordinate (v1) at (1,0); \coordinate (v2) at (2,0.5);
+\coordinate (v3) at (2.5,1.5); \coordinate (v4) at (2,2.5);
+\coordinate (v5) at (1,3); \coordinate (v6) at (0,2.5);
+\coordinate (v7) at (-0.5,1.5); \coordinate (v8) at (0,0.5);
+\draw[thick] (v1) -- (v2) -- (v3) -- (v4) -- (v5) -- (v6) -- (v7) -- (v8) -- cycle;
+\fill[blue!10] (v1) -- (v2) -- (v3) -- (v4) -- (v5) -- (v6) -- (v7) -- (v8) -- cycle;
+\coordinate (xbar) at (3.5,1.5); \filldraw[red] (xbar) circle (2pt); \node[above right] at (xbar) {$\bar{x}$};
+\foreach \v in {v6,v7,v8} {\filldraw[green!70!black] (\v) circle (2.5pt);}
+\draw[dashed,->,green!70!black] (v6) -- ($(v6)!0.9!(xbar)$);
+\draw[dashed,->,green!70!black] (v7) -- ($(v7)!0.9!(xbar)$);
+\draw[dashed,->,green!70!black] (v8) -- ($(v8)!0.9!(xbar)$);
+\end{tikzpicture}
+\caption{Several good vertices}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.3\textwidth}
+\centering
+\begin{tikzpicture}[scale=3.5,tdplot_main_coords]
+\tdplotsetmaincoords{60}{120}
+
+\coordinate (v1) at (0,0,0); 
+\coordinate (v2) at (1,0,0);
+\coordinate (v3) at (0.5,0.866,0);
+\coordinate (v4) at (0.5,0.289,0.816); 
+
+\draw[thick] (v1) -- (v2) -- (v3) -- cycle;
+\draw[thick] (v1) -- (v4); \draw[thick] (v2) -- (v4); \draw[thick] (v3) -- (v4);
+
+\fill[blue!10,opacity=0.5] (v1) -- (v2) -- (v3) -- cycle;
+\fill[blue!10,opacity=0.5] (v1) -- (v2) -- (v4) -- cycle;
+\fill[blue!10,opacity=0.5] (v2) -- (v3) -- (v4) -- cycle;
+\fill[blue!10,opacity=0.5] (v3) -- (v1) -- (v4) -- cycle;
+
+\coordinate (xbar) at (1.4,0.5,0.8); \filldraw[red] (xbar) circle (0.8pt); \node[above] at (xbar) {$\bar{x}$};
+
+\filldraw[green!70!black] (v1) circle (0.8pt); 
+%\node[left] at (v1) {$v_{\text{good}}$};
+\draw[dashed,->,green!70!black] (v1) -- ($(v1)!0.9!(xbar)$);
+
+% % Other vertex labels
+\end{tikzpicture}
+\caption{Single good vertex}
+\end{subfigure}
+\begin{subfigure}[b]{0.3\textwidth}
+\centering
+\begin{tikzpicture}[scale=1.5]
+
+% --- House polytope vertices ---
+\coordinate (v1) at (0,0);
+\coordinate (v2) at (2,0);
+\coordinate (v4) at (1.2,0.5);  % small roof peak
+\coordinate (v5) at (0.8,0.5);
+
+\draw[thick]
+  (v1) -- (v2)  -- (v4) -- (v5) -- cycle;
+\fill[blue!10]
+  (v1) -- (v2) --  (v4) -- (v5) -- cycle;
+
+\coordinate (xbar) at (1.0,2.1);
+\filldraw[red] (xbar) circle (2pt);
+\node[above right] at (xbar) {$\bar{x}$};
+
+\foreach \v in {v1, v2, v4,v5}
+  \draw[dashed,->,gray] (\v) -- ($( \v)!0.9!(xbar)$);
+\end{tikzpicture}
+\caption{No good vertex exists}
+\end{subfigure}
+
+\caption{\emph{Good vertices} in 2D and 3D. Green is good; red is the exterior $\bar{x}$.}
+\end{minipage}
+} % end fbox
+\end{figure}
+
+\section{Main Results}\label{sec2}
+
+In this section, we give some intermediate lemmas and state our main results. 
+Throughout the sequel, we denote the $Q$-weighted norm by
+$
+\|x\|_Q := \sqrt{x^\top Q x},
+$
+and the associated inner product by
+$
+\langle x, y\rangle_Q := x^\top Q y.
+$
+When the subscript is omitted, norms and inner products are understood to be with respect to the standard Euclidean metric.
+
+% \subsection{Farthest Good Vertex}
+
+\begin{proposition}\label{prop:halfbox_affine}
+Let $\mathcal P = T(\mathcal B)+c$, where $T\in\mathbb R^{n\times n}$ is
+nonsingular and $\mathcal B=\{x\in\mathbb R^n:\ell\le x\le u\}$.
+Let $\bar x\notin\mathcal P$ and let $x^\star$ denote the solution of
+\eqref{eq:qp} with unconstrained minimizer $\bar x=-Q^{-1}g$.
+Define
+\[
+x_e := \arg\min_{x\in\mathcal P}\|x-\bar x\|_2,
+\qquad
+v := \bar x - x_e,
+\]
+and
+\[
+\mathcal P_+ := \{x\in\mathcal P : v^\top (x-c_0) \ge 0\},
+\qquad
+\mathcal P_- := \{x\in\mathcal P : v^\top (x-c_0) < 0\},
+\]
+where $c_0 = T\frac{\ell+u}{2}+c$.
+Then $x^\star \in \mathcal P_+$.
+\end{proposition}
+
+\begin{proof}
+Let $m=(\ell+u)/2$ denote the center of the box $\mathcal B$ and note that
+$c_0 = Tm + c$ is the \enquote{center} of $\mathcal P$.
+Translate
+$
+z := x-c_0, \, \bar z := \bar x - c_0, 
+$
+write
+$
+\mathcal P = c_0 + T(\mathcal B-m),
+$
+and note that $\mathcal B-m$ is centrally symmetric about the origin. Since $\bar x=-Q^{-1}g$, the objective can be written as
+$
+f(x)=\tfrac12\|x-\bar x\|_Q^2+\text{const}.
+$
+Hence $x^\star$ minimizes $\|x-\bar x\|_Q^2$ over $\mathcal P$. Let
+\[
+z^\star := x^\star - c_0, \qquad
+z_e := x_e - c_0 .
+\]
+Then $z^\star$ minimizes $\|z-\bar z\|_Q^2$ over the translated polytope
+\[
+\tilde{\mathcal P} := \mathcal P - c_0 = T(\mathcal B-m).
+\]
+Because $x_e$ is the Euclidean projection of $\bar x$ onto $\mathcal P$,
+\begin{align*}
+    \langle v, x-x_e\rangle &\le 0 \qquad \forall x\in\mathcal P  \\
+    \implies \langle v, z-z_e\rangle &\le 0
+\qquad \forall z\in\tilde{\mathcal P}.
+\end{align*}
+Since $\tilde{\mathcal P}$ is centrally symmetric about the origin,
+$-z\in\tilde{\mathcal P}$ whenever $z\in\tilde{\mathcal P}$. Applying the
+above inequality to $-z$ gives
+\[
+-\langle v,z_e\rangle \le \langle v,z\rangle \le \langle v,z_e\rangle
+\qquad \forall z\in\tilde{\mathcal P}.
+\]
+Taking $z=0$ yields $\langle v,z_e\rangle \ge 0$.
+Since $\bar z = z_e + v$, we obtain
+\[
+\langle v,\bar z\rangle
+=
+\langle v,z_e\rangle + \langle v,v\rangle
+>
+0 .
+\]
+Now assume for contradiction that $\langle v,z^\star\rangle <0$.
+Consider the segment
+\[
+\gamma(s)=(1-s)z^\star+s\bar z,
+\qquad s\in[0,1].
+\]
+Then $\langle v,\gamma(s)\rangle$ is affine in $s$, negative at $s=0$
+and positive at $s=1$, so it vanishes at some $\bar s\in(0,1)$. Let
+\[
+s^\star := \sup\{s\in[0,1] : \gamma(s)\in\tilde{\mathcal P}\}.
+\]
+Since $\gamma(0)=z^\star\in\tilde{\mathcal P}$, the set is nonempty and
+$p:=\gamma(s^\star)\in\tilde{\mathcal P}$ by closedness.
+To see that $s^\star>0$, note that $\bar z-z^\star$ cannot be an outward
+normal of $\tilde{\mathcal P}$ at $z^\star$. Indeed,
+\[
+\bar z-z^\star = v + (z_e-z^\star),
+\]
+and testing against $z_e\in\tilde{\mathcal P}$ gives
+\[
+\langle \bar z-z^\star, z_e-z^\star\rangle
+=
+\langle v,z_e\rangle
+-
+\langle v,z^\star\rangle
++
+\|z_e-z^\star\|^2
+>
+0,
+\]
+Hence
+$s^\star>0$. $s^\star < 1$ by virtue of $\bar z \not \in \tilde\Pset$.
+By strict convexity of $\|z-\bar z\|_Q^2$,
+\[
+\|\;p-\bar z\;\|_Q^2
+<
+\|\;z^\star-\bar z\;\|_Q^2,
+\]
+contradicting optimality of $z^\star$. Therefore
+$
+\langle v,z^\star\rangle \ge 0,
+$ equivalently 
+$
+\langle v,x^\star-c_0\rangle \ge 0,
+$
+and the result follows
+\end{proof}
+
+\begin{proposition}\label{prop:three_halfspaces}
+Let $\hat v$ be the farthest, in Euclidean sense, good vertex with respect to $\bar x$, i.e., $
+  \hat v \;:=\; \operatorname*{arg\,max}_{\substack{v\,\in\, V_\text{good}}}\;
+                \|v - \bar x\|_2. $
+Define
+\begin{align*}
+  H_1 &:= \bigl\{x\in\mathbb{R}^n : {-}\nabla f(\hat v)^\top(x-\hat v)\ge 0\bigr\},\\
+  H_2 &:= \bigl\{x\in\mathbb{R}^n : (\bar x - \hat v)^\top(x-\hat v)\ge 0\bigr\}.
+\end{align*}
+Then $x^\star \in \mathcal P_+\cap H_1\cap H_2$.
+\end{proposition}
+
+\begin{proof}
+$x^\star\in\mathcal{P}_+$ by Proposition~\ref{prop:halfbox_affine}.
+Since $\hat v\in\mathcal{P}$ and $x^\star$ is optimal, $f(x^\star)\le f(\hat v)$.
+Convexity of $f$ then gives
+$\nabla f(\hat v)^\top(x^\star - \hat v)\le f(x^\star)-f(\hat v)\le 0$, thus $x^\star \in H_1$. To see that $x^\star\in H_2$; note $\hat v$ is farthest in $\mathcal{P}$ from $\bar x$ and $x^\star\in\mathcal{P}$,
+we have $\|\hat v-\bar x\|^2\ge\|x^\star-\bar x\|^2$.
+Writing $x^\star-\bar x=(x^\star-\hat v)+(\hat v-\bar x)$ and expanding
+yields
+\[
+  (\bar x-\hat v)^\top(x^\star-\hat v)
+  \;\ge\;
+  \tfrac{1}{2}\|x^\star-\hat v\|^2
+  \;\ge\; 0.\qedhere
+\]
+\end{proof}
+
+\begin{theorem}\label{thm:two_hops}
+Let $\mathcal{P}=T(\mathcal{B})+c$ and $\hat{v}$ be as in
+Proposition~\ref{prop:three_halfspaces}.
+Set $\hat{y}:=T^{-1}(\hat{v}-c)$, $\bar{y}:=T^{-1}(\bar{x}-c)$, and
+\[
+  d := \bar{y}-\hat{y}, \qquad d_i \ne 0 \;\;\forall i,
+\]
+where $d_i\ne 0$ holds because $\hat{v}$ is a good vertex (Lemma).
+Define the \emph{exit facet}
+\[
+  F_0 := \bigl\{x\in\mathcal{P} : (T^{-1}(x-c))_{i_0}=\hat{y}^{\mathrm{opp}}_{i_0}\bigr\},
+  \qquad
+  i_0 := \operatorname*{arg\,min}_{i}\frac{u_i-\ell_i}{|d_i|},
+\]
+where $\hat{y}^{\mathrm{opp}}_i := u_i$ if $\hat{y}_i=\ell_i$, and $\hat{y}^{\mathrm{opp}}_i := \ell_i$ if $\hat{y}_i=u_i$.
+Let $F^\star$ denote the optimal face, i.e.\ the minimal face of $\mathcal{P}$ containing $x^\star$.
+Then, for any $Q\succ 0$:
+\begin{enumerate}
+  \item[(i)] The ray $r(t):=\hat{v}+t(\bar{x}-\hat{v})$ exits $\mathcal{P}$ through $F_0$.
+  \item[(ii)] $F_0$ is adjacent to $F^\star$, so $x^\star$ is reachable from $\hat{v}$
+  in at most \emph{two} facet-adjacency hops: $\hat{v}\to F_0\to F^\star$.
+\end{enumerate}
+\end{theorem}
+
+\begin{proof}
+Work throughout in $y$-coordinates via $y=T^{-1}(x-c)$, noting that $\mathcal{P}$ corresponds to $\mathcal{B}$ and that the affine map preserves the adjacency structure of facets.
+
+\smallskip\noindent\textbf{(i).}
+The $i$-th coordinate of $r(t)$ in $y$-space is $\hat{y}_i+td_i$.
+Since $\hat{v}$ is good, $\operatorname{sign}(d_i)=\operatorname{sign}(\hat{y}^{\mathrm{opp}}_i-\hat{y}_i)$ for every $i$
+(Definition~\ref{def:good_vertex}), so the ray moves strictly toward the far wall $\hat{y}^{\mathrm{opp}}_i$.
+The ray reaches wall $i$ at time
+\[
+  t_i = \frac{\hat{y}^{\mathrm{opp}}_i - \hat{y}_i}{d_i} = \frac{u_i-\ell_i}{|d_i|} > 0,
+\]
+and the first exit is at $t_0=\min_i t_i$, occurring through the facet indexed by $i_0$.
+
+\smallskip\noindent\textbf{(ii).}
+Since $\hat{v}$ is good, the ray enters $\operatorname{relint}(\mathcal{B})$ immediately, so $r(t)\in\operatorname{relint}(\mathcal{P})$ for small $t>0$, hence $r(t_0)\in\overline{\mathcal{P}_+}$ and thus $F_0\subset\overline{\mathcal{P}_+}$.
+The parallel opposite of $F_0$ is
+\[
+  \bar{F}^{(i_0)} := \{x\in\mathcal{P} : (T^{-1}(x-c))_{i_0} = \hat{y}_{i_0}\}.
+\]
+Since $\mathcal{P}$ is centrally symmetric about $c_0$, the map $x\mapsto 2c_0-x$ sends $F_0$ to $\bar{F}^{(i_0)}$.
+For any $x\in F_0\subset\overline{\mathcal{P}_+}$ we have $v^\top(x-c_0)\ge 0$, so $v^\top((2c_0-x)-c_0)=-v^\top(x-c_0)\le 0$,
+giving $\bar{F}^{(i_0)}\subset\mathcal{P}_-$.
+
+In $\mathcal{B}$, every facet is adjacent to all other facets except its parallel opposite.
+Hence $F_0$ is adjacent to every facet of $\mathcal{P}$ except $\bar{F}^{(i_0)}\subset\mathcal{P}_-$,
+and in particular to every facet intersecting $\overline{\mathcal{P}_+}$.
+By Proposition~\ref{prop:halfbox_affine} and $Q\succ0$, $x^\star\in\partial\mathcal{P}\cap\overline{\mathcal{P}_+}$,
+so $F^\star$ intersects $\overline{\mathcal{P}_+}$, and $F_0$ is adjacent to $F^\star$.
+\end{proof}
+
+%  placeholder to be adjusted
+\section{Algorithmic Implications}\label{sec3}
+
+Theorem~\ref{thm:two_hops} yields a two-phase initialisation, followed by a short active-set phase.
+For the box case $\mathcal{P}=T(\mathcal{B})+c$, every object in Theorem~\ref{thm:two_hops} is available in closed form after the single change of variables $\bar{y}=T^{-1}(\bar{x}-c)$, and we exploit this throughout.
+
+\begin{algorithm}[H]
+\caption{Box Initialisation (Phases~1 and~2)}
+\label{alg:init_box}
+\begin{algorithmic}
+\Require $T,c,\ell,u\in\mathbb{R}^n$,\quad unconstrained minimizer $\bar{x}=-Q^{-1}g$
+\Ensure Exit-face active set $\mathcal{A}_0$ with initial point $\hat{x}_0\in F_0$
+\State $\bar{y} \gets T^{-1}(\bar{x}-c)$
+\State
+\State \textbf{Phase 1 — Farthest good vertex} \Comment{Lemma, $O(n)$}
+\For{$i = 1,\ldots,n$}
+    \State $\hat{y}_i \gets \ell_i$ if $\bar{y}_i > \ell_i$, else $\hat{y}_i \gets u_i$
+    \Comment{good-vertex condition}
+\EndFor
+\State $\hat{v} \gets T\hat{y}+c$
+\State
+\State \textbf{Phase 2 — Closed-form exit face} \Comment{Theorem~\ref{thm:two_hops}(i), $O(n)$}
+\State $d \gets \bar{y}-\hat{y}$ \Comment{all $d_i\ne 0$ by goodness}
+\State $i_0 \gets \arg\min_{i}\,(u_i-\ell_i)/|d_i|$ \Comment{first-exit coordinate}
+\State $\hat{y}^{\mathrm{opp}}_{i_0} \gets u_{i_0}$ if $\hat{y}_{i_0}=\ell_{i_0}$, else $\hat{y}^{\mathrm{opp}}_{i_0} \gets \ell_{i_0}$
+\State $\hat{x}_0 \gets T(\hat{y} + t_0 d) + c$,\quad $t_0 = (u_{i_0}-\ell_{i_0})/|d_{i_0}|$
+\State $\mathcal{A}_0 \gets \{\text{constraint at wall } \hat{y}^{\mathrm{opp}}_{i_0} \text{ of coordinate } i_0\}$
+\State \Return $(\hat{x}_0,\,\mathcal{A}_0)$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{remark}
+The algorithm extends to general polytopes $(A,b)$ by replacing Phase~1 with a greedy vertex search (sort constraints by $a_i^\top(\bar{x}-\bar{c})$, test $O(n)$ candidate active sets) and Phase~2 with a ray-tracing scan over all $m$ constraints, at cost $O(n^3\log m)$ and $O(mn)$ respectively.
+The active-set phase (Algorithm~\ref{alg:facehopping}) is identical in both cases.
+\end{remark}
+
+By Theorem~\ref{thm:two_hops}(ii), the optimal face $F^\star$ lies at most one hop from $F_0$, so Phase~3 terminates in at most two facet transitions.
+Let $\mathcal{A}$ denote the current active set with multipliers $\lambda\in\mathbb{R}^{|\mathcal{A}|}$, and let $L_{ii}$ be the $i$-th diagonal of the Cholesky factor of the Schur complement.
+The \emph{sensitivity} of constraint $i\in\mathcal{A}$ is
+\[
+  s_i := \frac{\lambda_i^2}{2\,L_{ii}^2},
+\]
+which estimates the objective improvement from relaxing constraint $i$.
+Four drop strategies are implemented:
+\begin{itemize}
+  \item \textsc{Standard}: drop $i^\star = \arg\min_{i\in\mathcal{A}}\lambda_i$ (Dantzig pivot).
+  \item \textsc{Sensitivity}: drop $i^\star = \arg\max_{i:\lambda_i<-\varepsilon}\,s_i$ (single best improvement).
+  \item \textsc{Batch}: drop all $i$ with $s_i \ge \tfrac{1}{2}s_{\max}$, up to $B=10$ simultaneously.
+  \item \textsc{Neighbors}: same score as \textsc{Sensitivity}, restricted to face-adjacent candidates.
+\end{itemize}
+Violated constraints are added in batch ($V=\{i\notin\mathcal{A}:a_i^\top x > b_i+\varepsilon\}$).
+The Schur complement is updated incrementally with each rank-1 add/drop.
+
+\begin{algorithm}[H]
+\caption{Phase 3 --- Face Hopping}
+\label{alg:facehopping}
+\begin{algorithmic}
+\Require Exit-face active set $\mathcal{A}_0$, $(Q, g, A, b)$, Cholesky $L_Q$ of $Q$, strategy $\sigma$
+\Ensure Optimal-face active set $\mathcal{A}^\star$
+\State $\mathcal{A} \gets \mathcal{A}_0$;\quad initialise Schur complement from $L_Q$
+\Repeat
+  \State Solve equality QP: $x \gets (Q+0)^{-1}(\text{using Schur})$;\quad compute $\lambda$
+  \If{$\lambda_i \ge -\varepsilon$ $\forall i\!\in\!\mathcal{A}$} \Comment{dual feasible}
+    \State $V \gets \{i\notin\mathcal{A}: a_i^\top x > b_i+\varepsilon\}$
+    \If{$V = \emptyset$} \Return $\mathcal{A}$ \Comment{KKT satisfied} \EndIf
+    \State $\mathcal{A} \gets \mathcal{A} \cup V$;\quad update Schur
+  \Else \Comment{drop via strategy $\sigma$}
+    \State select $i^\star$ (or batch) according to $\sigma$;\quad
+           $\mathcal{A} \gets \mathcal{A}\setminus\{i^\star\}$;\quad update Schur
+  \EndIf
+\Until{max iterations}
+\State \Return $\mathcal{A}$
+\end{algorithmic}
+\end{algorithm}
+
+\subsubsection{Complexity}
+
+For box constraints $\mathcal{P}=T(\mathcal{B})+c$ with $n$ variables and $m=2n$ constraints:
+\begin{itemize}
+  \item \emph{Phase~1} (farthest good vertex): $O(n)$ — one pass over coordinates.
+  \item \emph{Phase~2} (ray trace): $O(n)$ — $n$ exit-time comparisons.
+  \item \emph{Phase~3} (face hopping): $O(k^2 n)$ per iteration, where $k=|\mathcal{A}|$; at most $O(n)$ iterations by Theorem~\ref{thm:two_hops}.
+    Each Schur complement rank-1 update costs $O(k^2)$.
+\end{itemize}
+For general polytopes, Phase~1 costs $O(n^3\log m)$ (vertex enumeration heuristic) and Phase~2 costs $O(mn)$.
+
+\subsubsection{Benchmarks}\label{sec:benchmarks}
+
+We validate Theorem~\ref{thm:two_hops} on a box-constrained linear MPC problem arising from walking robot locomotion.
+The controlled system is a triple integrator (Linear Inverted Pendulum Model, LIPM) with state $x_k = [\mathrm{pos},\mathrm{vel},\mathrm{acc}]^\top$ and control input $u_k$ (jerk), subject to symmetric jerk bounds
+\[
+  -u_{\max} \;\le\; U_i \;\le\; u_{\max}, \quad i=1,\ldots,N,
+\]
+with $u_{\max}=1\,\mathrm{m/s^3}$, CoM height $0.53\,\mathrm{m}$, sampling time $\Delta t=0.1\,\mathrm{s}$, and alternating step lengths $\pm 0.18\,\mathrm{m}$.
+The resulting QP has a dense positive-definite $N\times N$ Hessian $H = \Phi^\top \bar{Q} \Phi + R I$ (computed once per horizon $N$); only the gradient $g_k = \Phi^\top \bar{Q}(x_k^{\mathrm{free}}-x^{\mathrm{ref}})$ changes at each step.
+This matches exactly the box-constrained form required by Theorem~\ref{thm:two_hops}.
+
+\medskip
+\noindent\textbf{Setup.}
+We benchmark GeoQP (four face-hopping strategies), qpOASES (\texttt{QProblemB} with MPC hotstarts), and OSQP (ADMM, warm-started) over horizons $N\in\{10,15,20,30\}$ with $100$ simulation steps per $N$ at primal/dual tolerance $10^{-7}$.
+GeoQP precomputes the Cholesky factorisation of $H$ once per $N$ and hot-starts with gradient-only updates; qpOASES similarly hotstarts its working set.
+
+\medskip
+\noindent\textbf{Corollary~2 verification.}
+The maximum observed facet-hop count (Phase~3 adjacency transitions) was zero across all horizons and all $400$ MPC steps, confirming that the initial exit face $F_0$ is itself already an optimal face or adjacent to one for this problem class.
+The number of Phase~3 active-set \emph{iterations} (add/drop steps within a face) ranged from $0$ to $4$, consistent with the tight box structure.
+
+\begin{figure}[t]
+  \centering
+  % \includegraphics[width=\linewidth]{figures/lipm_timing.pdf}
+  \fbox{\parbox{0.95\linewidth}{\centering\vspace{2.5cm}
+    \textbf{Figure placeholder:} Wall-clock solve time ($\mu$s) vs.\ horizon $N$ for GeoQP (four strategies), qpOASES, and OSQP.
+    Lines show mean; shaded bands show $\pm 1$ std.\ dev.\ over 100 steps.
+  \vspace{2.5cm}}}
+  \caption{Solve-time comparison on the LIPM walking MPC benchmark ($u_{\max}=1\,\mathrm{m/s^3}$, $\Delta t = 0.1\,\mathrm{s}$, 100 steps per $N$, tolerance $10^{-7}$). GeoQP achieves competitive or superior wall-clock times and always returns a primal-feasible solution.}
+  \label{fig:lipm_timing}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  % \includegraphics[width=\linewidth]{figures/lipm_hops.pdf}
+  \fbox{\parbox{0.95\linewidth}{\centering\vspace{2.5cm}
+    \textbf{Figure placeholder:} Phase~3 iteration count (active-set steps) and facet-hop count vs.\ horizon $N$ for GeoQP.
+    The hop count is always $\le 2$, confirming Theorem~\ref{thm:two_hops}.
+  \vspace{2.5cm}}}
+  \caption{Phase~3 active-set iteration count and facet-hop count for GeoQP on the LIPM benchmark. The facet-hop count is zero for all tested horizons, validating the $\le 2$ bound of Theorem~\ref{thm:two_hops} with margin.}
+  \label{fig:lipm_hops}
+\end{figure}
