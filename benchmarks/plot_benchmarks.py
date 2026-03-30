@@ -58,6 +58,9 @@ C_QPO       = "#4daf4a"
 C_OSQP      = "#ff7f00"
 C_BOUND     = "#555555"
 
+# Single GeoQP color for consistency across figures
+C_GEO = C_GEO_DIAG
+
 W2    = 7.16
 H_FIG = W2 * 0.618 * 0.55
 
@@ -146,6 +149,7 @@ def parse_benchmark(filepath):
     for tag, sub_re in [
         ("perf_diag",  r"Axis-aligned, diagonal Q"),
         ("perf_dense", r"Axis-aligned, dense Q"),
+        ("perf_affine", r"Diagonal-T affine image"),
     ]:
         sub = _extract_sub_block(perf_blk, sub_re)
         # Format variants (field indices: n type Geo qpO [OSQP_us] ratio Pivot qpO_iter [OSQP_iter] Hops ObjDiff Result)
@@ -153,24 +157,110 @@ def parse_benchmark(filepath):
         #  without    (10 fields): n type Geo qpO         ratio Pivot qpO_iter           Hops ObjDiff Result
         #  old 9-field:            n type Geo qpO         ratio Pivot                    Hops ObjDiff Result
         def _row(p):
+            # Robustly detect new/old table formats. The ratio column contains
+            # a trailing 'x' (e.g. '0.627x'); locate it to infer column layout.
             if len(p) < 7:
                 return None
-            has_osqp     = len(p) >= 12
-            has_qpo_iter = len(p) >= 10
-            off = 1 if has_osqp else 0   # shift when OSQP_us column present
-            qpo_iter_idx = 6 + off
-            osqp_iter_off = 1 if has_osqp else 0  # OSQP_iter comes after qpO_iter when present
-            hops_idx = qpo_iter_idx + osqp_iter_off + (1 if has_qpo_iter else 0)
+            # find ratio token index (first token that ends with 'x')
+            ratio_idx = None
+            for idx, tok in enumerate(p):
+                if isinstance(tok, str) and tok.endswith('x'):
+                    ratio_idx = idx
+                    break
+            if ratio_idx is None:
+                return None
+
+            # Core fields
+            try:
+                geo_us = float(p[2])
+                qpo_us = float(p[3])
+            except ValueError:
+                return None
+
+            # Columns between qpO_us (p[3]) and the ratio token can vary.
+            # Common layouts:
+            #  - no extra cols: ratio at p[4]
+            #  - OSQP present: OSQP_us at p[4], ratio at p[5]
+            #  - warm-start + OSQP: qpO_vh_us at p[4], OSQP_us at p[5], ratio at p[6]
+            qpovh_us = None
+            osqp_us = None
+            extra_count = max(0, ratio_idx - 4)
+            try:
+                if extra_count == 0:
+                    qpovh_us = None
+                elif extra_count == 1:
+                    # single extra column — treat as OSQP_us
+                    osqp_us = float(p[4])
+                else:
+                    # two or more extras — assume qpOASES warm-start then OSQP
+                    qpovh_us = float(p[4])
+                    # second extra may be OSQP_us
+                    try:
+                        osqp_us = float(p[5])
+                    except (IndexError, ValueError):
+                        osqp_us = None
+            except ValueError:
+                qpovh_us = None
+                osqp_us = None
+
+            # Average pivots sits immediately after the ratio token
+            try:
+                avg_pivot = float(p[ratio_idx + 1])
+            except (IndexError, ValueError):
+                avg_pivot = None
+
+            # qpOASES iteration count is the token after avg_pivot
+            qpO_iter = None
+            qpO_vh_iter = None
+            osqp_iter = None
+            try:
+                qpO_iter = float(p[ratio_idx + 2])
+            except (IndexError, ValueError):
+                qpO_iter = None
+
+            # If qpO_vh was present, an extra iteration column follows
+            if qpovh_us is not None:
+                try:
+                    qpO_vh_iter = float(p[ratio_idx + 3])
+                except (IndexError, ValueError):
+                    qpO_vh_iter = None
+                # OSQP_iter may follow after that
+                try:
+                    osqp_iter = float(p[ratio_idx + 4])
+                except (IndexError, ValueError):
+                    osqp_iter = None
+            else:
+                # No qpO_vh column: OSQP_iter may be immediately after qpO_iter
+                try:
+                    osqp_iter = float(p[ratio_idx + 3])
+                except (IndexError, ValueError):
+                    osqp_iter = None
+
+            # Hops token is either after OSQP_iter or after qpO_iter when OSQP absent
+            avg_hops = None
+            try:
+                avg_hops = float(p[-3])
+            except (IndexError, ValueError):
+                try:
+                    avg_hops = float(p[ratio_idx + 3 if qpovh_us is None else ratio_idx + 4])
+                except (IndexError, ValueError):
+                    avg_hops = None
+
+            # osqp_us already attempted above; keep as is if parsed.
+
             return dict(
                 n=int(p[0]),
-                Geo_us=float(p[2]),
-                qpO_us=float(p[3]),
-                OSQP_us=float(p[4]) if has_osqp else None,
-                Ratio=float(p[4 + off].rstrip("x")),
-                AvgPivot=float(p[5 + off]),
-                qpO_iter=float(p[qpo_iter_idx]) if has_qpo_iter else None,
-                OSQP_iter=float(p[qpo_iter_idx + 1]) if has_osqp else None,
-                AvgHops=float(p[hops_idx]),
+                type=p[1],
+                Geo_us=geo_us,
+                qpO_us=qpo_us,
+                qpO_vh_us=qpovh_us,
+                OSQP_us=osqp_us,
+                Ratio=float(p[ratio_idx].rstrip('x')),
+                AvgPivot=avg_pivot,
+                qpO_iter=qpO_iter,
+                qpO_vh_iter=qpO_vh_iter,
+                OSQP_iter=osqp_iter,
+                AvgHops=avg_hops,
             )
         data[tag] = _parse_table(sub, _row)
 
@@ -198,17 +288,21 @@ def _save(fig, outdir, name):
 # ===========================================================================
 
 def fig01_performance(data, outdir):
-    pd_ = data.get("perf_diag", [])
-    pq  = data.get("perf_dense", [])
-    if not pd_ and not pq:
+    # Panel A: dense axis-aligned Q (GeoQP vs qpOASES vs OSQP)
+    rows_dense = sorted(data.get("perf_dense", []), key=lambda r: r["n"]) if data.get("perf_dense") else []
+    # Panel B: affine-diag entries from perf_affine (T diagonal)
+    perf_aff = data.get("perf_affine", [])
+    rows_affine_diag = sorted([r for r in perf_aff if "affine-diag" in r.get("type", "").lower()], key=lambda r: r["n"]) if perf_aff else []
+
+    if not rows_dense and not rows_affine_diag:
         print("  [skip] fig01_performance (no data)"); return
 
     fig, axes = plt.subplots(1, 2, figsize=(W2, H_FIG))
 
-    def _panel(ax, rows, title):
+    def _panel(ax, rows, title, geo_color=C_GEO):
         rows = sorted(rows, key=lambda r: r["n"])
         d = _to_arrays(rows, ["n", "Geo_us", "qpO_us"])
-        ax.plot(d["n"], d["Geo_us"],  "o-",  color=C_GEO_DIAG, label="GeoQP",   zorder=3)
+        ax.plot(d["n"], d["Geo_us"],  "o-",  color=C_GEO, label="GeoQP",   zorder=3)
         ax.plot(d["n"], d["qpO_us"], "s--", color=C_QPO,       label="qpOASES", zorder=3)
         osqp_rows = [r for r in rows if r.get("OSQP_us") is not None]
         if osqp_rows:
@@ -220,12 +314,12 @@ def fig01_performance(data, outdir):
         ax.set_title(title)
         ax.legend()
 
-    if pd_:
-        _panel(axes[0], pd_, r"(a) Diagonal $Q$")
+    if rows_dense:
+        _panel(axes[0], rows_dense, r"(a) Axis-aligned Box (dense $Q$)")
     else:
         axes[0].set_visible(False)
-    if pq:
-        _panel(axes[1], pq, r"(b) Dense $Q$")
+    if rows_affine_diag:
+        _panel(axes[1], rows_affine_diag, r"(b) Affine Image (diagonal $T$, Dense $Q$)")
     else:
         axes[1].set_visible(False)
 
@@ -251,25 +345,38 @@ def fig02_iterations(data, outdir):
     fig, axes = plt.subplots(1, 2, figsize=(W2, H_FIG),
                              gridspec_kw={"wspace": 0.30})
 
-    for col_idx, (qtype, col, perf_key, title) in enumerate([
-        ("diagonal", C_GEO_DIAG,  "perf_diag",  r"(a) Diagonal $Q$"),
-        ("dense",    C_GEO_DENSE, "perf_dense",  r"(b) Dense $Q$"),
-    ]):
+    # Panel definitions: (geo_qtype_for_hops, color, perf_key, title, perf_filter_fn)
+    panels = [
+        ("dense",    C_GEO_DENSE, "perf_dense", r"(a) Axis-aligned Box (dense $Q$)", None),
+        ("diagonal", C_GEO_DIAG,  "perf_affine", r"(b) Affine Image (diagonal $T$, Dense $Q$)", lambda r: "affine-diag" in r.get("type", "").lower()),
+    ]
+
+    for col_idx, (geo_qtype, col, perf_key, title, perf_filter) in enumerate(panels):
         ax = axes[col_idx]
 
-        sub = sorted(
-            [r for r in _filter(rows_hop, "Qtype", qtype) if r["n_solved"] > 0],
-            key=lambda r: r["n"],
-        )
-        if sub:
-            d = _to_arrays(sub, ["n", "AvgPivot", "MaxPivot"])
-            ax.plot(d["n"], d["AvgPivot"], "o-", color=col,
-                    linewidth=1.6, label="GeoQP (avg)", zorder=3)
-            ax.fill_between(d["n"], d["AvgPivot"], d["MaxPivot"],
-                            alpha=0.15, color=col, label="GeoQP (max)")
+        # GeoQP pivots: normally from hops_vs_n matched by Qtype (geo_qtype).
+        # For the affine-diag panel the hops_vs_n table contains only box QP
+        # entries; use the AvgPivot reported in the PERFORMANCE affine block
+        # instead so panel (b) actually plots the affine-diag case.
+        if perf_key == "perf_affine" and perf_filter is not None:
+            geo_rows = sorted([r for r in data.get(perf_key, []) if perf_filter(r) and r.get("AvgPivot") is not None], key=lambda r: r["n"]) 
+            if geo_rows:
+                dg = _to_arrays(geo_rows, ["n", "AvgPivot"])
+                ax.plot(dg["n"], dg["AvgPivot"], "o-", color=C_GEO,
+                    linewidth=1.6, label="GeoQP", zorder=3)
+        else:
+            sub = sorted(
+                [r for r in _filter(rows_hop, "Qtype", geo_qtype) if r.get("n_solved", 0) > 0],
+                key=lambda r: r["n"],
+            )
+            if sub:
+                d = _to_arrays(sub, ["n", "AvgPivot", "MaxPivot"])
+                ax.plot(d["n"], d["AvgPivot"], "o-", color=C_GEO,
+                    linewidth=1.6, label="GeoQP", zorder=3)
 
+        # qpOASES iterations: for perf_affine we may need to filter to affine-diag rows
         perf_rows = sorted(
-            [r for r in data.get(perf_key, []) if r.get("qpO_iter") is not None],
+            [r for r in data.get(perf_key, []) if (r.get("qpO_iter") is not None and (perf_filter(r) if perf_filter else True))],
             key=lambda r: r["n"],
         )
         if perf_rows:
@@ -286,14 +393,11 @@ def fig02_iterations(data, outdir):
         if col_idx == 0:
             ax.set_ylabel("Iterations")
 
-        # # Annotate the hop bound as a text note instead of a second panel
-        # ax.annotate(r"$\leq\!2$ hops (Cor. 2) $\Rightarrow$ const. GeoQP pivots",
-        #             xy=(0.97, 0.06), xycoords="axes fraction",
-        #             fontsize=6.5, color=C_BOUND, ha="right", va="bottom",
-        #             bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="0.75", alpha=0.85))
-
     fig.tight_layout()
     _save(fig, outdir, "fig02_iterations")
+
+
+# Fig.3 removed by request: affine-only iterations handled in fig02_iterations
 
 
 # ===========================================================================
@@ -321,6 +425,7 @@ def main():
     print("\nGenerating figures...")
     fig01_performance(data, outdir)
     fig02_iterations(data, outdir)
+    # fig03 removed — affine iteration comparisons included in fig02
 
     print(f"\nDone. 2 figures (PDF + PNG) saved to: {outdir}")
 
