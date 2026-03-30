@@ -277,15 +277,6 @@ def fig02_iterations(data, outdir):
             ax.plot(dp["n"], dp["qpO_iter"], "s--", color=C_QPO,
                     linewidth=1.4, label="qpOASES (avg)", zorder=2)
 
-        osqp_iter_rows = sorted(
-            [r for r in data.get(perf_key, []) if r.get("OSQP_iter") is not None],
-            key=lambda r: r["n"],
-        )
-        if osqp_iter_rows:
-            do = _to_arrays(osqp_iter_rows, ["n", "OSQP_iter"])
-            ax.plot(do["n"], do["OSQP_iter"], "^:", color=C_OSQP,
-                    linewidth=1.4, label="OSQP (avg)", zorder=2)
-
         ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_ylim(bottom=0.9)
@@ -295,11 +286,11 @@ def fig02_iterations(data, outdir):
         if col_idx == 0:
             ax.set_ylabel("Iterations")
 
-        # Annotate the hop bound as a text note instead of a second panel
-        ax.annotate(r"$\leq\!2$ hops (Cor. 2) $\Rightarrow$ const. GeoQP pivots",
-                    xy=(0.97, 0.06), xycoords="axes fraction",
-                    fontsize=6.5, color=C_BOUND, ha="right", va="bottom",
-                    bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="0.75", alpha=0.85))
+        # # Annotate the hop bound as a text note instead of a second panel
+        # ax.annotate(r"$\leq\!2$ hops (Cor. 2) $\Rightarrow$ const. GeoQP pivots",
+        #             xy=(0.97, 0.06), xycoords="axes fraction",
+        #             fontsize=6.5, color=C_BOUND, ha="right", va="bottom",
+        #             bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="0.75", alpha=0.85))
 
     fig.tight_layout()
     _save(fig, outdir, "fig02_iterations")

@@ -520,6 +520,15 @@ For box constraints $\mathcal{P}=T(\mathcal{B})+c$ with $n$ variables and $m=2n$
 \end{itemize}
 For general polytopes, Phase~1 costs $O(n^3\log m)$ (vertex enumeration heuristic) and Phase~2 costs $O(mn)$.
 
+\begin{remark}[Constant pivot count for diagonal $Q$]\label{rem:diag_pivots}
+When $Q=\operatorname{diag}(q_1,\dots,q_n)$ the problem separates coordinate-wise:
+$x_i^\star=\operatorname{clip}(-g_i/q_i,\,\ell_i,\,u_i)$.
+Phase~1 selects $\hat{y}_i$ to match the direction of each $d_i$, so Phase~2's ray already lands on the correct exit face.
+Because $Q$ is diagonal, the Schur solve on the initial active set $\mathcal{A}_0=\{i_0\}$ yields the unconstrained optimum $x_j=-g_j/q_j$ for all free $j$.
+The violated set $V=\{j:\lvert g_j/q_j\rvert>\text{bound}_j\}$ is then added in a single batch, and one further solve verifies dual feasibility, giving \emph{exactly two active-set pivots} regardless of how many coordinates are clamped.
+This contrasts with a dense $Q$, where off-diagonal coupling keeps the optimal active set small (typically $O(1)$ constraints) but requires several pivots to resolve; the iteration counts for warmstarted general-purpose solvers such as qpOASES therefore grow as $O(n)$ for diagonal $Q$ (one iteration per active constraint) while staying nearly constant for dense $Q$.
+\end{remark}
+
 \subsubsection{Benchmarks}\label{sec:benchmarks}
 
 We validate Theorem~\ref{thm:two_hops} on a box-constrained linear MPC problem arising from walking robot locomotion.
