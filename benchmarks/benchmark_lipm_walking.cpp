@@ -96,13 +96,15 @@ static std::vector<double> mm(const std::vector<double> &A, int ra, int ca,
 DenseQP buildQP(const Parameters &p,
                 const std::vector<double> &x0,
                 const std::vector<std::pair<double, double>> &zmp_bounds,
-                const std::vector<double> &x_ref)
+                const std::vector<double> &x_ref,
+                bool enforce_jerk = true)
 {
+    // Rebuild condensed QP using Sx/Su construction (as in examples/mpc_example.cpp)
     const int nx = 3;
     const int N = p.N;
     const double T = p.dt;
 
-    // x_{k+1} = Ad * x_k + Bd * u_k
+    // Continuous discrete dynamics as in previous implementation
     std::vector<double> Ad = {
         1.0, T, 0.5 * T * T,
         0.0, 1.0, T,
@@ -113,100 +115,118 @@ DenseQP buildQP(const Parameters &p,
     double w2 = p.omega() * p.omega();
     std::vector<double> Cz = {1.0, 0.0, -1.0 / w2};
 
-    // Precompute Powers of Ad: Ap[k] = Ad^k
-    std::vector<std::vector<double>> Ap(N + 1, std::vector<double>(nx * nx, 0.0));
-    for (int i = 0; i < nx; ++i)
-        Ap[0][i * nx + i] = 1.0;
-    for (int k = 1; k <= N; ++k)
-        Ap[k] = mm(Ad, nx, nx, Ap[k - 1], nx);
+    // Build Sx (NX*N x NX) and Su (NX*N x N) where control is scalar per step
+    std::vector<double> Sx(nx * N * nx, 0.0);
+    std::vector<double> Su(nx * N * N, 0.0);
 
-    // Phi block (row k, col j) = Ad^(k-j) * Bd  for j <= k
-    std::vector<double> Phi(N * nx * N, 0.0);
+    // Precompute powers of Ad: Apowers[k] = Ad^k
+    std::vector<std::vector<double>> Apowers(N + 1, std::vector<double>(nx * nx, 0.0));
+    for (int i = 0; i < nx; ++i) Apowers[0][i * nx + i] = 1.0;
+    for (int k = 1; k <= N; ++k) Apowers[k] = mm(Apowers[k - 1], nx, nx, Ad, nx);
+
+    // Fill Sx and Su analogous to mpc_example.cpp
     for (int k = 0; k < N; ++k)
     {
+        // Sx block = Ad^{k+1}
+        for (int i = 0; i < nx; ++i)
+            for (int j = 0; j < nx; ++j)
+                Sx[(k * nx + i) * nx + j] = Apowers[k + 1][i * nx + j];
+
+        // Su block: columns j<=k contain A^{k-j} * Bd
         for (int j = 0; j <= k; ++j)
         {
-            auto col = mv(Ap[k - j], nx, nx, Bd);
+            auto AkjBd = mv(Apowers[k - j], nx, nx, Bd);
             for (int i = 0; i < nx; ++i)
-                Phi[(k * nx + i) * N + j] = col[i];
+                Su[(k * nx + i) * N + j] = AkjBd[i];
         }
     }
 
-    // Free Response (N*nx)
-    std::vector<double> fr(N * nx, 0.0);
+    // Free response and e = Sx * x0 - x_ref
+    std::vector<double> fr(nx * N, 0.0);
     for (int k = 0; k < N; ++k)
-    {
-        auto blk = mv(Ap[k + 1], nx, nx, x0);
         for (int i = 0; i < nx; ++i)
-            fr[k * nx + i] = blk[i];
+            fr[k * nx + i] = 0.0;
+    // compute fr = Sx * x0
+    for (int row = 0; row < nx * N; ++row)
+    {
+        double sum = 0.0;
+        for (int j = 0; j < nx; ++j)
+            sum += Sx[row * nx + j] * x0[j];
+        fr[row] = sum;
     }
 
-    // Tracking Error at u=0
-    std::vector<double> e(N * nx);
-    for (int i = 0; i < N * nx; ++i)
-        e[i] = fr[i] - x_ref[i];
+    std::vector<double> e(nx * N, 0.0);
+    for (int i = 0; i < nx * N; ++i) e[i] = fr[i] - x_ref[i];
 
-    // Cost Weights
-    const double q_pos = 1.0;
-    const double q_vel = 0.1;
-    const double q_acc = 0.0;
-    std::vector<double> Qd = {q_pos, q_vel, q_acc};
+    // Cost weights (keep previous choices)
+    std::vector<double> Qd = {1.0, 0.1, 0.0};
     const double R = 1e-2;
 
-    // Helper: Qbar * Phi
-    std::vector<double> QbarPhi(N * nx * N, 0.0);
+    // Compute Qbar * Su by scaling rows
+    std::vector<double> QSu(nx * N * N, 0.0);
     for (int r = 0; r < N * nx; ++r)
+    {
+        double q = Qd[r % nx];
         for (int j = 0; j < N; ++j)
-            QbarPhi[r * N + j] = Qd[r % nx] * Phi[r * N + j];
+            QSu[r * N + j] = q * Su[r * N + j];
+    }
 
     DenseQP qp;
     qp.n = N;
 
-    // Hessian H = Phi' * Qbar * Phi + R * I
+    // H = Su^T * Qbar * Su + R * I
     qp.H.assign(N * N, 0.0);
     for (int i = 0; i < N; ++i)
-    {
         for (int j = 0; j < N; ++j)
         {
-            double val = 0.0;
+            double s = 0.0;
             for (int r = 0; r < N * nx; ++r)
-            {
-                val += Phi[r * N + i] * QbarPhi[r * N + j];
-            }
-            qp.H[i * N + j] = val;
+                s += Su[r * N + i] * QSu[r * N + j];
+            qp.H[i * N + j] = s;
         }
-    }
     for (int i = 0; i < N; ++i)
     {
         qp.H[i * N + i] += R;
-        qp.H[i * N + i] += 1e-8;
+        qp.H[i * N + i] += 1e-6;
     }
+    // symmetrize
     for (int i = 0; i < N; ++i)
-    {
         for (int j = i + 1; j < N; ++j)
         {
             double s = 0.5 * (qp.H[i * N + j] + qp.H[j * N + i]);
             qp.H[i * N + j] = qp.H[j * N + i] = s;
         }
+
+    // g = Su^T * Qbar * e
+    qp.g.assign(N, 0.0);
+    // compute Qbar*e
+    std::vector<double> Qe(N * nx, 0.0);
+    for (int r = 0; r < N * nx; ++r) Qe[r] = Qd[r % nx] * e[r];
+    for (int i = 0; i < N; ++i)
+    {
+        double sum = 0.0;
+        for (int r = 0; r < N * nx; ++r)
+            sum += Su[r * N + i] * Qe[r];
+        qp.g[i] = sum;
     }
 
-    // Gradient g = Phi' * Qbar * e
-    qp.g.assign(N, 0.0);
-    for (int j = 0; j < N; ++j)
-        for (int r = 0; r < N * nx; ++r)
-            qp.g[j] += Phi[r * N + j] * Qd[r % nx] * e[r];
-
+    // constant term
     for (int r = 0; r < N * nx; ++r)
         qp.const_term += 0.5 * Qd[r % nx] * e[r] * e[r];
 
     // Box Constraints (Input Jerk)
-    const double u_max = 50.0; // m/s^3
-    qp.lb.assign(N, -u_max);
-    qp.ub.assign(N, u_max);
+    if (enforce_jerk)
+    {
+        const double u_max = 50.0; // m/s^3
+        qp.lb.assign(N, -u_max);
+        qp.ub.assign(N, u_max);
+    }
+    else
+    {
+        qp.lb.clear(); qp.ub.clear();
+    }
 
-    // ZMP_{k+1} = Cz * (fr_k + Phi_k * U)
-    // lb <= Cz*fr + Cz*Phi*U <= ub
-    // lb - Cz*fr <= Cz*Phi*U <= ub - Cz*fr
+    // ZMP constraints: C_k = Cz * Su_block_k  -> qp.C is m x n where m=N, n=N
     qp.m = N;
     qp.C.assign(N * N, 0.0);
     qp.lbA.resize(N);
@@ -214,11 +234,12 @@ DenseQP buildQP(const Parameters &p,
 
     for (int k = 0; k < N; ++k)
     {
+        // row k of C: Cz * Su rows (k*nx .. k*nx+nx-1)
         for (int j = 0; j < N; ++j)
         {
             double val = 0.0;
             for (int i = 0; i < nx; ++i)
-                val += Cz[i] * Phi[(k * nx + i) * N + j];
+                val += Cz[i] * Su[(k * nx + i) * N + j];
             qp.C[k * N + j] = val;
         }
 
@@ -228,6 +249,11 @@ DenseQP buildQP(const Parameters &p,
 
         qp.lbA[k] = zmp_bounds[k].first - z_fr;
         qp.ubA[k] = zmp_bounds[k].second - z_fr;
+        if (qp.lbA[k] > qp.ubA[k])
+        {
+            std::cerr << "[WARN] buildQP: lbA[" << k << "] > ubA[" << k << "] (" << qp.lbA[k] << " > " << qp.ubA[k] << "). Swapping.\n";
+            std::swap(qp.lbA[k], qp.ubA[k]);
+        }
     }
 
     return qp;
@@ -324,6 +350,7 @@ struct Result
     double time_ms = 0.0;
     double objective = 0.0;
     int iterations = -1;
+    int facet_hops = -1;
     std::vector<double> solution;
 };
 
@@ -336,8 +363,13 @@ static Result runGeoQP(const DenseQP &qp, geoqp::FaceHoppingStrategy strat, cons
     prob.g = qp.g;
     prob.A = qp.C;
 
-    prob.lb = qp.lb;
-    prob.ub = qp.ub;
+    // Only assign variable bounds if provided (avoid huge artificial bounds)
+    if (!qp.lb.empty() && !qp.ub.empty()) {
+        prob.lb = qp.lb;
+        prob.ub = qp.ub;
+    } else {
+        prob.lb.clear(); prob.ub.clear();
+    }
 
     // C x <= ubA
     // -C x <= -lbA
@@ -366,6 +398,14 @@ static Result runGeoQP(const DenseQP &qp, geoqp::FaceHoppingStrategy strat, cons
     cfg.use_caching = (env && std::string(env) == "1");
     cfg.warm_start = false;
     cfg.tolerance = 1e-7;
+    cfg.constraint_tolerance = 1e-6; // relax constraint feasibility tolerance for robustness
+
+    // Validate problem before solving to catch malformed inputs
+    if (!geoqp::validate_problem(prob))
+    {
+        std::cerr << "[ERROR] runGeoQP: invalid problem for solver (n=" << prob.n << " m=" << prob.m << ")\n";
+        Result fail; fail.name = name; fail.success = false; return fail;
+    }
 
     geoqp::Solver solver(cfg);
     Result res;
@@ -377,7 +417,9 @@ static Result runGeoQP(const DenseQP &qp, geoqp::FaceHoppingStrategy strat, cons
 
     res.success = (sol.status == geoqp::Status::SUCCESS);
     res.objective = sol.objective_value + qp.const_term;
-    res.iterations = sol.phase2_iterations;
+    // record total iterations (phase1+phase2) rather than only phase2
+    res.iterations = sol.iterations;
+    res.facet_hops = sol.phase2_facet_hops;
     res.solution = sol.x;
     return res;
 }
@@ -388,7 +430,6 @@ static Result runOSQP(const DenseQP &qp)
     res.name = "OSQP";
     int n = qp.n;
     int m = qp.m; // General constraints rows
-
     // Copy to Eigen
     Eigen::MatrixXd H_e(n, n);
     Eigen::VectorXd g_e(n);
@@ -399,27 +440,34 @@ static Result runOSQP(const DenseQP &qp)
             H_e(i, j) = qp.H[i * n + j];
     }
 
-    // OSQP Form: lb <= [I; C] * x <= ub
-    int m_total = n + m;
+    // Determine whether box (identity) constraints are present
+    bool has_box = (int)qp.lb.size() == n && (int)qp.ub.size() == n;
+
+    // OSQP Form: lb <= [I; C] * x <= ub  (if box present)
+    int m_total = (has_box ? n + m : m);
     Eigen::VectorXd lb_all(m_total);
     Eigen::VectorXd ub_all(m_total);
     Eigen::MatrixXd A_all(m_total, n);
 
-    // Box Constraints (Identity)
-    A_all.topRows(n).setIdentity();
-    for (int i = 0; i < n; ++i)
+    // Box Constraints (Identity) if present
+    if (has_box)
     {
-        lb_all(i) = qp.lb[i];
-        ub_all(i) = qp.ub[i];
+        A_all.topRows(n).setIdentity();
+        for (int i = 0; i < n; ++i)
+        {
+            lb_all(i) = qp.lb[i];
+            ub_all(i) = qp.ub[i];
+        }
     }
 
     // General Constraints (C)
     for (int i = 0; i < m; ++i)
     {
-        lb_all(n + i) = qp.lbA[i];
-        ub_all(n + i) = qp.ubA[i];
+        int row = (has_box ? n + i : i);
+        lb_all(row) = qp.lbA[i];
+        ub_all(row) = qp.ubA[i];
         for (int j = 0; j < n; ++j)
-            A_all(n + i, j) = qp.C[i * n + j];
+            A_all(row, j) = qp.C[i * n + j];
     }
 
     // Extract triangular view to dense first, then convert to sparse.
@@ -452,6 +500,8 @@ static Result runOSQP(const DenseQP &qp)
         }
     }
     res.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+    // QpSolversEigen/OSQP wrapper does not expose phase2-like hops; leave as -1
+    res.facet_hops = -1;
     return res;
 }
 
@@ -465,8 +515,18 @@ static Result runQpOASES(const DenseQP &qp)
     std::vector<qpOASES::real_t> g_d(qp.g.begin(), qp.g.end());
     std::vector<qpOASES::real_t> C_d(qp.C.begin(), qp.C.end());
 
-    std::vector<qpOASES::real_t> lb_d(qp.lb.begin(), qp.lb.end());
-    std::vector<qpOASES::real_t> ub_d(qp.ub.begin(), qp.ub.end());
+    std::vector<qpOASES::real_t> lb_d;
+    std::vector<qpOASES::real_t> ub_d;
+    if ((int)qp.lb.size() == n && (int)qp.ub.size() == n) {
+        lb_d.assign(qp.lb.begin(), qp.lb.end());
+        ub_d.assign(qp.ub.begin(), qp.ub.end());
+    } else {
+        // No box bounds provided (unbounded variables). Provide large finite bounds
+        // qpOASES expects arrays of length n; choose large but finite limits.
+        const qpOASES::real_t BIG = static_cast<qpOASES::real_t>(1e20);
+        lb_d.assign(n, -BIG);
+        ub_d.assign(n, BIG);
+    }
 
     std::vector<qpOASES::real_t> lbA_d(qp.lbA.begin(), qp.lbA.end());
     std::vector<qpOASES::real_t> ubA_d(qp.ubA.begin(), qp.ubA.end());
@@ -489,6 +549,7 @@ static Result runQpOASES(const DenseQP &qp)
 
     res.success = (ret == qpOASES::SUCCESSFUL_RETURN);
     res.iterations = nWSR;
+    res.facet_hops = 0;
 
     if (res.success)
     {
@@ -521,11 +582,17 @@ int main()
     double sup_x = p.init_x;
     Phase phase(p);
 
-    const int num_steps = 10;
+    // We will run 10 test cases varying the MPC horizon from 2..20 (inclusive).
+    const int num_cases = 10;
+    const char *disable_jerk_env = std::getenv("GEOQP_DISABLE_JERK_BOUNDS");
+    bool enforce_jerk = !(disable_jerk_env && std::string(disable_jerk_env) == "1");
+
     std::cout << "Parameters:\n"
-              << "  Horizon N       : " << p.N << "\n"
-              << "  Sampling        : " << p.dt << " s\n"
-              << "  Constraints     : " << p.N << " (2-sided ZMP) + " << p.N << " (Box Jerk)\n\n";
+              << "  Base Sampling   : " << p.dt << " s\n";
+    if (enforce_jerk)
+        std::cout << "  Jerk bounds     : ENABLED\n\n";
+    else
+        std::cout << "  Jerk bounds     : DISABLED (only ZMP constraints active)\n\n";
 
     // Echo debug env var for Phase II diagnostics
     const char *dbg_phase2_env = std::getenv("GEOQP_DBG_PHASE2");
@@ -541,7 +608,7 @@ int main()
         std::vector<std::pair<double, double>> zmp_bounds;
         std::vector<double> x_ref;
         phase.fill(sup_x, zmp_bounds, x_ref);
-        DenseQP qp = buildQP(p, state, zmp_bounds, x_ref);
+        DenseQP qp = buildQP(p, state, zmp_bounds, x_ref, enforce_jerk);
 
         // Expand A and b as in runGeoQP
         int m_expanded = 2 * qp.m;
@@ -585,248 +652,89 @@ int main()
         return 0;
     }
 
-    std::vector<std::pair<geoqp::FaceHoppingStrategy, std::string>> geoqp_strats = {
-        {geoqp::FaceHoppingStrategy::STANDARD, "GeoQP-Standard"},
-        {geoqp::FaceHoppingStrategy::BATCH, "GeoQP-Batch"},
-        {geoqp::FaceHoppingStrategy::SENSITIVITY, "GeoQP-Sensitivity"},
-        {geoqp::FaceHoppingStrategy::NEIGHBORS, "GeoQP-Neighbors"}};
+    // We'll test horizons h = 2,4,...,20 (10 cases)
+    std::vector<int> horizons;
+    for (int i = 0; i < num_cases; ++i)
+        horizons.push_back(2 + i * 2);
 
-    int n_geo = (int)geoqp_strats.size();
-    int idx_osqp = n_geo;
-    int idx_qpoases = n_geo + 1;
-    int total_solvers = n_geo + 2;
-
-    auto run_pass = [&](bool use_caching, std::vector<std::vector<Result>> &all_results) {
-    if (use_caching) setenv("GEOQP_USE_CACHING", "1", 1);
-    else unsetenv("GEOQP_USE_CACHING");
-
-    // reset Schur instrumentation counters
+    // reset Schur instrumentation counters once
     geoqp::internal::schur_stats_reset();
-        // Use local copies so we don't mutate the outer simulation state
-        auto state_local = state;
-        auto phase_local = phase;
-        double sup_x_local = sup_x;
 
-        all_results.assign(num_steps, std::vector<Result>());
+    // Print a compact header for CASE-style parsing by the plotting script
+    std::cout << "\nResults (horizons)\n";
+    std::cout << "CASE format: n=<horizon> QP_n=<n> QP_m=<m> Geo_us=<ms> qpO_us=<ms> OSQP_us=<ms> Geo_it=<it> qpO_it=<it> OSQP_it=<it> Geo_hops=<hops> AvgObjGeo=<obj> Diff_vs_qpO=<diff> OK_geo=<ok> OK_qpO=<ok> OK_osqp=<ok>\n";
 
-        // Build a template Q/A_exp using the initial state so we can setup solvers once
-        std::vector<std::pair<double, double>> zmp_bounds0;
-        std::vector<double> x_ref0;
-        phase_local.fill(sup_x_local, zmp_bounds0, x_ref0);
-        DenseQP qp0 = buildQP(p, state_local, zmp_bounds0, x_ref0);
-
-        int m_expanded = 2 * qp0.m;
-        std::vector<double> A_exp_template(m_expanded * qp0.n);
-        for (int i = 0; i < qp0.m; ++i)
-        {
-            for (int j = 0; j < qp0.n; ++j)
-            {
-                A_exp_template[(2 * i) * qp0.n + j] = qp0.C[i * qp0.n + j];
-                A_exp_template[(2 * i + 1) * qp0.n + j] = -qp0.C[i * qp0.n + j];
-            }
-        }
-
-        // Construct one Solver per GeoQP strategy, setup once with Q and A_exp_template, and reuse across steps
-        std::vector<std::unique_ptr<geoqp::Solver>> geoqp_solvers;
-        geoqp_solvers.reserve(geoqp_strats.size());
-        for (auto &pstr : geoqp_strats) {
-            geoqp::Config cfg;
-            cfg.face_hopping_strategy = pstr.first;
-            cfg.use_caching = use_caching;
-            // Enable warm starting across steps so the initializer is not run every time
-            cfg.warm_start = false;
-            cfg.tolerance = 1e-7;
-            auto solver = std::make_unique<geoqp::Solver>(cfg);
-            // setup with template Q and expanded A (A_exp_template)
-            solver->setup(qp0.n, m_expanded, qp0.H.data(), A_exp_template.data());
-            geoqp_solvers.emplace_back(std::move(solver));
-        }
-
-        // Read verbose-step index from env (optional)
-        int verbose_step_idx = -1;
-        const char *vstep_env = std::getenv("GEOQP_VERBOSE_STEP");
-        if (vstep_env && std::string(vstep_env) == "1") {
-            const char *vidx = std::getenv("GEOQP_VERBOSE_STEP_IDX");
-            if (vidx) verbose_step_idx = std::atoi(vidx);
-            else verbose_step_idx = 4; // default
-            std::cout << "[INFO] Verbose step tracing enabled for step=" << verbose_step_idx << "\n";
-        }
-
-        for (int step = 0; step < num_steps; ++step)
-        {
-            std::vector<std::pair<double, double>> zmp_bounds;
-            std::vector<double> x_ref;
-            phase_local.fill(sup_x_local, zmp_bounds, x_ref);
-
-            DenseQP qp = buildQP(p, state_local, zmp_bounds, x_ref);
-
-            auto &step_res = all_results[step];
-
-            // Run GeoQP solvers using the pre-constructed solver instances and hotstart API
-            for (size_t si = 0; si < geoqp_strats.size(); ++si)
-            {
-                const auto &name = geoqp_strats[si].second;
-                auto &solver = *geoqp_solvers[si];
-
-                // build expanded b for this step
-                std::vector<double> b_exp(m_expanded);
-                for (int i = 0; i < qp.m; ++i)
-                {
-                    b_exp[2 * i] = qp.ubA[i];
-                    b_exp[2 * i + 1] = -qp.lbA[i];
-                }
-
-                // If this is the requested verbose step, temporarily raise solver verbosity
-                geoqp::Config orig_cfg = solver.config();
-                bool raised = false;
-                if (step == verbose_step_idx) {
-                    geoqp::Config tmp = orig_cfg;
-                    tmp.verbosity = 3;
-                    tmp.timing_verbosity = 1;
-                    solver.set_config(tmp);
-                    raised = true;
-                }
-
-                auto t0 = Clock::now();
-                auto sol = solver.solve_hotstart(qp.g.data(), b_exp.data());
-
-                // Restore original config if we changed it
-                if (raised) solver.set_config(orig_cfg);
-                Result r;
-                r.name = name;
-                r.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
-                r.success = (sol.status == geoqp::Status::SUCCESS);
-                r.objective = sol.objective_value + qp.const_term;
-                r.iterations = sol.phase2_iterations;
-                r.solution = sol.x;
-                // Extra per-solve diagnostics when requested via env var
-                const char *dbg_phase2_env2 = std::getenv("GEOQP_DBG_PHASE2");
-                if (dbg_phase2_env2 && std::string(dbg_phase2_env2) == "1") {
-                    std::cout << "[DBG] step=" << step << " solver=" << name
-                              << " phase2_iterations=" << sol.phase2_iterations
-                              << " active_set_size=" << sol.active_set.size() << " ";
-                    std::cout << "active_set:";
-                    for (int c : sol.active_set) std::cout << " " << c;
-                    std::cout << "\n";
-                }
-                step_res.push_back(r);
-            }
-
-            step_res.push_back(runOSQP(qp));
-
-            step_res.push_back(runQpOASES(qp));
-
-            double jerk = 0.0;
-            if (step_res[idx_qpoases].success && !step_res[idx_qpoases].solution.empty())
-            {
-                jerk = step_res[idx_qpoases].solution[0];
-            }
-            else
-            {
-                std::cerr << "Warning: Step " << step << " failed to find solution.\n";
-            }
-
-            state_local = integrate(state_local, jerk, p.dt);
-            phase_local.advance();
-            if (phase_local.idx == 0)
-            {
-                sup_x_local = phase_local.next_foot(sup_x_local);
-                phase_local.advance_stride();
-            }
-        }
-    };
-
-
-    std::cout << "\n"
-              << std::string(120, '=') << "\n";
-    std::cout << std::left << std::setw(20) << "Solver"
-              << std::right << std::setw(12) << "Avg(ms)"
-              << std::setw(10) << "Std"
-              << std::setw(10) << "Min"
-              << std::setw(10) << "Max"
-              << std::setw(10) << "Iters"
-              << std::setw(10) << "OK"
-              << std::setw(14) << "AvgObj"
-              << std::setw(16) << "Diff(vs qpOA)"
-              << "\n"
-              << std::string(120, '-') << "\n";
-
-    // Run two passes: caching disabled then enabled
-
-    // Run two passes: caching disabled then enabled
-    std::vector<std::vector<Result>> all_results_no_cache, all_results_cache;
-    run_pass(false, all_results_no_cache);
-    run_pass(true, all_results_cache);
-
-    auto print_table = [&](const std::vector<std::vector<Result>> &all_results, const std::string &title) {
-        std::cout << "\n" << title << "\n";
-        std::vector<double> ref_obj(num_steps, 0.0);
-        int idx_qpoases_local = idx_qpoases;
-        for (int i = 0; i < num_steps; ++i)
-            if (all_results[i][idx_qpoases_local].success)
-                ref_obj[i] = all_results[i][idx_qpoases_local].objective;
-
-    for (int s = 0; s < total_solvers; ++s)
+    for (int h : horizons)
     {
-    double sum_t = 0, sum_sq = 0, min_t = 1e9, max_t = 0;
-        double sum_obj = 0, sum_diff = 0;
-        int sum_it = 0, count_ok = 0;
+        // use local Parameters copy with updated horizon
+        Parameters pc = p;
+        pc.N = h;
 
-            for (int i = 0; i < num_steps; ++i)
-        {
-            const auto &r = all_results[i][s];
-            double t = r.time_ms;
-            sum_t += t;
-            sum_sq += t * t;
-            if (t < min_t)
-                min_t = t;
-            if (t > max_t)
-                max_t = t;
+        // create a Phase object bound to the local Parameters so zmp_bounds size matches pc.N
+        Phase phase_local(pc);
 
-            if (r.iterations >= 0)
-                sum_it += r.iterations;
+        // prepare initial state and zmp/xref for this horizon
+        std::vector<std::pair<double, double>> zmp_bounds;
+        std::vector<double> x_ref;
+        phase_local.fill(sup_x, zmp_bounds, x_ref);
 
-            if (r.success)
-            {
-                count_ok++;
-                sum_obj += r.objective;
-                sum_diff += std::abs(r.objective - ref_obj[i]);
-            }
+        DenseQP qp = buildQP(pc, state, zmp_bounds, x_ref, enforce_jerk);
+
+        // optional per-case debug via env var GEOQP_DEBUG_CASE=<h>
+        const char *dbg_case_env = std::getenv("GEOQP_DEBUG_CASE");
+        bool dbg_case = (dbg_case_env && std::atoi(dbg_case_env) == h);
+
+        // Solve once per solver for this case (caching always OFF)
+        // GeoQP: pick STANDARD strategy as representative
+        if (dbg_case) {
+            std::cerr << "[DEBUG] CASE h=" << h << " QP_n=" << qp.n << " QP_m=" << qp.m << "\n";
+            std::cerr << "[DEBUG] H diag (first 8): ";
+            for (int i = 0; i < std::min(8, qp.n); ++i) std::cerr << qp.H[i * qp.n + i] << " ";
+            std::cerr << "\n[DEBUG] lb (first 8): ";
+            for (int i = 0; i < std::min(8, (int)qp.lb.size()); ++i) std::cerr << qp.lb[i] << " ";
+            std::cerr << "\n[DEBUG] ub (first 8): ";
+            for (int i = 0; i < std::min(8, (int)qp.ub.size()); ++i) std::cerr << qp.ub[i] << " ";
+            std::cerr << "\n[DEBUG] lbA (first 8): ";
+            for (int i = 0; i < std::min(8, (int)qp.lbA.size()); ++i) std::cerr << qp.lbA[i] << " ";
+            std::cerr << "\n[DEBUG] ubA (first 8): ";
+            for (int i = 0; i < std::min(8, (int)qp.ubA.size()); ++i) std::cerr << qp.ubA[i] << " ";
+            std::cerr << "\n[DEBUG] C row0 (first 12): ";
+            for (int j = 0; j < std::min(12, qp.n); ++j) std::cerr << qp.C[0 * qp.n + j] << " ";
+            std::cerr << "\n";
         }
+        auto geo_res = runGeoQP(qp, geoqp::FaceHoppingStrategy::STANDARD, "GeoQP");
+        auto osqp_res = runOSQP(qp);
+        auto qpo_res = runQpOASES(qp);
 
-        double mean = sum_t / num_steps;
-        double std = std::sqrt(std::max(0.0, sum_sq / num_steps - mean * mean));
-        double avg_it = (sum_it > 0) ? (double)sum_it / num_steps : -1.0;
-        double avg_obj = (count_ok > 0) ? sum_obj / count_ok : 0.0;
-        double avg_diff = (count_ok > 0) ? sum_diff / count_ok : 0.0;
+        // compute diffs vs qpOASES objective when available
+        double diff_geo = 0.0;
+        if (qpo_res.success && geo_res.success)
+            diff_geo = std::abs(geo_res.objective - qpo_res.objective);
 
-        std::cout << std::left << std::setw(20) << all_results[0][s].name
-                  << std::right << std::fixed << std::setprecision(3)
-                  << std::setw(12) << mean
-                  << std::setw(10) << std
-                  << std::setw(10) << min_t
-                  << std::setw(10) << max_t;
+        int ok_geo = geo_res.success ? 1 : 0;
+        int ok_qpo = qpo_res.success ? 1 : 0;
+        int ok_osqp = osqp_res.success ? 1 : 0;
 
-        if (avg_it >= 0)
-            std::cout << std::setw(10) << (int)avg_it;
-        else
-            std::cout << std::setw(10) << "N/A";
-
-        std::cout << std::setw(7) << count_ok << "/" << num_steps
-                  << std::setw(14) << avg_obj
-                  << std::setw(16) << std::scientific << std::setprecision(2) << avg_diff
-                  << "\n";
+        // Print a single CASE line per horizon with key=value tokens for easy parsing
+        std::cout << "CASE "
+                  << "n=" << h << " "
+                  << "QP_n=" << qp.n << " "
+                  << "QP_m=" << qp.m << " "
+                  << "Geo_us=" << geo_res.time_ms << " "
+                  << "qpO_us=" << qpo_res.time_ms << " "
+                  << "OSQP_us=" << osqp_res.time_ms << " "
+                  << "Geo_it=" << geo_res.iterations << " "
+                  << "qpO_it=" << qpo_res.iterations << " "
+                  << "OSQP_it=" << -1 << " "
+                  << "Geo_hops=" << geo_res.facet_hops << " "
+                  << "AvgObjGeo=" << geo_res.objective << " "
+                  << "Diff_vs_qpO=" << diff_geo << " "
+                  << "OK_geo=" << ok_geo << " "
+                  << "OK_qpO=" << ok_qpo << " "
+                  << "OK_osqp=" << ok_osqp << "\n";
     }
-        std::cout << std::string(120, '=') << "\n";
-    };
 
-    print_table(all_results_no_cache, "Results (caching = OFF)");
-    // Schur stats printing removed to reduce console noise.
 
-    print_table(all_results_cache, "Results (caching = ON)");
-    // Schur stats printing removed to reduce console noise.
-
-    // Lightweight counters and detailed diagnostics suppressed by default.
-
+    std::cout << "\nFinished horizon cases.\n";
     return 0;
 }
