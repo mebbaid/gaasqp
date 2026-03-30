@@ -235,159 +235,188 @@ $
 $
 When the subscript is omitted, norms and inner products are understood to be with respect to the standard Euclidean metric.
 
-% \subsection{Farthest Good Vertex}
 
-\begin{proposition}\label{prop:halfbox_affine}
+\begin{theorem}\label{thm:halfbox_affine}
 Let $\mathcal P = T(\mathcal B)+c$, where $T\in\mathbb R^{n\times n}$ is
 nonsingular and $\mathcal B=\{x\in\mathbb R^n:\ell\le x\le u\}$.
 Let $\bar x\notin\mathcal P$ and let $x^\star$ denote the solution of
 \eqref{eq:qp} with unconstrained minimizer $\bar x=-Q^{-1}g$.
+Let $m=\frac{\ell+u}{2}$, $h_i=\frac{u_i-\ell_i}{2}$, $c_0=Tm+c$, and set
+\[
+\bar y := T^{-1}(\bar x - c), \quad
+s_i := \operatorname{sign}(\bar y_i - m_i),
+\]
+with the splitting normal $\eta\in\mathbb R^n$ defined componentwise by
+$\eta_i := s_i/h_i$.
 Define
 \[
-x_e := \arg\min_{x\in\mathcal P}\|x-\bar x\|_2,
+\mathcal P_+ := \bigl\{x\in\mathcal P : \eta^\top T^{-1}(x-c_0) \ge 0\bigr\},
 \qquad
-v := \bar x - x_e,
+\mathcal P_- := \bigl\{x\in\mathcal P : \eta^\top T^{-1}(x-c_0) < 0\bigr\}.
 \]
-and
-\[
-\mathcal P_+ := \{x\in\mathcal P : v^\top (x-c_0) \ge 0\},
-\qquad
-\mathcal P_- := \{x\in\mathcal P : v^\top (x-c_0) < 0\},
-\]
-where $c_0 = T\frac{\ell+u}{2}+c$.
 Then $x^\star \in \mathcal P_+$.
-\end{proposition}
-
+\end{theorem}
 \begin{proof}
-Let $m=(\ell+u)/2$ denote the center of the box $\mathcal B$ and note that
-$c_0 = Tm + c$ is the \enquote{center} of $\mathcal P$.
-Translate
-$
-z := x-c_0, \, \bar z := \bar x - c_0, 
-$
-write
-$
-\mathcal P = c_0 + T(\mathcal B-m),
-$
-and note that $\mathcal B-m$ is centrally symmetric about the origin. Since $\bar x=-Q^{-1}g$, the objective can be written as
-$
-f(x)=\tfrac12\|x-\bar x\|_Q^2+\text{const}.
-$
-Hence $x^\star$ minimizes $\|x-\bar x\|_Q^2$ over $\mathcal P$. Let
-\[
-z^\star := x^\star - c_0, \qquad
-z_e := x_e - c_0 .
-\]
-Then $z^\star$ minimizes $\|z-\bar z\|_Q^2$ over the translated polytope
-\[
-\tilde{\mathcal P} := \mathcal P - c_0 = T(\mathcal B-m).
-\]
-Because $x_e$ is the Euclidean projection of $\bar x$ onto $\mathcal P$,
-\begin{align*}
-    \langle v, x-x_e\rangle &\le 0 \qquad \forall x\in\mathcal P  \\
-    \implies \langle v, z-z_e\rangle &\le 0
-\qquad \forall z\in\tilde{\mathcal P}.
-\end{align*}
-Since $\tilde{\mathcal P}$ is centrally symmetric about the origin,
-$-z\in\tilde{\mathcal P}$ whenever $z\in\tilde{\mathcal P}$. Applying the
-above inequality to $-z$ gives
-\[
--\langle v,z_e\rangle \le \langle v,z\rangle \le \langle v,z_e\rangle
-\qquad \forall z\in\tilde{\mathcal P}.
-\]
-Taking $z=0$ yields $\langle v,z_e\rangle \ge 0$.
-Since $\bar z = z_e + v$, we obtain
-\[
-\langle v,\bar z\rangle
-=
-\langle v,z_e\rangle + \langle v,v\rangle
->
-0 .
-\]
-Now assume for contradiction that $\langle v,z^\star\rangle <0$.
-Consider the segment
-\[
-\gamma(s)=(1-s)z^\star+s\bar z,
-\qquad s\in[0,1].
-\]
-Then $\langle v,\gamma(s)\rangle$ is affine in $s$, negative at $s=0$
-and positive at $s=1$, so it vanishes at some $\bar s\in(0,1)$. Let
-\[
-s^\star := \sup\{s\in[0,1] : \gamma(s)\in\tilde{\mathcal P}\}.
-\]
-Since $\gamma(0)=z^\star\in\tilde{\mathcal P}$, the set is nonempty and
-$p:=\gamma(s^\star)\in\tilde{\mathcal P}$ by closedness.
-To see that $s^\star>0$, note that $\bar z-z^\star$ cannot be an outward
-normal of $\tilde{\mathcal P}$ at $z^\star$. Indeed,
-\[
-\bar z-z^\star = v + (z_e-z^\star),
-\]
-and testing against $z_e\in\tilde{\mathcal P}$ gives
-\[
-\langle \bar z-z^\star, z_e-z^\star\rangle
-=
-\langle v,z_e\rangle
--
-\langle v,z^\star\rangle
-+
-\|z_e-z^\star\|^2
->
-0,
-\]
-Hence
-$s^\star>0$. $s^\star < 1$ by virtue of $\bar z \not \in \tilde\Pset$.
-By strict convexity of $\|z-\bar z\|_Q^2$,
-\[
-\|\;p-\bar z\;\|_Q^2
-<
-\|\;z^\star-\bar z\;\|_Q^2,
-\]
-contradicting optimality of $z^\star$. Therefore
-$
-\langle v,z^\star\rangle \ge 0,
-$ equivalently 
-$
-\langle v,x^\star-c_0\rangle \ge 0,
-$
-and the result follows
-\end{proof}
-
-\begin{proposition}\label{prop:three_halfspaces}
-Let $\hat v$ be the farthest, in Euclidean sense, good vertex with respect to $\bar x$, i.e., $
-  \hat v \;:=\; \operatorname*{arg\,max}_{\substack{v\,\in\, V_\text{good}}}\;
-                \|v - \bar x\|_2. $
 Define
-\begin{align*}
-  H_1 &:= \bigl\{x\in\mathbb{R}^n : {-}\nabla f(\hat v)^\top(x-\hat v)\ge 0\bigr\},\\
-  H_2 &:= \bigl\{x\in\mathbb{R}^n : (\bar x - \hat v)^\top(x-\hat v)\ge 0\bigr\}.
-\end{align*}
-Then $x^\star \in \mathcal P_+\cap H_1\cap H_2$.
-\end{proposition}
+\[
+  \xi_i := \frac{s_i(y_i-m_i)}{h_i},\quad y=T^{-1}(x-c).
+\]
+This is an invertible affine map sending $\mathcal{B}$ to the hypercube
+$\Xi=[-1,1]^n$, under which the condition
+$\eta^\top T^{-1}(x-c_0)\ge 0$ becomes $\mathbf{1}^\top\xi\ge 0$.
+Write $\xi^\star$ and $\bar\xi$ for the images of $x^\star$ and
+$\bar x$.  Since $s_i=\operatorname{sign}(\bar y_i-m_i)$,
+\[
+  \bar\xi_i = \frac{|\bar y_i-m_i|}{h_i} \geq 0
+  \quad\forall i, \quad \bar \xi_j > 0 \ \text{form some $j$}
+  \qquad\implies \quad
+  \mathbf{1}^\top\bar\xi>0.                              
+\]
+Because $\bar x\notin\mathcal{P}$, we have $\bar\xi\notin\Xi$.
+Minimizing $f$ over $\mathcal{P}$ is equivalent to minimizing the
+strictly convex function
+$\tilde f(\xi)=\tfrac12\|\xi-\bar\xi\|_{\tilde Q}^2+\mathrm{const}$,
+$\tilde Q\succ 0$, over $\Xi$; so $\xi^\star$ is its unique minimizer.
+
+\smallskip\noindent
+Let $\xi_e:=\mathrm{proj}_\Xi(\bar\xi)$ be the Euclidean projection of
+$\bar\xi$ onto $\Xi$, with residual $w:=\bar\xi-\xi_e$.  From the above we have,
+$(\xi_e)_i=\min(\bar\xi_i,1)$ for all $i$, so
+\[
+  w\ne 0,\quad
+  \mathbf{1}^\top w>0.                                    
+\]
+The projection inequality gives $\langle w,\xi-\xi_e\rangle\le 0$ for all
+$\xi\in\Xi$, i.e.,
+\begin{equation*}
+  \langle w,\xi\rangle \le \langle w,\xi_e\rangle \qquad\forall\xi\in\Xi.
+\end{equation*}
+Since $\Xi$ is centrally symmetric,
+substituting $-\xi$ into the projection inequality:
+\begin{equation*}
+  \langle w,-\xi-\xi_e\rangle\le 0
+  \implies
+  \langle w,\xi\rangle \ge -\langle w,\xi_e\rangle \qquad\forall\xi\in\Xi.
+\end{equation*}
+Combining 
+\[
+  |\langle w,\xi\rangle|\le\langle w,\xi_e\rangle \qquad\forall\xi\in\Xi.
+\]
+Setting $\xi=0$ yields $\langle w,\xi_e\rangle\ge 0$, and since
+$\bar\xi=\xi_e+w$,
+\[
+  \langle w,\bar\xi\rangle
+  =\langle w,\xi_e\rangle+\|w\|^2>0.                     
+\]
+
+\smallskip\noindent
+Now assume for contradiction that $\mathbf{1}^\top\xi^\star<0$.
+Consider the segment $\gamma(s)=(1-s)\xi^\star+s\bar\xi$, $s\in[0,1]$,
+and define
+\[
+  s^\star:=\sup\{s\in[0,1]:\gamma(s)\in\Xi\},\quad
+  p:=\gamma(s^\star)\in\Xi
+\]
+
+\smallskip\noindent
+Decompose $\bar\xi-\xi^\star = w+(\xi_e-\xi^\star)$ and compute
+\[
+  \langle\bar\xi-\xi^\star,\,\xi_e-\xi^\star\rangle
+  = \langle w,\xi_e\rangle
+    -\langle w,\xi^\star\rangle
+    +\|\xi_e-\xi^\star\|^2.                                
+\]
+Now note from the above that $\langle w,\xi^\star\rangle\le\langle w,\xi_e\rangle$,
+so the right-hand side satisfies
+\[
+  \langle\bar\xi-\xi^\star,\,\xi_e-\xi^\star\rangle
+  \ge\|\xi_e-\xi^\star\|^2 > 0.
+\]
+Hence $\bar\xi-\xi^\star$ is not an outward normal of $\Xi$ at
+$\xi^\star$, so $\gamma(s)\in\operatorname{relint}(\Xi)$
+for all sufficiently small $s>0$, giving $s^\star>0$. Additionally, since $\bar\xi\notin\Xi$, we know $s^\star<1$.
+
+\smallskip\noindent
+Since $s^\star\in(0,1)$, the point $p=\gamma(s^\star)$ lies strictly
+between $\xi^\star$ and $\bar\xi$.  Since $\tilde f(\xi)=\tfrac{1}{2}\|\xi-\bar\xi\|_{\tilde Q}^2$,
+\[
+  \tilde f(\gamma(s)) = \tfrac{1}{2}(1-s)^2\|\xi^\star-\bar\xi\|_{\tilde Q}^2,
+\]
+which is strictly decreasing in $s$ on $[0,1)$. Hence
+\[
+  \tilde f(p) = \tilde f(\gamma(s^\star)) < \tilde f(\gamma(0)) = \tilde f(\xi^\star),
+\]
+contradicting optimality of $\xi^\star$ over $\Xi$.
+Therefore $\mathbf{1}^\top\xi^\star\ge 0$, i.e.\ $x^\star\in\mathcal{P}_+$.
+\end{proof}
+
+\begin{corollary}\label{cor:three_halfspaces}
+Let $\hat v$ be the farthest, in $Q$-norm sense, good vertex with respect to $\bar x$, i.e.,
+\[
+  \hat v \;:=\; \operatorname*{arg\,max}_{v\in V_\text{good}}\; f(v).
+\]
+Let
+\[
+  T_{\hat v} \;:=\; \ker\!\bigl(\nabla f(\hat v)^\top\bigr)
+  \;=\; \bigl\{d\in\mathbb{R}^n : \nabla f(\hat v)^\top d = 0\bigr\}
+\]
+be the tangent space to the level set $\{x:f(x)=f(\hat v)\}$ at $\hat v$.
+Define the \emph{gradient halfspace}
+\[
+  H_1 := \bigl\{x\in\mathbb{R}^n : {-}\nabla f(\hat v)^\top(x-\hat v)\ge 0\bigr\},
+\]
+whose inward normal $-\nabla f(\hat v)$ is the inward normal to the level set at $\hat v$.
+Let $t(\hat v)\in T_{\hat v}$ be any vector satisfying $t(\hat v)^\top(x^\star-\hat v)\ge 0$,
+and define the \emph{tangent halfspace}
+\[
+  H_2 := \bigl\{x\in\mathbb{R}^n : t(\hat v)^\top(x-\hat v)\ge 0\bigr\},
+\]
+whose inward normal $t(\hat v)$ lies in the tangent space $T_{\hat v}$
+and is therefore orthogonal to the inward normal $-\nabla f(\hat v)$ of $H_1$.
+For $n=2$, $T_{\hat v}$ is one-dimensional and $t(\hat v)$ is unique up to positive scaling.
+
+Then $x^\star \in \mathcal P_+\cap H_1\cap H_2$, and the cone $H_1\cap H_2$ is a right angle at $\hat v$.
+\end{corollary}
 
 \begin{proof}
-$x^\star\in\mathcal{P}_+$ by Proposition~\ref{prop:halfbox_affine}.
+$x^\star\in\mathcal{P}_+$ by Theorem~\ref{thm:halfbox_affine}.
+
+\smallskip\noindent\emph{$\nabla f(\hat v)\ne 0$ and existence of $t(\hat v)$.}\;
+Since $Q\succ 0$, we have $\nabla f(\hat v)=Q(\hat v-\bar x)=0$ only if $\hat v=\bar x$.
+But $\hat v\in\mathcal{P}$ and $\bar x\notin\mathcal{P}$, so $\hat v\ne\bar x$ and
+$\nabla f(\hat v)\ne 0$.
+Hence $T_{\hat v}=\ker(\nabla f(\hat v)^\top)$ has dimension $n-1\ge 1$,
+and for any nonzero $d_0\in T_{\hat v}$, at least one of $d_0$ or $-d_0$
+satisfies the sign condition $(\cdot)^\top(x^\star-\hat v)\ge 0$ (since a subspace
+contains both $d_0$ and $-d_0$).
+We fix $t(\hat v)$ to be whichever of the two has nonnegative inner product with $x^\star-\hat v$.
+
+\smallskip\noindent\emph{$x^\star\in H_1$.}\;
 Since $\hat v\in\mathcal{P}$ and $x^\star$ is optimal, $f(x^\star)\le f(\hat v)$.
-Convexity of $f$ then gives
-$\nabla f(\hat v)^\top(x^\star - \hat v)\le f(x^\star)-f(\hat v)\le 0$, thus $x^\star \in H_1$. To see that $x^\star\in H_2$; note $\hat v$ is farthest in $\mathcal{P}$ from $\bar x$ and $x^\star\in\mathcal{P}$,
-we have $\|\hat v-\bar x\|^2\ge\|x^\star-\bar x\|^2$.
-Writing $x^\star-\bar x=(x^\star-\hat v)+(\hat v-\bar x)$ and expanding
-yields
+Convexity of $f$ gives
 \[
-  (\bar x-\hat v)^\top(x^\star-\hat v)
-  \;\ge\;
-  \tfrac{1}{2}\|x^\star-\hat v\|^2
-  \;\ge\; 0.\qedhere
+  \nabla f(\hat v)^\top(x^\star - \hat v)\le f(x^\star)-f(\hat v)\le 0,
 \]
+hence $x^\star\in H_1$.
+
+\smallskip\noindent\emph{$x^\star\in H_2$.}\;
+By construction, $t(\hat v)^\top(x^\star-\hat v)\ge 0$, i.e.\ $x^\star\in H_2$.
+
+\smallskip\noindent\emph{Right-angle cone.}\;
+Since $t(\hat v)\in T_{\hat v}=\ker(\nabla f(\hat v)^\top)$, we have
+$\nabla f(\hat v)^\top t(\hat v)=0$, so the inward normals
+$-\nabla f(\hat v)$ of $H_1$ and $t(\hat v)$ of $H_2$ are orthogonal.
+The boundaries $\partial H_1=\{\nabla f(\hat v)^\top(x-\hat v)=0\}$ and
+$\partial H_2=\{t(\hat v)^\top(x-\hat v)=0\}$ are perpendicular hyperplanes through $\hat v$,
+and $H_1\cap H_2$ is therefore a right-angle cone at $\hat v$.\qed
 \end{proof}
+
 
 \begin{theorem}\label{thm:two_hops}
-Let $\mathcal{P}=T(\mathcal{B})+c$ and $\hat{v}$ be as in
-Proposition~\ref{prop:three_halfspaces}.
 Set $\hat{y}:=T^{-1}(\hat{v}-c)$, $\bar{y}:=T^{-1}(\bar{x}-c)$, and
 \[
   d := \bar{y}-\hat{y}, \qquad d_i \ne 0 \;\;\forall i,
 \]
-where $d_i\ne 0$ holds because $\hat{v}$ is a good vertex (Lemma).
 Define the \emph{exit facet}
 \[
   F_0 := \bigl\{x\in\mathcal{P} : (T^{-1}(x-c))_{i_0}=\hat{y}^{\mathrm{opp}}_{i_0}\bigr\},
@@ -405,10 +434,7 @@ Then, for any $Q\succ 0$:
 \end{theorem}
 
 \begin{proof}
-Work throughout in $y$-coordinates via $y=T^{-1}(x-c)$, noting that $\mathcal{P}$ corresponds to $\mathcal{B}$ and that the affine map preserves the adjacency structure of facets.
-
-\smallskip\noindent\textbf{(i).}
-The $i$-th coordinate of $r(t)$ in $y$-space is $\hat{y}_i+td_i$.
+For $(i)$, the $i$-th coordinate of $r(t)$ in $y$-space is $\hat{y}_i+td_i$.
 Since $\hat{v}$ is good, $\operatorname{sign}(d_i)=\operatorname{sign}(\hat{y}^{\mathrm{opp}}_i-\hat{y}_i)$ for every $i$
 (Definition~\ref{def:good_vertex}), so the ray moves strictly toward the far wall $\hat{y}^{\mathrm{opp}}_i$.
 The ray reaches wall $i$ at time
@@ -417,24 +443,33 @@ The ray reaches wall $i$ at time
 \]
 and the first exit is at $t_0=\min_i t_i$, occurring through the facet indexed by $i_0$.
 
-\smallskip\noindent\textbf{(ii).}
-Since $\hat{v}$ is good, the ray enters $\operatorname{relint}(\mathcal{B})$ immediately, so $r(t)\in\operatorname{relint}(\mathcal{P})$ for small $t>0$, hence $r(t_0)\in\overline{\mathcal{P}_+}$ and thus $F_0\subset\overline{\mathcal{P}_+}$.
+For $(ii)$, since $\hat{v}$ is good the ray enters $\operatorname{relint}(\mathcal{B})$ immediately,
+so $r(t)\in\operatorname{relint}(\mathcal{P})$ for small $t>0$.
+In the normalized coordinates of Theorem~\ref{thm:halfbox_affine}, the Lemma gives
+$\hat{y}_i = \ell_i$ when $\bar{y}_i > m_i$ and $\hat{y}_i = u_i$ when $\bar{y}_i < m_i$,
+so $\hat{\xi}_i = s_i(\hat{y}_i - m_i)/h_i = -1$ for every $i$, i.e.\ $\mathbf{1}^\top\hat{\xi} = -n$.
+Since $\mathbf{1}^\top\bar{\xi} > 0$, the functional $\mathbf{1}^\top\xi(t)$ along the ray increases
+monotonically from $-n$ toward $\mathbf{1}^\top\bar{\xi}$ as $t$ grows, so it is
+non-negative at $t = t_0$.  Hence $r(t_0) \in \overline{\mathcal{P}_+}$ and $F_0 \subset \overline{\mathcal{P}_+}$.
+
 The parallel opposite of $F_0$ is
 \[
   \bar{F}^{(i_0)} := \{x\in\mathcal{P} : (T^{-1}(x-c))_{i_0} = \hat{y}_{i_0}\}.
 \]
-Since $\mathcal{P}$ is centrally symmetric about $c_0$, the map $x\mapsto 2c_0-x$ sends $F_0$ to $\bar{F}^{(i_0)}$.
-For any $x\in F_0\subset\overline{\mathcal{P}_+}$ we have $v^\top(x-c_0)\ge 0$, so $v^\top((2c_0-x)-c_0)=-v^\top(x-c_0)\le 0$,
+Since $\mathcal{P}$ is centrally symmetric about $c_0$, the splitting functional $\eta^\top T^{-1}(x-c_0)$
+is odd under the reflection $x\mapsto 2c_0-x$.
+Hence for any $x\in F_0\subset\overline{\mathcal{P}_+}$,
+$\eta^\top T^{-1}(x-c_0)\ge 0$ implies $\eta^\top T^{-1}((2c_0-x)-c_0)=-\eta^\top T^{-1}(x-c_0)\le 0$,
 giving $\bar{F}^{(i_0)}\subset\mathcal{P}_-$.
 
 In $\mathcal{B}$, every facet is adjacent to all other facets except its parallel opposite.
 Hence $F_0$ is adjacent to every facet of $\mathcal{P}$ except $\bar{F}^{(i_0)}\subset\mathcal{P}_-$,
 and in particular to every facet intersecting $\overline{\mathcal{P}_+}$.
-By Proposition~\ref{prop:halfbox_affine} and $Q\succ0$, $x^\star\in\partial\mathcal{P}\cap\overline{\mathcal{P}_+}$,
+By Theorem~\ref{thm:halfbox_affine}, $x^\star\in\partial\mathcal{P}\cap\overline{\mathcal{P}_+}$,
 so $F^\star$ intersects $\overline{\mathcal{P}_+}$, and $F_0$ is adjacent to $F^\star$.
 \end{proof}
 
-%  placeholder to be adjusted
+
 \section{Algorithmic Implications}\label{sec3}
 
 Theorem~\ref{thm:two_hops} yields a two-phase initialisation, followed by a short active-set phase.
