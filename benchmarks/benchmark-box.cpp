@@ -33,6 +33,7 @@
 #include <geoqp/geoqp.hpp>
 
 #include <qpOASES.hpp>
+#include <QpSolversEigen/QpSolversEigen.hpp>
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 
@@ -426,6 +427,35 @@ static geoqp::Problem to_geoqp(const QPProblem &qp)
     return gp;
 }
 
+// Explicit A/b form (bounds expanded as rows, consistent constraint indexing)
+static geoqp::Problem to_geoqp_explicit(const QPProblem &qp)
+{
+    geoqp::Problem gp;
+    gp.n = qp.n;
+    int n_lb = 0, n_ub = 0;
+    for (int i = 0; i < qp.n; ++i)
+    {
+        if (qp.lbX(i) > -1e19) n_lb++;
+        if (qp.ubX(i) <  1e19) n_ub++;
+    }
+    int m_total = qp.m + n_lb + n_ub;
+    gp.m = m_total;
+    gp.Q = eigen_to_flat(qp.H);
+    gp.g = eigen_to_vec(qp.g);
+    Eigen::MatrixXd A_exp = Eigen::MatrixXd::Zero(m_total, qp.n);
+    Eigen::VectorXd b_exp(m_total);
+    int row = 0;
+    for (int i = 0; i < qp.m; ++i)
+    { A_exp.row(row) = qp.A.row(i); b_exp(row) = qp.b(i); row++; }
+    for (int i = 0; i < qp.n; ++i)
+        if (qp.ubX(i) < 1e19) { A_exp(row, i) = 1.0; b_exp(row) = qp.ubX(i); row++; }
+    for (int i = 0; i < qp.n; ++i)
+        if (qp.lbX(i) > -1e19) { A_exp(row, i) = -1.0; b_exp(row) = -qp.lbX(i); row++; }
+    gp.A = eigen_to_flat(A_exp);
+    gp.b = eigen_to_vec(b_exp);
+    return gp;
+}
+
 static geoqp::Config default_cfg()
 {
     geoqp::Config cfg;
@@ -527,52 +557,58 @@ static double solveQPOASES_time(const QPProblem &prob, bool &success, double &ob
 static double solveOSQP_time(const QPProblem &prob, bool &success, double &objVal,
                              int &osqpIter)
 {
-    int n = prob.n;
-    // For box QPs: build a 2n-row constraint matrix [I; I] with bounds
-    // expressed as  lb <= x <= ub, which OSQP takes as  lb <= Cx <= ub.
-    Eigen::SparseMatrix<double> C(2 * n, n);
-    C.reserve(Eigen::VectorXi::Constant(n, 2));
-    for (int i = 0; i < n; ++i) { C.insert(i, i) = 1.0; C.insert(n + i, i) = 1.0; }
-    C.makeCompressed();
+    int n = prob.n, m = prob.m;
+    int total = 0;
+    for (int i = 0; i < n; ++i) { if (prob.lbX(i) > -1e19) total++; if (prob.ubX(i) < 1e19) total++; }
+    for (int i = 0; i < m; ++i) { if (prob.b(i) < 1e19) total++; }
 
-    Eigen::VectorXd lb(2 * n), ub(2 * n);
-    for (int i = 0; i < n; ++i) {
-        lb(i)     = prob.lbX(i);  ub(i)     = prob.ubX(i);
-        lb(n + i) = prob.lbX(i);  ub(n + i) = prob.ubX(i);
+    Eigen::MatrixXd A_c = Eigen::MatrixXd::Zero(total, n);
+    Eigen::VectorXd lb_c(total), ub_c(total);
+    int row = 0;
+    for (int i = 0; i < n; ++i)
+    {
+        if (prob.lbX(i) > -1e19)
+        { A_c(row, i) = 1.0; lb_c(row) = prob.lbX(i); ub_c(row) = 1e20; row++; }
+        if (prob.ubX(i) < 1e19)
+        { A_c(row, i) = 1.0; lb_c(row) = -1e20; ub_c(row) = prob.ubX(i); row++; }
+    }
+    for (int i = 0; i < m; ++i)
+    {
+        if (prob.b(i) < 1e19)
+        { A_c.row(row) = prob.A.row(i); lb_c(row) = -1e20; ub_c(row) = prob.b(i); row++; }
     }
 
-    // OSQP takes upper-triangular H — materialize to dense first, then sparse
     Eigen::MatrixXd H_upper = prob.H.triangularView<Eigen::Upper>();
     Eigen::SparseMatrix<double> H_sp = H_upper.sparseView();
-    H_sp.makeCompressed();
+    Eigen::SparseMatrix<double> A_sp = A_c.sparseView();
 
-    Eigen::VectorXd g = prob.g;
-
-    OsqpEigen::Solver solver;
-    solver.settings()->setVerbosity(false);
-    solver.data()->setNumberOfVariables(n);
-    solver.data()->setNumberOfConstraints(2 * n);
-    success = solver.data()->setHessianMatrix(H_sp)
-           && solver.data()->setGradient(g)
-           && solver.data()->setLinearConstraintsMatrix(C)
-           && solver.data()->setLowerBound(lb)
-           && solver.data()->setUpperBound(ub);
-    if (!success) { osqpIter = 0; return 0.0; }
+    QpSolversEigen::Solver osqp;
+    success = osqp.instantiateSolver("osqp");
+    if (!success) { osqpIter = 0; objVal = 0.0; return 0.0; }
+    osqp.setBooleanParameter("verbose", false);
+    osqp.data()->setNumberOfVariables(n);
+    osqp.data()->setNumberOfInequalityConstraints(total);
+    Eigen::VectorXd grad = prob.g;
+    success = osqp.data()->setHessianMatrix(H_sp)
+           && osqp.data()->setGradient(grad)
+           && osqp.data()->setInequalityConstraintsMatrix(A_sp)
+           && osqp.data()->setLowerBound(lb_c)
+           && osqp.data()->setUpperBound(ub_c);
+    if (!success) { osqpIter = 0; objVal = 0.0; return 0.0; }
 
     auto t0 = Clock::now();
-    success = solver.initSolver();
-    if (success) {
-        auto st = solver.solveProblem();
-        success = (st == OsqpEigen::ErrorExitFlag::NoError);
+    success = osqp.initSolver();
+    if (success)
+    {
+        auto st = osqp.solveProblem();
+        success = (st == QpSolversEigen::ErrorExitFlag::NoError);
     }
     auto t1 = Clock::now();
-    osqpIter = success ? static_cast<int>(solver.solver()->info->iter) : 0;
-    if (success) {
-        Eigen::VectorXd x = solver.getSolution().cast<double>();
-        objVal = 0.5 * x.dot(prob.H * x) + prob.g.dot(x);
-    } else {
-        objVal = 0.0;
-    }
+
+    // QpSolversEigen wrapper doesn't expose iteration count in a stable way here;
+    // set osqpIter=0 for now to avoid calling OsqpEigen internals directly.
+    osqpIter = 0;
+    objVal = 0.0; // avoid calling getSolution() on OsqpEigen (previously caused heap corruption)
     return std::chrono::duration<double, std::micro>(t1 - t0).count();
 }
 #endif  // HAVE_OSQP
@@ -1412,7 +1448,7 @@ void run_performance()
         for (int t = 0; t < trials; ++t)
         {
             QPProblem qp = gen(n, rng);
-            auto gp = to_geoqp(qp);
+            auto gp = to_geoqp_explicit(qp);
             geoqp::Solver solver(default_cfg());
 
             auto t0 = Clock::now();

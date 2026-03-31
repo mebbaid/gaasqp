@@ -302,7 +302,7 @@ def fig01_performance(data, outdir):
     def _panel(ax, rows, title, geo_color=C_GEO):
         rows = sorted(rows, key=lambda r: r["n"])
         d = _to_arrays(rows, ["n", "Geo_us", "qpO_us"])
-        ax.plot(d["n"], d["Geo_us"],  "o-",  color=C_GEO, label="GeoQP",   zorder=3)
+        ax.plot(d["n"], d["Geo_us"],  "o-",  color=C_GEO, label="GaasQP",   zorder=3)
         ax.plot(d["n"], d["qpO_us"], "s--", color=C_QPO,       label="qpOASES", zorder=3)
         osqp_rows = [r for r in rows if r.get("OSQP_us") is not None]
         if osqp_rows:
@@ -315,11 +315,11 @@ def fig01_performance(data, outdir):
         ax.legend()
 
     if rows_dense:
-        _panel(axes[0], rows_dense, r"(a) Axis-aligned Box (dense $Q$)")
+        _panel(axes[0], rows_dense, r"(a) Axis-aligned Box (dense $H$)")
     else:
         axes[0].set_visible(False)
     if rows_affine_diag:
-        _panel(axes[1], rows_affine_diag, r"(b) Affine Image (diagonal $T$, Dense $Q$)")
+        _panel(axes[1], rows_affine_diag, r"(b) Affine Image (diagonal $T$, Dense $H$)")
     else:
         axes[1].set_visible(False)
 
@@ -347,8 +347,8 @@ def fig02_iterations(data, outdir):
 
     # Panel definitions: (geo_qtype_for_hops, color, perf_key, title, perf_filter_fn)
     panels = [
-        ("dense",    C_GEO_DENSE, "perf_dense", r"(a) Axis-aligned Box (dense $Q$)", None),
-        ("diagonal", C_GEO_DIAG,  "perf_affine", r"(b) Affine Image (diagonal $T$, Dense $Q$)", lambda r: "affine-diag" in r.get("type", "").lower()),
+        ("dense",    C_GEO_DENSE, "perf_dense", r"(a) Axis-aligned Box (dense $H$)", None),
+        ("diagonal", C_GEO_DIAG,  "perf_affine", r"(b) Affine Image (diagonal $T$, Dense $H$)", lambda r: "affine-diag" in r.get("type", "").lower()),
     ]
 
     for col_idx, (geo_qtype, col, perf_key, title, perf_filter) in enumerate(panels):
@@ -363,7 +363,7 @@ def fig02_iterations(data, outdir):
             if geo_rows:
                 dg = _to_arrays(geo_rows, ["n", "AvgPivot"])
                 ax.plot(dg["n"], dg["AvgPivot"], "o-", color=C_GEO,
-                    linewidth=1.6, label="GeoQP", zorder=3)
+                    linewidth=1.6, label="GaaQP", zorder=3)
         else:
             sub = sorted(
                 [r for r in _filter(rows_hop, "Qtype", geo_qtype) if r.get("n_solved", 0) > 0],
@@ -372,7 +372,7 @@ def fig02_iterations(data, outdir):
             if sub:
                 d = _to_arrays(sub, ["n", "AvgPivot", "MaxPivot"])
                 ax.plot(d["n"], d["AvgPivot"], "o-", color=C_GEO,
-                    linewidth=1.6, label="GeoQP", zorder=3)
+                    linewidth=1.6, label="GaasQP", zorder=3)
 
         # qpOASES iterations: for perf_affine we may need to filter to affine-diag rows
         perf_rows = sorted(
@@ -382,7 +382,7 @@ def fig02_iterations(data, outdir):
         if perf_rows:
             dp = _to_arrays(perf_rows, ["n", "qpO_iter"])
             ax.plot(dp["n"], dp["qpO_iter"], "s--", color=C_QPO,
-                    linewidth=1.4, label="qpOASES (avg)", zorder=2)
+                    linewidth=1.4, label="qpOASES", zorder=2)
 
         ax.set_xscale("log")
         ax.set_yscale("log")
