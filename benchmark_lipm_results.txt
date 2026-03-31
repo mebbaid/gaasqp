@@ -1,0 +1,41 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║  LIPM Walking Controller MPC Benchmark (v3 Corrected)        ║
+║  GeoQP (4 strategies) vs OSQP vs qpOASES                     ║
+║  Cold start with Box Constraints Separated                   ║
+╚══════════════════════════════════════════════════════════════╝
+
+Parameters:
+  Base Sampling   : 0.1 s
+  Jerk bounds     : ENABLED
+
+[INFO] GEOQP_DBG_PHASE2 not set
+
+Results (horizons)
+CASE format: n=<horizon> QP_n=<n> QP_m=<m> Geo_us=<ms> qpO_us=<ms> OSQP_us=<ms> Geo_it=<it> qpO_it=<it> OSQP_it=<it> Geo_hops=<hops> AvgPivot=<pivots> AvgObjGeo=<obj> Diff_vs_qpO=<diff> OK_geo=<ok> OK_qpO=<ok> OK_osqp=<ok>
+CASE n=5 QP_n=5 QP_m=5 Geo_us=0.349167 qpO_us=0.064916 OSQP_us=0.075375 Geo_it=0 qpO_it=3 OSQP_it=-1 Geo_hops=1 AvgPivot=4 AvgObjGeo=4.92674 Diff_vs_qpO=3.80798e-11 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=10 QP_n=10 QP_m=10 Geo_us=0.117042 qpO_us=0.050875 OSQP_us=0.195708 Geo_it=0 qpO_it=9 OSQP_it=-1 Geo_hops=2 AvgPivot=11 AvgObjGeo=14.7011 Diff_vs_qpO=5.10939e-10 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=15 QP_n=15 QP_m=15 Geo_us=0.142042 qpO_us=0.083125 OSQP_us=0.166125 Geo_it=0 qpO_it=15 OSQP_it=-1 Geo_hops=1 AvgPivot=6 AvgObjGeo=16.1602 Diff_vs_qpO=8.84626e-13 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=20 QP_n=20 QP_m=20 Geo_us=0.190542 qpO_us=0.127208 OSQP_us=0.229166 Geo_it=0 qpO_it=20 OSQP_it=-1 Geo_hops=1 AvgPivot=8 AvgObjGeo=16.3359 Diff_vs_qpO=8.3844e-13 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=25 QP_n=25 QP_m=25 Geo_us=0.243625 qpO_us=0.106291 OSQP_us=0.316833 Geo_it=0 qpO_it=12 OSQP_it=-1 Geo_hops=1 AvgPivot=8 AvgObjGeo=16.3676 Diff_vs_qpO=9.23706e-13 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=30 QP_n=30 QP_m=30 Geo_us=0.281875 qpO_us=0.117 OSQP_us=0.572125 Geo_it=0 qpO_it=12 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.3903 Diff_vs_qpO=1.09068e-12 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=35 QP_n=35 QP_m=35 Geo_us=0.445167 qpO_us=0.143875 OSQP_us=0.687208 Geo_it=0 qpO_it=12 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.4035 Diff_vs_qpO=1.0516e-12 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=40 QP_n=40 QP_m=40 Geo_us=0.4825 qpO_us=0.177084 OSQP_us=0.834958 Geo_it=0 qpO_it=12 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.4101 Diff_vs_qpO=2.02149e-12 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=45 QP_n=45 QP_m=45 Geo_us=0.541333 qpO_us=0.216333 OSQP_us=0.927167 Geo_it=0 qpO_it=14 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.4131 Diff_vs_qpO=6.32383e-13 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=50 QP_n=50 QP_m=50 Geo_us=0.59975 qpO_us=0.274 OSQP_us=1.12721 Geo_it=0 qpO_it=14 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.4144 Diff_vs_qpO=1.77636e-13 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=55 QP_n=55 QP_m=55 Geo_us=0.7025 qpO_us=0.286 OSQP_us=1.47788 Geo_it=0 qpO_it=14 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.4149 Diff_vs_qpO=3.2756e-12 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=60 QP_n=60 QP_m=60 Geo_us=0.703375 qpO_us=0.331125 OSQP_us=1.86792 Geo_it=0 qpO_it=14 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.4152 Diff_vs_qpO=1.49925e-12 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=65 QP_n=65 QP_m=65 Geo_us=1.0135 qpO_us=0.364834 OSQP_us=1.85488 Geo_it=0 qpO_it=14 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.4153 Diff_vs_qpO=3.62022e-12 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=70 QP_n=70 QP_m=70 Geo_us=1.03017 qpO_us=0.394791 OSQP_us=1.73412 Geo_it=0 qpO_it=14 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.4153 Diff_vs_qpO=9.36851e-12 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=75 QP_n=75 QP_m=75 Geo_us=1.09933 qpO_us=0.457 OSQP_us=2.04867 Geo_it=0 qpO_it=14 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.4153 Diff_vs_qpO=3.07274e-11 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=80 QP_n=80 QP_m=80 Geo_us=1.11779 qpO_us=0.483708 OSQP_us=2.51146 Geo_it=0 qpO_it=14 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.4153 Diff_vs_qpO=4.7514e-11 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=85 QP_n=85 QP_m=85 Geo_us=1.18746 qpO_us=0.515708 OSQP_us=3.31887 Geo_it=0 qpO_it=14 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.4153 Diff_vs_qpO=2.10107e-11 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=90 QP_n=90 QP_m=90 Geo_us=1.25308 qpO_us=0.554584 OSQP_us=4.24954 Geo_it=0 qpO_it=14 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.4154 Diff_vs_qpO=3.70548e-11 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=95 QP_n=95 QP_m=95 Geo_us=1.36033 qpO_us=0.595292 OSQP_us=4.85625 Geo_it=0 qpO_it=14 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.4154 Diff_vs_qpO=1.33994e-10 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=100 QP_n=100 QP_m=100 Geo_us=1.55446 qpO_us=0.650708 OSQP_us=4.89942 Geo_it=0 qpO_it=14 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.4154 Diff_vs_qpO=1.84951e-10 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=105 QP_n=105 QP_m=105 Geo_us=1.70067 qpO_us=0.662791 OSQP_us=5.19267 Geo_it=0 qpO_it=14 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.4154 Diff_vs_qpO=8.77804e-11 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=110 QP_n=110 QP_m=110 Geo_us=1.7235 qpO_us=0.726208 OSQP_us=5.42667 Geo_it=0 qpO_it=14 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.4154 Diff_vs_qpO=1.5892e-10 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=115 QP_n=115 QP_m=115 Geo_us=1.85383 qpO_us=0.771292 OSQP_us=5.56212 Geo_it=0 qpO_it=14 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.4154 Diff_vs_qpO=2.52655e-10 OK_geo=1 OK_qpO=1 OK_osqp=1
+CASE n=120 QP_n=120 QP_m=120 Geo_us=1.89821 qpO_us=0.850792 OSQP_us=5.95833 Geo_it=0 qpO_it=14 OSQP_it=-1 Geo_hops=1 AvgPivot=7 AvgObjGeo=16.4154 Diff_vs_qpO=5.13793e-11 OK_geo=1 OK_qpO=1 OK_osqp=1
+
+Finished horizon cases.

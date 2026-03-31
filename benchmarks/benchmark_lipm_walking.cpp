@@ -159,7 +159,7 @@ DenseQP buildQP(const Parameters &p,
     for (int i = 0; i < nx * N; ++i) e[i] = fr[i] - x_ref[i];
 
     // Cost weights (keep previous choices)
-    std::vector<double> Qd = {1.0, 0.1, 0.0};
+    std::vector<double> Qd = {1.0, 1.0, 1.0};
     const double R = 1e-2;
 
     // Compute Qbar * Su by scaling rows
@@ -351,6 +351,7 @@ struct Result
     double objective = 0.0;
     int iterations = -1;
     int facet_hops = -1;
+    int avg_pivot = -1;
     std::vector<double> solution;
 };
 
@@ -420,6 +421,8 @@ static Result runGeoQP(const DenseQP &qp, geoqp::FaceHoppingStrategy strat, cons
     // record total iterations (phase1+phase2) rather than only phase2
     res.iterations = sol.iterations;
     res.facet_hops = sol.phase2_facet_hops;
+    // report phase2 pivot count as AvgPivot for compatibility with reference plots
+    res.avg_pivot = sol.phase2_iterations;
     res.solution = sol.x;
     return res;
 }
@@ -582,8 +585,7 @@ int main()
     double sup_x = p.init_x;
     Phase phase(p);
 
-    // We will run 10 test cases varying the MPC horizon from 2..20 (inclusive).
-    const int num_cases = 10;
+    // We will run test cases varying the MPC horizon from 2..120 (inclusive), step 2.
     const char *disable_jerk_env = std::getenv("GEOQP_DISABLE_JERK_BOUNDS");
     bool enforce_jerk = !(disable_jerk_env && std::string(disable_jerk_env) == "1");
 
@@ -652,17 +654,17 @@ int main()
         return 0;
     }
 
-    // We'll test horizons h = 2,4,...,20 (10 cases)
+    // We'll test horizons h = 5,10,...,120
     std::vector<int> horizons;
-    for (int i = 0; i < num_cases; ++i)
-        horizons.push_back(2 + i * 2);
+    for (int h = 5; h <= 120; h += 5)
+        horizons.push_back(h);
 
     // reset Schur instrumentation counters once
     geoqp::internal::schur_stats_reset();
 
     // Print a compact header for CASE-style parsing by the plotting script
     std::cout << "\nResults (horizons)\n";
-    std::cout << "CASE format: n=<horizon> QP_n=<n> QP_m=<m> Geo_us=<ms> qpO_us=<ms> OSQP_us=<ms> Geo_it=<it> qpO_it=<it> OSQP_it=<it> Geo_hops=<hops> AvgObjGeo=<obj> Diff_vs_qpO=<diff> OK_geo=<ok> OK_qpO=<ok> OK_osqp=<ok>\n";
+    std::cout << "CASE format: n=<horizon> QP_n=<n> QP_m=<m> Geo_us=<ms> qpO_us=<ms> OSQP_us=<ms> Geo_it=<it> qpO_it=<it> OSQP_it=<it> Geo_hops=<hops> AvgPivot=<pivots> AvgObjGeo=<obj> Diff_vs_qpO=<diff> OK_geo=<ok> OK_qpO=<ok> OK_osqp=<ok>\n";
 
     for (int h : horizons)
     {
@@ -727,6 +729,7 @@ int main()
                   << "qpO_it=" << qpo_res.iterations << " "
                   << "OSQP_it=" << -1 << " "
                   << "Geo_hops=" << geo_res.facet_hops << " "
+                  << "AvgPivot=" << geo_res.avg_pivot << " "
                   << "AvgObjGeo=" << geo_res.objective << " "
                   << "Diff_vs_qpO=" << diff_geo << " "
                   << "OK_geo=" << ok_geo << " "

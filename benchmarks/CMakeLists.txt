@@ -28,7 +28,7 @@ if(qpOASES_FOUND)
 endif()
 
 if(QpSolversEigen_FOUND AND qpOASES_FOUND)
-    message(STATUS "Building Unified Benchmark")
+    message(STATUS "Building Unified Benchmark (legacy)")
 
     add_executable(benchmark benchmark.cpp)
     target_include_directories(benchmark PRIVATE ${qpOASES_INCLUDE_DIR})
@@ -40,15 +40,20 @@ if(QpSolversEigen_FOUND AND qpOASES_FOUND)
     
     install(TARGETS benchmark
         RUNTIME DESTINATION bin)
+endif()
 
+if(OsqpEigen_FOUND AND qpOASES_FOUND)
     message(STATUS "Building LIPM walking controller benchmark")
     
     add_executable(benchmark_lipm_walking benchmark_lipm_walking.cpp)
     target_include_directories(benchmark_lipm_walking PRIVATE ${qpOASES_INCLUDE_DIR})
     target_link_libraries(benchmark_lipm_walking PRIVATE 
         geoqp 
-        QpSolversEigen::QpSolversEigen
+        OsqpEigen::OsqpEigen
         ${qpOASES_LIBRARY})
+    if(QpSolversEigen_FOUND)
+        target_link_libraries(benchmark_lipm_walking PRIVATE QpSolversEigen::QpSolversEigen)
+    endif()
     target_compile_features(benchmark_lipm_walking PRIVATE cxx_std_17)
     
     install(TARGETS benchmark_lipm_walking

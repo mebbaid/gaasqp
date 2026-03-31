@@ -103,6 +103,18 @@ def fig01_performance(off_rows, on_rows, outdir):
         ax.plot(n, osqp, "^:", color=C_OSQP, label="OSQP", linewidth=1.2)
 
     ax.set_xscale("log")
+    # choose readable x-ticks: a small set of nicely spaced ticks (log-spaced for wide ranges)
+    min_n = int(n.min())
+    max_n = int(n.max())
+    if max_n <= 30:
+        step = max(2, int(round(max_n / 6.0)))
+        ticks = list(range(min_n, max_n + 1, step))
+    else:
+        ticks = np.unique(np.round(np.logspace(np.log10(min_n), np.log10(max_n), num=6))).astype(int).tolist()
+        if ticks[-1] != max_n:
+            ticks.append(max_n)
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([str(int(t)) for t in ticks])
     ax.set_xlabel(r"QP dimension $n$")
     ax.set_ylabel(r"Solve time (ms)")
     ax.set_title("LIPM Benchmark — Avg solve time vs QP size")
@@ -137,6 +149,18 @@ def fig02_iterations(off_rows, on_rows, outdir):
     ax.plot(n, geo_metric, "o-", color=C_GEO, label=geo_label, linewidth=1.6)
     ax.plot(n, qpo_it, "s--", color=C_QPO, label="qpOASES (iters)", linewidth=1.4)
     ax.set_xscale("log")
+    # readable x-ticks as in performance plot
+    min_n = int(n.min())
+    max_n = int(n.max())
+    if max_n <= 30:
+        step = max(2, int(round(max_n / 6.0)))
+        ticks = list(range(min_n, max_n + 1, step))
+    else:
+        ticks = np.unique(np.round(np.logspace(np.log10(min_n), np.log10(max_n), num=6))).astype(int).tolist()
+        if ticks[-1] != max_n:
+            ticks.append(max_n)
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([str(int(t)) for t in ticks])
     ax.set_xlabel(r"QP dimension $n$")
     ax.set_ylabel(r"Iterations (avg)")
     ax.set_title("LIPM Benchmark — Iterations vs QP size")
