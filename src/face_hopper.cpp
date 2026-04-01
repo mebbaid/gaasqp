@@ -787,11 +787,11 @@ namespace geoqp
             const double *GEOQP_RESTRICT xbar_ptr = x_bar_.data();
             double *GEOQP_RESTRICT res_ptr = ws_residual_.data();
 
+            // O(k) lookup — ws_Axbar_ = A·x̄ is precomputed in init_common
             for (int i = 0; i < k; ++i)
             {
                 const int idx = face[i];
-                const double *GEOQP_RESTRICT a_row = A_ + idx * n_;
-                res_ptr[i] = LinearAlgebra::dot(a_row, xbar_ptr, n_) - b_[idx];
+                res_ptr[i] = ws_Axbar_[idx] - b_[idx];
             }
 
             if (!schur_manager_.initialize(face, A_, Q_chol_.data(), n_, constraint_cache_))
@@ -804,40 +804,58 @@ namespace geoqp
                 return false;
             }
 
-            std::fill(ws_w_.begin(), ws_w_.begin() + n_, 0.0);
-
-            double *GEOQP_RESTRICT w_ptr = ws_w_.data();
-            const double *GEOQP_RESTRICT lambda_ptr = lambda.data();
-
-            for (int j = 0; j < k; ++j)
-            {
-                const auto &z_j = constraint_cache_.get_z(face[j], A_, Q_chol_.data());
-                const double *GEOQP_RESTRICT z_ptr = z_j.data();
-                const double lambda_j = lambda_ptr[j];
-
-                int i = 0;
-                for (; i + 3 < n_; i += 4)
-                {
-                    w_ptr[i] += lambda_j * z_ptr[i];
-                    w_ptr[i + 1] += lambda_j * z_ptr[i + 1];
-                    w_ptr[i + 2] += lambda_j * z_ptr[i + 2];
-                    w_ptr[i + 3] += lambda_j * z_ptr[i + 3];
-                }
-                for (; i < n_; ++i)
-                {
-                    w_ptr[i] += lambda_j * z_ptr[i];
-                }
-            }
-
-            LinearAlgebra::backward_sub(Q_chol_.data(), w_ptr, ws_correction_.data(), n_);
-
             x_star.resize(n_);
             double *GEOQP_RESTRICT xstar_ptr = x_star.data();
-            const double *GEOQP_RESTRICT corr_ptr = ws_correction_.data();
+            const double *GEOQP_RESTRICT lambda_ptr = lambda.data();
 
-            for (int i = 0; i < n_; ++i)
+            // x* = x̄ − Q⁻¹ Aᵀ λ
+            // For box constraints with Q_inv precomputed: O(k·n) column-sum,
+            // replacing the O(n²) backward_sub path.
+            if (has_diagonal_constraints_ && !Q_inv_.empty())
             {
-                xstar_ptr[i] = xbar_ptr[i] - corr_ptr[i];
+                std::copy(xbar_ptr, xbar_ptr + n_, xstar_ptr);
+                for (int j = 0; j < k; ++j)
+                {
+                    const int v = constraint_var_[face[j]];
+                    const double lam_s = lambda_ptr[j] * constraint_sign_[face[j]];
+                    const double *GEOQP_RESTRICT col = Q_inv_.data() + v * n_;
+                    int i = 0;
+                    for (; i + 3 < n_; i += 4)
+                    {
+                        xstar_ptr[i]     -= lam_s * col[i];
+                        xstar_ptr[i + 1] -= lam_s * col[i + 1];
+                        xstar_ptr[i + 2] -= lam_s * col[i + 2];
+                        xstar_ptr[i + 3] -= lam_s * col[i + 3];
+                    }
+                    for (; i < n_; ++i)
+                        xstar_ptr[i] -= lam_s * col[i];
+                }
+            }
+            else
+            {
+                // General path: accumulate w = Σ λ_j z_j, then x* = x̄ − L⁻ᵀ w  O(n²)
+                std::fill(ws_w_.begin(), ws_w_.begin() + n_, 0.0);
+                double *GEOQP_RESTRICT w_ptr = ws_w_.data();
+                for (int j = 0; j < k; ++j)
+                {
+                    const auto &z_j = constraint_cache_.get_z(face[j], A_, Q_chol_.data());
+                    const double *GEOQP_RESTRICT z_ptr = z_j.data();
+                    const double lambda_j = lambda_ptr[j];
+                    int i = 0;
+                    for (; i + 3 < n_; i += 4)
+                    {
+                        w_ptr[i]     += lambda_j * z_ptr[i];
+                        w_ptr[i + 1] += lambda_j * z_ptr[i + 1];
+                        w_ptr[i + 2] += lambda_j * z_ptr[i + 2];
+                        w_ptr[i + 3] += lambda_j * z_ptr[i + 3];
+                    }
+                    for (; i < n_; ++i)
+                        w_ptr[i] += lambda_j * z_ptr[i];
+                }
+                LinearAlgebra::backward_sub(Q_chol_.data(), w_ptr, ws_correction_.data(), n_);
+                const double *GEOQP_RESTRICT corr_ptr = ws_correction_.data();
+                for (int i = 0; i < n_; ++i)
+                    xstar_ptr[i] = xbar_ptr[i] - corr_ptr[i];
             }
 
             return true;
@@ -944,11 +962,11 @@ namespace geoqp
 
                 const double *GEOQP_RESTRICT xbar_ptr = x_bar_.data();
 
+                // O(k) — ws_Axbar_ = A·x̄ precomputed in init_common
                 for (int i = 0; i < k; ++i)
                 {
                     const int idx = current_face[i];
-                    const double *GEOQP_RESTRICT a_row = A_ + idx * n_;
-                    ws_residual_[i] = LinearAlgebra::dot(a_row, xbar_ptr, n_) - b_[idx];
+                    ws_residual_[i] = ws_Axbar_[idx] - b_[idx];
                 }
 
                 if (!schur_manager_.solve(ws_residual_, ws_lambda_))
@@ -957,39 +975,56 @@ namespace geoqp
                     break;
                 }
 
-                std::fill(ws_w_.begin(), ws_w_.begin() + n_, 0.0);
-
-                double *GEOQP_RESTRICT w_ptr = ws_w_.data();
+                // x* = x̄ − Q⁻¹ Aᵀ λ
+                // For box constraints with Q_inv precomputed: O(k·n) column-sum.
+                double *GEOQP_RESTRICT xstar_ptr = ws_x_star_.data();
                 const double *GEOQP_RESTRICT lambda_ptr = ws_lambda_.data();
 
-                for (int j = 0; j < k; ++j)
+                if (has_diagonal_constraints_ && !Q_inv_.empty())
                 {
-                    const auto &z_j = constraint_cache_.get_z(current_face[j], A_, Q_chol_.data());
-                    const double *GEOQP_RESTRICT z_ptr = z_j.data();
-                    const double lambda_j = lambda_ptr[j];
-
-                    int i = 0;
-                    for (; i + 3 < n_; i += 4)
+                    std::copy(xbar_ptr, xbar_ptr + n_, xstar_ptr);
+                    for (int j = 0; j < k; ++j)
                     {
-                        w_ptr[i] += lambda_j * z_ptr[i];
-                        w_ptr[i + 1] += lambda_j * z_ptr[i + 1];
-                        w_ptr[i + 2] += lambda_j * z_ptr[i + 2];
-                        w_ptr[i + 3] += lambda_j * z_ptr[i + 3];
-                    }
-                    for (; i < n_; ++i)
-                    {
-                        w_ptr[i] += lambda_j * z_ptr[i];
+                        const int v = constraint_var_[current_face[j]];
+                        const double lam_s = lambda_ptr[j] * constraint_sign_[current_face[j]];
+                        const double *GEOQP_RESTRICT col = Q_inv_.data() + v * n_;
+                        int i = 0;
+                        for (; i + 3 < n_; i += 4)
+                        {
+                            xstar_ptr[i]     -= lam_s * col[i];
+                            xstar_ptr[i + 1] -= lam_s * col[i + 1];
+                            xstar_ptr[i + 2] -= lam_s * col[i + 2];
+                            xstar_ptr[i + 3] -= lam_s * col[i + 3];
+                        }
+                        for (; i < n_; ++i)
+                            xstar_ptr[i] -= lam_s * col[i];
                     }
                 }
-
-                LinearAlgebra::backward_sub(Q_chol_.data(), w_ptr, ws_correction_.data(), n_);
-
-                double *GEOQP_RESTRICT xstar_ptr = ws_x_star_.data();
-                const double *GEOQP_RESTRICT corr_ptr = ws_correction_.data();
-
-                for (int i = 0; i < n_; ++i)
+                else
                 {
-                    xstar_ptr[i] = xbar_ptr[i] - corr_ptr[i];
+                    // General path: w = Σ λ_j z_j, then x* = x̄ − L⁻ᵀ w  O(n²)
+                    std::fill(ws_w_.begin(), ws_w_.begin() + n_, 0.0);
+                    double *GEOQP_RESTRICT w_ptr = ws_w_.data();
+                    for (int j = 0; j < k; ++j)
+                    {
+                        const auto &z_j = constraint_cache_.get_z(current_face[j], A_, Q_chol_.data());
+                        const double *GEOQP_RESTRICT z_ptr = z_j.data();
+                        const double lambda_j = lambda_ptr[j];
+                        int i = 0;
+                        for (; i + 3 < n_; i += 4)
+                        {
+                            w_ptr[i]     += lambda_j * z_ptr[i];
+                            w_ptr[i + 1] += lambda_j * z_ptr[i + 1];
+                            w_ptr[i + 2] += lambda_j * z_ptr[i + 2];
+                            w_ptr[i + 3] += lambda_j * z_ptr[i + 3];
+                        }
+                        for (; i < n_; ++i)
+                            w_ptr[i] += lambda_j * z_ptr[i];
+                    }
+                    LinearAlgebra::backward_sub(Q_chol_.data(), w_ptr, ws_correction_.data(), n_);
+                    const double *GEOQP_RESTRICT corr_ptr = ws_correction_.data();
+                    for (int i = 0; i < n_; ++i)
+                        xstar_ptr[i] = xbar_ptr[i] - corr_ptr[i];
                 }
 
                 bool primal_feasible = true;
@@ -1003,20 +1038,36 @@ namespace geoqp
                 for (int idx : current_face)
                     ws_is_active_[idx] = 1;
 
-                for (int i = 0; i < m_; ++i)
+                if (has_diagonal_constraints_)
                 {
-                    if (ws_is_active_[i])
-                        continue;
-
-                    const double *a_row = A_ + i * n_;
-                    double ax = LinearAlgebra::dot(a_row, ws_x_star_.data(), n_);
-                    double violation = ax - b_[i];
-
-                    if (violation > max_violation + config_.constraint_tolerance)
+                    // O(1) per constraint: s·x*[v] vs b — no dot product needed
+                    for (int i = 0; i < m_; ++i)
                     {
-                        max_violation = violation;
-                        most_violated = i;
-                        primal_feasible = false;
+                        if (ws_is_active_[i]) continue;
+                        const double ax = constraint_sign_[i] * xstar_ptr[constraint_var_[i]];
+                        const double violation = ax - b_[i];
+                        if (violation > max_violation + config_.constraint_tolerance)
+                        {
+                            max_violation = violation;
+                            most_violated = i;
+                            primal_feasible = false;
+                        }
+                    }
+                }
+                else
+                {
+                    for (int i = 0; i < m_; ++i)
+                    {
+                        if (ws_is_active_[i]) continue;
+                        const double *a_row = A_ + i * n_;
+                        double ax = LinearAlgebra::dot(a_row, ws_x_star_.data(), n_);
+                        double violation = ax - b_[i];
+                        if (violation > max_violation + config_.constraint_tolerance)
+                        {
+                            max_violation = violation;
+                            most_violated = i;
+                            primal_feasible = false;
+                        }
                     }
                 }
 
@@ -1024,16 +1075,28 @@ namespace geoqp
                 {
                     last_was_add_schur = true;
                     std::vector<int> to_add;
-                    for (int i = 0; i < m_; ++i)
+                    if (has_diagonal_constraints_)
                     {
-                        if (ws_is_active_[i])
-                            continue;
-
-                        const double *GEOQP_RESTRICT a_row = A_ + i * n_;
-                        double ax = LinearAlgebra::dot(a_row, ws_x_star_.data(), n_);
-                        if (ax > b_[i] + config_.constraint_tolerance)
+                        for (int i = 0; i < m_; ++i)
                         {
-                            to_add.push_back(i);
+                            if (ws_is_active_[i]) continue;
+                            if (constraint_sign_[i] * xstar_ptr[constraint_var_[i]] > b_[i] + config_.constraint_tolerance)
+                                to_add.push_back(i);
+                        }
+                    }
+                    else
+                    {
+                        for (int i = 0; i < m_; ++i)
+                        {
+                            if (ws_is_active_[i])
+                                continue;
+
+                            const double *GEOQP_RESTRICT a_row = A_ + i * n_;
+                            double ax = LinearAlgebra::dot(a_row, ws_x_star_.data(), n_);
+                            if (ax > b_[i] + config_.constraint_tolerance)
+                            {
+                                to_add.push_back(i);
+                            }
                         }
                     }
 
@@ -1215,6 +1278,185 @@ namespace geoqp
             return schur_manager_.get_active_constraints();
         }
 
+        // ── Box+dense-Q incremental Schur — fully standalone ────────────────────────
+        // Implements the same add/drop active-set loop as the non-cached path but
+        // replaces the per-pivot O(k³) LU solve with incremental Cholesky O(k²).
+        // No interaction with ConstraintCache or Q_chol; uses only Q_inv and box metadata.
+        std::vector<int> FaceHopper::find_optimal_face_box_schur(
+            const std::vector<int> &initial_face,
+            int &iterations,
+            int &facet_hops,
+            Timer &t) const
+        {
+            iterations = 0;
+            facet_hops = 0;
+
+            // Initialise Schur complement from the initial face (O(k²)+O(k³)).
+            if (!schur_manager_.initialize_box(initial_face, constraint_var_, constraint_sign_, Q_inv_.data(), n_))
+            {
+                // Initialization failed — signal caller to fall back by returning a
+                // sentinel empty vector (initial_face is always non-empty here).
+                return {};
+            }
+
+            ws_x_star_.resize(n_);
+            ws_is_active_.assign(m_, 0);
+
+            const double *GEOQP_RESTRICT xbar_ptr = x_bar_.data();
+            const double *GEOQP_RESTRICT Qinv     = Q_inv_.data();
+            bool last_was_add = false;
+
+            while (iterations < config_.max_iterations)
+            {
+                ++iterations;
+                ::geoqp::timing::face_hops_count.fetch_add(1, std::memory_order_relaxed);
+
+                const auto &face = schur_manager_.get_active_constraints();
+                const int k = schur_manager_.size();
+
+                // ── 1. Residual: r_i = (A x̄)_i − b_i  →  O(k) lookup ──────────
+                ws_residual_.resize(k);
+                for (int i = 0; i < k; ++i)
+                {
+                    const int idx = face[i];
+                    ws_residual_[i] = ws_Axbar_[idx] - b_[idx];
+                }
+
+                // ── 2. Solve S λ = r via incremental Cholesky  →  O(k²) ─────────
+                ws_lambda_.resize(k);
+                if (!schur_manager_.solve(ws_residual_, ws_lambda_))
+                {
+                    // Schur factor is degenerate — reinitialize and retry once.
+                    if (!schur_manager_.initialize_box(face, constraint_var_, constraint_sign_, Qinv, n_) ||
+                        !schur_manager_.solve(ws_residual_, ws_lambda_))
+                        return {};  // signal fallback to non-cached path
+                }
+
+                // ── 2b. Validate: ||S λ − r|| / ||r||  →  O(k²) sequential ──────
+                // Uses the cached k×k S matrix (row-major, stride k, fits in L1/L2)
+                // instead of scattered Q_inv reads — vectorizable, cache-friendly.
+                {
+                    const double *GEOQP_RESTRICT S_mat = schur_manager_.get_S_matrix();
+                    double res_sq = 0.0, r_sq = 0.0;
+                    for (int i = 0; i < k; ++i)
+                    {
+                        const double *GEOQP_RESTRICT S_row = S_mat + i * k;
+                        const double *GEOQP_RESTRICT lam   = ws_lambda_.data();
+                        double Sl = 0.0;
+                        int jj = 0;
+                        for (; jj + 3 < k; jj += 4)
+                            Sl += S_row[jj]*lam[jj] + S_row[jj+1]*lam[jj+1]
+                                + S_row[jj+2]*lam[jj+2] + S_row[jj+3]*lam[jj+3];
+                        for (; jj < k; ++jj)
+                            Sl += S_row[jj] * lam[jj];
+                        const double ri = ws_residual_[i];
+                        const double di = Sl - ri;
+                        res_sq += di * di;
+                        r_sq   += ri * ri;
+                    }
+                    const double rel = std::sqrt(res_sq) / (std::sqrt(r_sq) + 1e-20);
+                    if (rel > 1e-8)
+                    {
+                        // Drift detected — full reinit + re-solve
+                        if (!schur_manager_.initialize_box(face, constraint_var_, constraint_sign_, Qinv, n_) ||
+                            !schur_manager_.solve(ws_residual_, ws_lambda_))
+                            return {};
+                    }
+                }
+
+                // ── 3. x* = x̄ − Σ λ_j · s_j · Q_inv[:,v_j]  →  O(k·n) ──────────
+                double *GEOQP_RESTRICT xstar_ptr = ws_x_star_.data();
+                std::copy(xbar_ptr, xbar_ptr + n_, xstar_ptr);
+                for (int j = 0; j < k; ++j)
+                {
+                    const int v = constraint_var_[face[j]];
+                    const double lam_s = ws_lambda_[j] * constraint_sign_[face[j]];
+                    const double *GEOQP_RESTRICT col = Qinv + v * n_;
+                    int i = 0;
+                    for (; i + 3 < n_; i += 4)
+                    {
+                        xstar_ptr[i]     -= lam_s * col[i];
+                        xstar_ptr[i + 1] -= lam_s * col[i + 1];
+                        xstar_ptr[i + 2] -= lam_s * col[i + 2];
+                        xstar_ptr[i + 3] -= lam_s * col[i + 3];
+                    }
+                    for (; i < n_; ++i)
+                        xstar_ptr[i] -= lam_s * col[i];
+                }
+
+                // ── 4. Dual check: drop most-negative λ ──────────────────────────
+                int drop_idx = -1;
+                double min_lambda = -config_.constraint_tolerance;
+                for (int i = 0; i < k; ++i)
+                {
+                    if (ws_lambda_[i] < min_lambda)
+                    {
+                        min_lambda = ws_lambda_[i];
+                        drop_idx = i;
+                    }
+                }
+
+                if (drop_idx >= 0)
+                {
+                    if (last_was_add) ++facet_hops;
+                    last_was_add = false;
+                    if (!schur_manager_.remove_constraint(drop_idx))
+                        return {};
+                    continue;
+                }
+
+                // ── 5. Primal feasibility: collect ALL violated inactive constraints
+                for (int idx : face) ws_is_active_[idx] = 1;
+                ws_opt_violated_.clear();
+                for (int i = 0; i < m_; ++i)
+                {
+                    if (ws_is_active_[i]) continue;
+                    if (constraint_sign_[i] * xstar_ptr[constraint_var_[i]] > b_[i] + config_.constraint_tolerance)
+                        ws_opt_violated_.push_back(i);
+                }
+                for (int idx : face) ws_is_active_[idx] = 0;
+
+                if (ws_opt_violated_.empty())
+                {
+                    // Optimal: both dual and primal feasible.
+                    if (config_.timing_verbosity > 0)
+                    {
+                        timing_stats_.find_optimal_face_total += t.elapsed_ms();
+                        ++timing_stats_.find_optimal_face_calls;
+                    }
+                    return schur_manager_.get_active_constraints();
+                }
+
+                // Add all violated (batch), or only most-violated if over-constrained.
+                last_was_add = true;
+                const int space_left = n_ - k;
+                if ((int)ws_opt_violated_.size() <= space_left)
+                {
+                    for (int c : ws_opt_violated_)
+                    {
+                        if (!schur_manager_.add_constraint_box(c, constraint_var_, constraint_sign_, Qinv))
+                            return {};  // conflict or degenerate — signal fallback
+                    }
+                }
+                else
+                {
+                    // Pick most-violated single constraint
+                    int most_violated = ws_opt_violated_[0];
+                    double max_viol = 0.0;
+                    for (int c : ws_opt_violated_)
+                    {
+                        const double viol = constraint_sign_[c] * xstar_ptr[constraint_var_[c]] - b_[c];
+                        if (viol > max_viol) { max_viol = viol; most_violated = c; }
+                    }
+                    if (!schur_manager_.add_constraint_box(most_violated, constraint_var_, constraint_sign_, Qinv))
+                        return {};
+                }
+            }
+
+            // max_iterations hit — signal fallback so non-cached path can handle correctly.
+            return {};
+        }
+
         std::vector<int> FaceHopper::find_optimal_face(
             const std::vector<int> &initial_face,
             int &iterations,
@@ -1254,6 +1496,25 @@ namespace geoqp
                 default:
                     return find_optimal_face_cached(initial_face, iterations, facet_hops, t);
                 }
+            }
+
+            // Box+dense-Q with Q_inv precomputed: use our dedicated incremental
+            // Schur path.  Completely separate from the general caching path.
+            if (config_.use_caching && has_diagonal_constraints_ && !Q_inv_.empty() && !q_is_diagonal_)
+            {
+                auto result = find_optimal_face_box_schur(initial_face, iterations, facet_hops, t);
+                if (!result.empty())
+                {
+                    if (config_.timing_verbosity > 0)
+                    {
+                        timing_stats_.find_optimal_face_total += t.elapsed_ms();
+                        ++timing_stats_.find_optimal_face_calls;
+                    }
+                    return result;
+                }
+                // Empty result = init failed; fall through to non-cached path below.
+                iterations = 0;
+                facet_hops = 0;
             }
 
             std::vector<int> current_face = initial_face;

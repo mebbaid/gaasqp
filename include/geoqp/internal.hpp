@@ -227,6 +227,21 @@ namespace geoqp
                 ConstraintCache &cache);
             bool remove_constraint(int face_index);
 
+            // Box-constraint specialization: uses Q_inv for O(1) S-entry access
+            // instead of O(n) Cholesky solves.  Gives O(k) per add vs O(k*n).
+            bool initialize_box(
+                const std::vector<int> &face,
+                const std::vector<int> &constraint_var,
+                const std::vector<double> &constraint_sign,
+                const double *Q_inv,
+                int n);
+
+            bool add_constraint_box(
+                int constraint_idx,
+                const std::vector<int> &constraint_var,
+                const std::vector<double> &constraint_sign,
+                const double *Q_inv);
+
             bool solve(const std::vector<double> &rhs, std::vector<double> &lambda) const;
 
             double get_L_diagonal(int i) const
@@ -239,14 +254,25 @@ namespace geoqp
             const std::vector<int> &get_active_constraints() const { return active_constraints_; }
             int size() const { return k_; }
 
+            // Cached k×k Schur complement (box mode only).  Row-major, stride k.
+            // Used by find_optimal_face_box_schur for O(k²) sequential validation
+            // instead of O(k²) scattered Q_inv access.
+            const double *get_S_matrix() const { return S_.data(); }
+
         private:
             std::vector<double> L_S_;
+            std::vector<double> S_;           // cached k×k symmetric Schur complement (box mode)
             std::vector<int> active_constraints_;
             int k_;
             const double *A_ptr_ = nullptr;
             const double *L_Q_ptr_ = nullptr;
             int n_ = 0;
             ConstraintCache *cache_ptr_ = nullptr;
+            // Box-mode context (set by initialize_box, used by remove_constraint fallback)
+            bool is_box_mode_ = false;
+            const double *Q_inv_ptr_ = nullptr;
+            const std::vector<int> *constraint_var_ptr_ = nullptr;
+            const std::vector<double> *constraint_sign_ptr_ = nullptr;
             struct SchurStats
             {
                 int initialize_calls = 0;
@@ -347,6 +373,15 @@ namespace geoqp
                 std::vector<double> &lambda) const;
 
             std::vector<int> find_optimal_face_cached(
+                const std::vector<int> &initial_face,
+                int &iterations,
+                int &facet_hops,
+                Timer &t) const;
+
+            // Standalone box+dense-Q incremental Schur path.
+            // Uses initialize_box / add_constraint_box — no shared code with
+            // the general caching path.
+            std::vector<int> find_optimal_face_box_schur(
                 const std::vector<int> &initial_face,
                 int &iterations,
                 int &facet_hops,

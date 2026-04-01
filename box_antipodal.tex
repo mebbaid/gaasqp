@@ -564,45 +564,37 @@ The violated set $V=\{j:\lvert g_j/q_j\rvert>\text{bound}_j\}$ is then added in 
 This contrasts with a dense $Q$, where off-diagonal coupling keeps the optimal active set small (typically $O(1)$ constraints) but requires several pivots to resolve; the iteration counts for warmstarted general-purpose solvers such as qpOASES therefore grow as $O(n)$ for diagonal $Q$ (one iteration per active constraint) while staying nearly constant for dense $Q$.
 \end{remark}
 
-\subsubsection{Benchmarks}\label{sec:benchmarks}
 
-We validate Theorem~\ref{thm:two_hops} on a box-constrained linear MPC problem arising from walking robot locomotion.
-The controlled system is a triple integrator (Linear Inverted Pendulum Model, LIPM) with state $x_k = [\mathrm{pos},\mathrm{vel},\mathrm{acc}]^\top$ and control input $u_k$ (jerk), subject to symmetric jerk bounds
-\[
-  -u_{\max} \;\le\; U_i \;\le\; u_{\max}, \quad i=1,\ldots,N,
-\]
-with $u_{\max}=1\,\mathrm{m/s^3}$, CoM height $0.53\,\mathrm{m}$, sampling time $\Delta t=0.1\,\mathrm{s}$, and alternating step lengths $\pm 0.18\,\mathrm{m}$.
-The resulting QP has a dense positive-definite $N\times N$ Hessian $H = \Phi^\top \bar{Q} \Phi + R I$ (computed once per horizon $N$); only the gradient $g_k = \Phi^\top \bar{Q}(x_k^{\mathrm{free}}-x^{\mathrm{ref}})$ changes at each step.
-This matches exactly the box-constrained form required by Theorem~\ref{thm:two_hops}.
+\subsubsection{Benchmarks (randomized QPs first)}\label{sec:benchmarks}
+\subsubsection{Benchmarks (randomized QPs first)}\label{sec:benchmarks}
+
+\noindent\textbf{Randomized box and affine‑image experiments.}
+The randomized suite (see \texttt{benchmarks/benchmark-box.cpp} and \texttt{benchmark_results.txt}) was used to test the geometric claims and to measure algorithmic effort. Key, directly observed facts:
+\begin{itemize}
+  \item Formal checks: the entries for Lemma, Proposition~1 and Proposition~2 are reported as "PASS" across the randomized tables.
+  \item Fast‑path behaviour: for diagonal $Q$ (or diagonal $T$) the box fast‑path triggers in all tested instances (Verts FastPath = 1.0), i.e. Phase~1/2 initialisation yields the closed‑form vertex.
+  \item Phase‑2 pivots: in diagonal/separable instances `AvgPivot` ≈ 2.0 uniformly across $n$; for dense/affine instances `AvgPivot` increases with coupling but remains small (e.g. from ~2.6 at $n=4$ to ~11.0 at $n=200$ in the Phase‑II summary).
+  \item Facet hops: mean `Geo_hops` ≲1 and `MaxHops` ≤2 in almost all cases; the only recorded hop‑bound exceptions occur under extreme ill‑conditioning (cond≈1e6), where hops=3 were observed (see the "HOP BOUND VIOLATION" records).
+  \item Parameter sweeps: (i) separation (`scale_g`) increases `AvgPivot` modestly but not catastrophically in the reported sweep (n=10); (ii) conditioning (cond(Q)) yields modest `AvgPivot` variation (values up to ≈5.8 in the table) while objective differences remain small.
+\end{itemize}
+
+\noindent\textbf{Interpretation (concise).}
+The empirical data corroborate the theoretical mechanism: Phase~1/2 places the solver near the optimal face, hence phase‑2 active‑set work (pivots and facet hops) is small and interpretable. Diagonal structure yields the constant‑pivot fast‑path; dense coupling increases pivot counts moderately but not proportionally to $n$.
 
 \medskip
-\noindent\textbf{Setup.}
-We benchmark GeoQP (four face-hopping strategies), qpOASES (\texttt{QProblemB} with MPC hotstarts), and OSQP (ADMM, warm-started) over horizons $N\in\{10,15,20,30\}$ with $100$ simulation steps per $N$ at primal/dual tolerance $10^{-7}$.
-GeoQP precomputes the Cholesky factorisation of $H$ once per $N$ and hot-starts with gradient-only updates; qpOASES similarly hotstarts its working set.
-
-\medskip
-\noindent\textbf{Corollary~2 verification.}
-The maximum observed facet-hop count (Phase~3 adjacency transitions) was zero across all horizons and all $400$ MPC steps, confirming that the initial exit face $F_0$ is itself already an optimal face or adjacent to one for this problem class.
-The number of Phase~3 active-set \emph{iterations} (add/drop steps within a face) ranged from $0$ to $4$, consistent with the tight box structure.
+\noindent\textbf{LIPM MPC (application‑level study).}
+The LIPM condensed QPs (see \texttt{benchmarks/benchmark_lipm_walking.cpp}) produce dense Hessians per horizon. For the MPC experiments we prioritise `AvgPivot` and `Geo_hops` as primary algorithmic measures; wall‑clock timings are reported but treated as secondary. Empirically, `AvgPivot` medians on LIPM horizons are small (typical reported medians on the order of a few pivots, e.g. 4--12), and `Geo_hops` remains ≲2 in nearly all runs, consistent with the randomized results above.
 
 \begin{figure}[t]
   \centering
-  % \includegraphics[width=\linewidth]{figures/lipm_timing.pdf}
-  \fbox{\parbox{0.95\linewidth}{\centering\vspace{2.5cm}
-    \textbf{Figure placeholder:} Wall-clock solve time ($\mu$s) vs.\ horizon $N$ for GeoQP (four strategies), qpOASES, and OSQP.
-    Lines show mean; shaded bands show $\pm 1$ std.\ dev.\ over 100 steps.
-  \vspace{2.5cm}}}
-  \caption{Solve-time comparison on the LIPM walking MPC benchmark ($u_{\max}=1\,\mathrm{m/s^3}$, $\Delta t = 0.1\,\mathrm{s}$, 100 steps per $N$, tolerance $10^{-7}$). GeoQP achieves competitive or superior wall-clock times and always returns a primal-feasible solution.}
+  \includegraphics[width=0.95\linewidth]{figures_lipm/fig01_lipm_performance.pdf}
+  \caption{Solve-time comparison on the LIPM walking MPC benchmark. Lines show median; shaded bands indicate IQR and 5--95 percentile bands across repeats. GeoQP is competitive with qpOASES and OSQP and returns numerically consistent objectives.}
   \label{fig:lipm_timing}
 \end{figure}
 
 \begin{figure}[t]
   \centering
-  % \includegraphics[width=\linewidth]{figures/lipm_hops.pdf}
-  \fbox{\parbox{0.95\linewidth}{\centering\vspace{2.5cm}
-    \textbf{Figure placeholder:} Phase~3 iteration count (active-set steps) and facet-hop count vs.\ horizon $N$ for GeoQP.
-    The hop count is always $\le 2$, confirming Theorem~\ref{thm:two_hops}.
-  \vspace{2.5cm}}}
-  \caption{Phase~3 active-set iteration count and facet-hop count for GeoQP on the LIPM benchmark. The facet-hop count is zero for all tested horizons, validating the $\le 2$ bound of Theorem~\ref{thm:two_hops} with margin.}
+  \includegraphics[width=0.95\linewidth]{figures_lipm/fig03_violin.pdf}
+  \caption{Algorithmic-effort distributions for GeoQP (phase‑2 pivot count `AvgPivot`) versus qpOASES (reported iterations) at three representative horizons (small/medium/large). GeoQP requires only a few phase‑2 pivots; facet-hop counts (`Geo_hops`) remain \(\le 2\) in nearly all runs.}
   \label{fig:lipm_hops}
 \end{figure}

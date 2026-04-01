@@ -300,6 +300,131 @@ namespace geoqp
             return false;
         }
 
+        bool SchurComplementManager::initialize_box(
+            const std::vector<int> &face,
+            const std::vector<int> &constraint_var,
+            const std::vector<double> &constraint_sign,
+            const double *GEOQP_RESTRICT Q_inv,
+            int n)
+        {
+            k_ = static_cast<int>(face.size());
+            ++stats_.initialize_calls;
+            active_constraints_ = face;
+
+            // Store box-mode context (used by remove_constraint fallback)
+            is_box_mode_ = true;
+            Q_inv_ptr_ = Q_inv;
+            constraint_var_ptr_ = &constraint_var;
+            constraint_sign_ptr_ = &constraint_sign;
+            n_ = n;
+
+            // Clear general-mode context so remove_constraint doesn't try to validate
+            // against the z-cache (which is invalid in box mode).
+            A_ptr_ = nullptr;
+            L_Q_ptr_ = nullptr;
+            cache_ptr_ = nullptr;
+
+            if (k_ == 0)
+            {
+                L_S_.clear();
+                return true;
+            }
+
+            // Build S[i,j] = sign_i * Q_inv[v_i * n + v_j] * sign_j  — O(k²)
+            S_.resize(k_ * k_);
+            for (int i = 0; i < k_; ++i)
+            {
+                const int vi = constraint_var[face[i]];
+                const double si = constraint_sign[face[i]];
+                const double *GEOQP_RESTRICT Q_row_i = Q_inv + vi * n;
+                for (int j = 0; j < k_; ++j)
+                {
+                    const int vj = constraint_var[face[j]];
+                    const double sj = constraint_sign[face[j]];
+                    S_[i * k_ + j] = si * Q_row_i[vj] * sj;
+                }
+            }
+
+            // Sanity check: diagonal must be positive
+            for (int i = 0; i < k_; ++i)
+            {
+                if (S_[i * k_ + i] <= 1e-14)
+                    return false;
+            }
+
+            L_S_.resize(k_ * k_);
+            try
+            {
+                LinearAlgebra::cholesky(S_.data(), L_S_.data(), k_);
+                return true;
+            }
+            catch (...)
+            {
+                return false;
+            }
+        }
+
+        bool SchurComplementManager::add_constraint_box(
+            int constraint_idx,
+            const std::vector<int> &constraint_var,
+            const std::vector<double> &constraint_sign,
+            const double *GEOQP_RESTRICT Q_inv)
+        {
+            const int v_new = constraint_var[constraint_idx];
+            const double s_new = constraint_sign[constraint_idx];
+
+            // New column of S: s[i] = sign_i * Q_inv[v_i * n_ + v_new] * s_new  — O(k)
+            std::vector<double> s(k_);
+            for (int i = 0; i < k_; ++i)
+            {
+                const int vi = constraint_var[active_constraints_[i]];
+                const double si = constraint_sign[active_constraints_[i]];
+                s[i] = si * Q_inv[vi * n_ + v_new] * s_new;
+            }
+
+            // Diagonal entry: S[new,new] = Q_inv[v_new * n_ + v_new]
+            const double sigma = Q_inv[v_new * n_ + v_new];
+
+            std::vector<double> L_new((k_ + 1) * (k_ + 1));
+            bool success = LinearAlgebra::cholesky_extend(
+                L_S_.data(), k_,
+                s.data(), sigma,
+                L_new.data());
+
+            if (success)
+            {
+                ++stats_.extend_success;
+                schur_stats_get().extend_success += 1;
+                L_S_ = std::move(L_new);
+
+                // Extend S_ from k×k to (k+1)×(k+1) — O(k²) data movement, sequential
+                const int k_new = k_ + 1;
+                std::vector<double> S_new(k_new * k_new);
+                for (int i = 0; i < k_; ++i)
+                {
+                    for (int j = 0; j < k_; ++j)
+                        S_new[i * k_new + j] = S_[i * k_ + j];
+                    S_new[i * k_new + k_] = s[i];  // new column
+                }
+                // new row (symmetric) + diagonal
+                for (int j = 0; j < k_; ++j)
+                    S_new[k_ * k_new + j] = s[j];
+                S_new[k_ * k_new + k_] = sigma;
+                S_ = std::move(S_new);
+
+                active_constraints_.push_back(constraint_idx);
+                k_++;
+                return true;
+            }
+
+            // Fallback: reinitialize from scratch including the new constraint
+            ++stats_.extend_fallback;
+            schur_stats_get().extend_fallback += 1;
+            std::vector<int> new_face = active_constraints_;
+            new_face.push_back(constraint_idx);
+            return initialize_box(new_face, constraint_var, constraint_sign, Q_inv, n_);
+        }
+
         bool SchurComplementManager::remove_constraint(int face_index)
         {
             if (face_index < 0 || face_index >= k_)
@@ -310,6 +435,7 @@ namespace geoqp
             if (k_ == 1)
             {
                 L_S_.clear();
+                S_.clear();
                 active_constraints_.clear();
                 k_ = 0;
                 return true;
@@ -324,6 +450,27 @@ namespace geoqp
             {
                 ++stats_.shrink_success;
                 schur_stats_get().shrink_success += 1;
+
+                // Compact S_ by removing row and column face_index — O(k²), sequential
+                if (is_box_mode_ && !S_.empty())
+                {
+                    const int k_old = k_;
+                    const int k_new = k_ - 1;
+                    std::vector<double> S_compact(k_new * k_new);
+                    for (int i = 0; i < k_old; ++i)
+                    {
+                        if (i == face_index) continue;
+                        const int i_new = i < face_index ? i : i - 1;
+                        for (int j = 0; j < k_old; ++j)
+                        {
+                            if (j == face_index) continue;
+                            const int j_new = j < face_index ? j : j - 1;
+                            S_compact[i_new * k_new + j_new] = S_[i * k_old + j];
+                        }
+                    }
+                    S_ = std::move(S_compact);
+                }
+
                 L_S_ = std::move(L_new);
                 active_constraints_.erase(active_constraints_.begin() + face_index);
                 k_--;
@@ -367,6 +514,13 @@ namespace geoqp
 
             ++stats_.shrink_fallback;
             schur_stats_get().shrink_fallback += 1;
+            // Box-mode fallback: reinitialize from the face with constraint removed
+            if (is_box_mode_ && Q_inv_ptr_ && constraint_var_ptr_ && constraint_sign_ptr_)
+            {
+                std::vector<int> new_face = active_constraints_;
+                new_face.erase(new_face.begin() + face_index);
+                return initialize_box(new_face, *constraint_var_ptr_, *constraint_sign_ptr_, Q_inv_ptr_, n_);
+            }
             return false;
         }
 
