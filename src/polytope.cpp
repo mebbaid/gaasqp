@@ -182,11 +182,6 @@ namespace geoqp
             return vertex;
         }
 
-        std::vector<std::vector<double>> Polytope::enumerate_vertices() const
-        {
-            throw std::runtime_error("Vertex enumeration not implemented");
-        }
-
         bool Polytope::is_vertex(const std::vector<double> &x, double tol) const
         {
             auto active = get_active_constraints(x, tol);

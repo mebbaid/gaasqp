@@ -77,21 +77,7 @@ namespace geoqp
         std::vector<double> x_bar(n);
         std::vector<double> neg_g(n);
 
-        const double* GEOQP_RESTRICT g_ptr = g.data();
-        double* GEOQP_RESTRICT neg_g_ptr = neg_g.data();
-        
-        int i = 0;
-        for (; i + 3 < n; i += 4)
-        {
-            neg_g_ptr[i] = -g_ptr[i];
-            neg_g_ptr[i + 1] = -g_ptr[i + 1];
-            neg_g_ptr[i + 2] = -g_ptr[i + 2];
-            neg_g_ptr[i + 3] = -g_ptr[i + 3];
-        }
-        for (; i < n; ++i)
-        {
-            neg_g_ptr[i] = -g_ptr[i];
-        }
+        for (int i = 0; i < n; ++i) neg_g[i] = -g[i];
 
         internal::LinearAlgebra::solve_pd_system(Q.data(), neg_g.data(), x_bar.data(), n);
 
@@ -105,39 +91,10 @@ namespace geoqp
         int m, int n,
         double tol)
     {
-        const double* GEOQP_RESTRICT x_ptr = x.data();
-        const double* GEOQP_RESTRICT A_ptr = A.data();
-        const double* GEOQP_RESTRICT b_ptr = b.data();
-
-        for (int i = 0; i < m; ++i)
-        {
-            const double* GEOQP_RESTRICT row = A_ptr + i * n;
-            
-            double sum0 = 0.0;
-            double sum1 = 0.0;
-            double sum2 = 0.0;
-            double sum3 = 0.0;
-
-            int j = 0;
-            for (; j + 3 < n; j += 4)
-            {
-                sum0 += row[j] * x_ptr[j];
-                sum1 += row[j + 1] * x_ptr[j + 1];
-                sum2 += row[j + 2] * x_ptr[j + 2];
-                sum3 += row[j + 3] * x_ptr[j + 3];
-            }
-            
-            double lhs = (sum0 + sum1) + (sum2 + sum3);
-            
-            for (; j < n; ++j)
-            {
-                lhs += row[j] * x_ptr[j];
-            }
-
-            if (lhs > b_ptr[i] + tol)
-            {
-                return false;
-            }
+        for (int i = 0; i < m; ++i) {
+            const double *row = A.data() + i * n;
+            double lhs = internal::LinearAlgebra::dot(row, x.data(), n);
+            if (lhs > b[i] + tol) return false;
         }
         return true;
     }

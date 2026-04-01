@@ -142,20 +142,19 @@ namespace geoqp
             {
                 LinearAlgebra::cholesky(S.data(), L_S_.data(), k_);
 
-                // Optional debug print: if environment variable GEOQP_PRINT_SCHUR is set,
-                // print the Cholesky factor L_S_ (lower triangular) for inspection.
-                if (std::getenv("GEOQP_PRINT_SCHUR") != nullptr)
+#ifndef NDEBUG
+                static const bool print_schur = (std::getenv("GEOQP_PRINT_SCHUR") != nullptr);
+                if (print_schur)
                 {
                     std::cout << "[SCHUR] k=" << k_ << " L_S (lower-triangular):\n";
                     for (int i = 0; i < k_; ++i)
                     {
                         for (int j = 0; j <= i; ++j)
-                        {
                             std::cout << " " << L_S_[i * k_ + j];
-                        }
                         std::cout << "\n";
                     }
                 }
+#endif
 
                 return true;
             }
@@ -233,8 +232,8 @@ namespace geoqp
                 active_constraints_.push_back(constraint_idx);
                 k_++;
 
-                // Validate incremental update by rebuilding S from cache and
-                // comparing with L_S_ * L_S_^T. Use stored cache/context if available.
+                // Validate incremental Schur update (debug builds only).
+#ifndef NDEBUG
                 ConstraintCache *use_cache = cache_ptr_ ? cache_ptr_ : &cache;
                 const double *use_A = A_ptr_ ? A_ptr_ : A;
                 const double *use_LQ = L_Q_ptr_ ? L_Q_ptr_ : L_Q;
@@ -266,7 +265,6 @@ namespace geoqp
                         }
                     }
 
-                    // reconstruct and compare
                     std::vector<double> S_recon(kk * kk);
                     for (int i = 0; i < kk; ++i)
                         for (int j = 0; j < kk; ++j)
@@ -282,15 +280,13 @@ namespace geoqp
 
                     if (rel_err > 1e-10)
                     {
-                        // Fallback: recompute Schur complement from scratch
                         ++stats_.extend_fallback;
                         schur_stats_get().extend_fallback += 1;
                         if (!initialize(active_constraints_, use_A, use_LQ, n_, *use_cache))
-                        {
                             return false;
-                        }
                     }
                 }
+#endif
 
                 return true;
             }
@@ -487,39 +483,42 @@ namespace geoqp
                 active_constraints_.erase(active_constraints_.begin() + face_index);
                 k_--;
 
-                // Validate shrink using stored cache/context
+                // Validate shrink (debug builds only).
+#ifndef NDEBUG
                 if (cache_ptr_ && A_ptr_ && L_Q_ptr_ && n_ > 0)
                 {
                     const int kk = k_;
-                    if (kk == 0) return true;
-
-                    std::vector<double> S_cache(kk * kk);
-                    for (int i = 0; i < kk; ++i)
+                    if (kk > 0)
                     {
-                        const auto &zi = cache_ptr_->get_z(active_constraints_[i], A_ptr_, L_Q_ptr_);
-                        for (int j = i; j < kk; ++j)
+                        std::vector<double> S_cache(kk * kk);
+                        for (int i = 0; i < kk; ++i)
                         {
-                            const auto &zj = cache_ptr_->get_z(active_constraints_[j], A_ptr_, L_Q_ptr_);
-                            double s = 0.0;
-                            for (int t = 0; t < n_; ++t) s += zi[t] * zj[t];
-                            S_cache[i * kk + j] = s; S_cache[j * kk + i] = s;
+                            const auto &zi = cache_ptr_->get_z(active_constraints_[i], A_ptr_, L_Q_ptr_);
+                            for (int j = i; j < kk; ++j)
+                            {
+                                const auto &zj = cache_ptr_->get_z(active_constraints_[j], A_ptr_, L_Q_ptr_);
+                                double s = 0.0;
+                                for (int t = 0; t < n_; ++t) s += zi[t] * zj[t];
+                                S_cache[i * kk + j] = s; S_cache[j * kk + i] = s;
+                            }
+                        }
+
+                        std::vector<double> L_full(kk * kk);
+                        try { LinearAlgebra::cholesky(S_cache.data(), L_full.data(), kk); }
+                        catch (...) { return false; }
+
+                        double diff_sq = 0.0, ref_sq = 0.0;
+                        for (int i = 0; i < kk * kk; ++i) { double d = L_S_[i] - L_full[i]; diff_sq += d*d; ref_sq += L_full[i]*L_full[i]; }
+                        double rel = std::sqrt(diff_sq) / (std::sqrt(ref_sq) + 1e-20);
+                        if (rel > 1e-10)
+                        {
+                            ++stats_.shrink_fallback;
+                            schur_stats_get().shrink_fallback += 1;
+                            if (!initialize(active_constraints_, A_ptr_, L_Q_ptr_, n_, *cache_ptr_)) return false;
                         }
                     }
-
-                    std::vector<double> L_full(kk * kk);
-                    try { LinearAlgebra::cholesky(S_cache.data(), L_full.data(), kk); }
-                    catch (...) { return false; }
-
-                    double diff_sq = 0.0, ref_sq = 0.0;
-                    for (int i = 0; i < kk * kk; ++i) { double d = L_S_[i] - L_full[i]; diff_sq += d*d; ref_sq += L_full[i]*L_full[i]; }
-                    double rel = std::sqrt(diff_sq) / (std::sqrt(ref_sq) + 1e-20);
-                    if (rel > 1e-10)
-                    {
-                        ++stats_.shrink_fallback;
-                        schur_stats_get().shrink_fallback += 1;
-                        if (!initialize(active_constraints_, A_ptr_, L_Q_ptr_, n_, *cache_ptr_)) return false;
-                    }
                 }
+#endif
 
                 return true;
             }

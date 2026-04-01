@@ -144,7 +144,7 @@ def fig01_performance(off_rows, on_rows, outdir):
         ax.fill_between(sizes, p25, p75, color=color, alpha=0.18)
         ax.fill_between(sizes, p05, p95, color=color, alpha=0.08)
 
-    plot_with_bands(geo_series, C_GEO, 'GeoQP', 'o')
+    plot_with_bands(geo_series, C_GEO, 'GaasQP', 'o')
     plot_with_bands(qpo_series, C_QPO, 'qpOASES', 's')
     # only plot OSQP if there is numeric data
     if not all(np.isnan(np.array([np.nanmedian(s) for s in osqp_series]))):
@@ -330,15 +330,15 @@ def fig02_iterations(off_rows, on_rows, outdir):
     use_geo_iters = not np.all(np.isnan(geo_it) | (geo_it == 0))
     if use_geo_iters:
         geo_metric = geo_it
-        geo_label = "GeoQP (phase2 iters)"
+        geo_label = "GaasQP (iters)"
     else:
         has_avg_pivot = not np.all(np.isnan(avg_pivot))
         if has_avg_pivot:
             geo_metric = avg_pivot
-            geo_label = "GeoQP (phase2 iters - avg pivot)"
+            geo_label = "GaasQP (iters)"
         else:
             geo_metric = geo_hops
-            geo_label = "GeoQP (facet hops)"
+            geo_label = "GaasQP (facet hops)"
 
     fig, ax = plt.subplots(figsize=(W2, 3.0))
     ax.plot(n, geo_metric, "o-", color=C_GEO, label=geo_label, linewidth=1.6)

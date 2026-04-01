@@ -292,17 +292,8 @@ static std::vector<SupportBox> makeSupportBoxes(const Parameters &p,
 
     for (int k = 0; k < N; ++k)
     {
-        SupportBox box;
-        if (phase_idx < nb_dsp)
-        {
-            // Double-support: allow full ZMP within current support foot box
-            box = {foot_x - hx, foot_x + hx, foot_y - hy, foot_y + hy};
-        }
-        else
-        {
-            // Single-support: ZMP constrained to current support foot
-            box = {foot_x - hx, foot_x + hx, foot_y - hy, foot_y + hy};
-        }
+        // Both double-support and single-support use the same foot rectangle.
+        SupportBox box = {foot_x - hx, foot_x + hx, foot_y - hy, foot_y + hy};
         boxes.push_back(box);
 
         ++phase_idx;
@@ -565,12 +556,12 @@ int main()
               << "  stride     = " << p.stride_x    << " x " << p.stride_y    << " m\n"
               << "  Q_scale    = " << p.q_scale     << "  R_scale = " << p.r_scale << "\n\n";
 
-    // We will test horizons N = 5, 10, ..., 120
+    // We will test horizons N = 5, 10, ..., 60
     std::vector<int> horizons;
-    for (int h = 5; h <= 50; h += 5)
+    for (int h = 5; h <= 60; h += 5)
         horizons.push_back(h);
-    for (int h = 60; h <= 120; h += 15)
-        horizons.push_back(h);
+    // for (int h = 60; h <= 120; h += 15)
+    //     horizons.push_back(h);
 
     // reset Schur instrumentation counters once
     geoqp::internal::schur_stats_reset();

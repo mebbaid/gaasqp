@@ -79,7 +79,6 @@ namespace geoqp
             Polytope(const double *A, const double *b, int m, int n);
             void update_bounds(const double *b) { b_ = b; }
             std::vector<double> find_initial_vertex() const;
-            std::vector<std::vector<double>> enumerate_vertices() const;
             bool is_vertex(const std::vector<double> &x, double tol = 1e-8) const;
             std::vector<int> get_active_constraints(
                 const std::vector<double> &x,
@@ -477,13 +476,10 @@ namespace geoqp
             {
                 double compute_intersection_total = 0.0;
                 int compute_intersection_calls = 0;
-
                 double find_initial_face_total = 0.0;
                 int find_initial_face_calls = 0;
-
                 double compute_projection_total = 0.0;
                 int compute_projection_calls = 0;
-
                 double find_optimal_face_total = 0.0;
                 int find_optimal_face_calls = 0;
             } mutable timing_stats_;

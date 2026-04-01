@@ -64,48 +64,5 @@
 #endif
 
 
-#if defined(__OPTIMIZE__) || defined(NDEBUG) || defined(_NDEBUG)
-    #define GEOQP_OPTIMIZED 1
-#else
-    #define GEOQP_OPTIMIZED 0
-#endif
-
-
-#if defined(__x86_64__) || defined(_M_X64) || defined(__amd64__)
-    #define GEOQP_ARCH_X86_64 1
-    #define GEOQP_CACHE_LINE_SIZE 64
-#elif defined(__i386__) || defined(_M_IX86)
-    #define GEOQP_ARCH_X86_32 1
-    #define GEOQP_CACHE_LINE_SIZE 64
-#elif defined(__aarch64__) || defined(_M_ARM64)
-    #define GEOQP_ARCH_ARM64 1
-    #define GEOQP_CACHE_LINE_SIZE 64
-#elif defined(__arm__) || defined(_M_ARM)
-    #define GEOQP_ARCH_ARM32 1
-    #define GEOQP_CACHE_LINE_SIZE 64
-#elif defined(__riscv)
-    #define GEOQP_ARCH_RISCV 1
-    #define GEOQP_CACHE_LINE_SIZE 64
-#else
-    #define GEOQP_ARCH_UNKNOWN 1
-    #define GEOQP_CACHE_LINE_SIZE 64
-#endif
-
-
-#if defined(__clang__)
-    #define GEOQP_COMPILER_CLANG 1
-    #define GEOQP_COMPILER_NAME "Clang"
-#elif defined(__GNUC__)
-    #define GEOQP_COMPILER_GCC 1
-    #define GEOQP_COMPILER_NAME "GCC"
-#elif defined(_MSC_VER)
-    #define GEOQP_COMPILER_MSVC 1
-    #define GEOQP_COMPILER_NAME "MSVC"
-#elif defined(__INTEL_COMPILER)
-    #define GEOQP_COMPILER_INTEL 1
-    #define GEOQP_COMPILER_NAME "Intel ICC"
-#else
-    #define GEOQP_COMPILER_UNKNOWN 1
-    #define GEOQP_COMPILER_NAME "Unknown"
-#endif
+#define GEOQP_CACHE_LINE_SIZE 64
 

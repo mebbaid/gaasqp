@@ -306,31 +306,31 @@ std::vector<int> hopping_strategy_sensitivity(
 ) {
     iterations = 0;
     const int max_iter = config.max_iterations;
-    
+
     if (!schur_manager.initialize(initial_face, A, Q_chol, n, constraint_cache)) {
         return initial_face;
     }
-    
+
     std::vector<double> ws_residual(m);
     std::vector<double> ws_w(n);
     std::vector<double> ws_correction(n);
-    
+
     while (iterations < max_iter) {
         iterations++;
         const auto& current_face = schur_manager.get_active_constraints();
         const int k = schur_manager.size();
-        
+
         std::vector<double> x_star, lambda;
         if (!compute_projection_with_schur(schur_manager, constraint_cache, x_bar,
                                           A, b, Q_chol, n, x_star, lambda,
                                           ws_residual, ws_w, ws_correction)) {
             break;
         }
-        
+
         std::vector<int> to_add;
         bool primal_feasible = check_primal_feasibility(x_star, current_face, A, b,
                                                         m, n, config.constraint_tolerance, to_add);
-        
+
         if (!primal_feasible) {
             bool all_added = true;
             for (int c : to_add) {
@@ -342,44 +342,39 @@ std::vector<int> hopping_strategy_sensitivity(
             if (!all_added) break;
             continue;
         }
-        
+
         int best_drop_idx = -1;
         double best_sensitivity = 0.0;
-        
+
         for (int i = 0; i < k; ++i) {
             if (lambda[i] < -config.constraint_tolerance) {
                 double L_ii = schur_manager.get_L_diagonal(i);
-                if (L_ii < 1e-12) continue; 
+                if (L_ii < 1e-12) continue;
                 double sensitivity = (lambda[i] * lambda[i]) / (2.0 * L_ii * L_ii);
-                
                 if (sensitivity > best_sensitivity) {
                     best_sensitivity = sensitivity;
                     best_drop_idx = i;
                 }
             }
         }
-        
+
         if (best_drop_idx >= 0) {
-            if (!schur_manager.remove_constraint(best_drop_idx)) {
-                break;
-            }
-            
-            if (config.verbosity >= 3) {
-                std::cout << "  [SENSITIVITY] Dropped constraint with sensitivity " 
+            if (!schur_manager.remove_constraint(best_drop_idx)) break;
+            if (config.verbosity >= 3)
+                std::cout << "  [SENSITIVITY] Dropped constraint with sensitivity "
                           << best_sensitivity << "\n";
-            }
             continue;
         }
-        
-        if (config.verbosity >= 3) {
+
+        if (config.verbosity >= 3)
             std::cout << "  [SENSITIVITY] Optimal face with " << current_face.size() << " constraints\n";
-        }
         return schur_manager.get_active_constraints();
     }
-    
+
     return schur_manager.get_active_constraints();
 }
 
+// hopping_strategy_neighbors uses the same single-drop sensitivity criterion.
 std::vector<int> hopping_strategy_neighbors(
     const std::vector<int>& initial_face,
     int& iterations,
@@ -395,84 +390,9 @@ std::vector<int> hopping_strategy_neighbors(
     SchurComplementManager& schur_manager,
     const double* Q_chol
 ) {
-    iterations = 0;
-    const int max_iter = config.max_iterations;
-    
-    if (!schur_manager.initialize(initial_face, A, Q_chol, n, constraint_cache)) {
-        return initial_face;
-    }
-    
-    std::vector<double> ws_residual(m);
-    std::vector<double> ws_w(n);
-    std::vector<double> ws_correction(n);
-    
-    while (iterations < max_iter) {
-        iterations++;
-        const auto& current_face = schur_manager.get_active_constraints();
-        const int k = schur_manager.size();
-        
-        std::vector<double> x_star, lambda;
-        if (!compute_projection_with_schur(schur_manager, constraint_cache, x_bar,
-                                          A, b, Q_chol, n, x_star, lambda,
-                                          ws_residual, ws_w, ws_correction)) {
-            break;
-        }
-        
-        std::vector<int> to_add;
-        bool primal_feasible = check_primal_feasibility(x_star, current_face, A, b,
-                                                        m, n, config.constraint_tolerance, to_add);
-        
-        if (!primal_feasible) {
-            bool all_added = true;
-            for (int c : to_add) {
-                if (!schur_manager.add_constraint(c, A, Q_chol, n, constraint_cache)) {
-                    all_added = false;
-                    break;
-                }
-            }
-            if (!all_added) break;
-            continue;
-        }
-        
-
-        int best_drop_idx = -1;
-        double best_improvement = 0.0;
-        
-        for (int i = 0; i < k; ++i) {
-            if (lambda[i] >= -config.constraint_tolerance) {
-                continue; 
-            }
-            
-            double L_ii = schur_manager.get_L_diagonal(i);
-            if (L_ii < 1e-12) continue;
-            
-            double improvement = (lambda[i] * lambda[i]) / (2.0 * L_ii * L_ii);
-            
-            if (improvement > best_improvement) {
-                best_improvement = improvement;
-                best_drop_idx = i;
-            }
-        }
-        
-        if (best_drop_idx >= 0) {
-            if (!schur_manager.remove_constraint(best_drop_idx)) {
-                break;
-            }
-            
-            if (config.verbosity >= 3) {
-                std::cout << "  [NEIGHBORS] Dropped constraint with improvement " 
-                          << best_improvement << "\n";
-            }
-            continue;
-        }
-        
-        if (config.verbosity >= 3) {
-            std::cout << "  [NEIGHBORS] Optimal face with " << current_face.size() << " constraints\n";
-        }
-        return schur_manager.get_active_constraints();
-    }
-    
-    return schur_manager.get_active_constraints();
+    return hopping_strategy_sensitivity(initial_face, iterations, t, Q, A, b,
+                                        x_bar, m, n, config, constraint_cache,
+                                        schur_manager, Q_chol);
 }
 
 } // namespace internal

@@ -3,82 +3,11 @@
 #include "geoqp/compiler_hints.hpp"
 #include <chrono>
 #include <iostream>
-#include <sstream>
 
 namespace geoqp
 {
     namespace
     {
-#ifdef GEOQP_DEBUG
-        inline void print_phase2_debug(int phase2_iterations, int initial_face_size,
-                                       const std::vector<int> &initial_face,
-                                       const std::vector<double> &good_vertex,
-                                       int verbosity)
-        {
-            if (verbosity < 3)
-                return;
-
-            std::ostringstream oss;
-            oss << "[DBG] Phase2 iterations=" << phase2_iterations
-                << ", initial_face_size=" << initial_face_size << "\n";
-            oss << "[DBG] initial_face: ";
-            for (int c : initial_face)
-                oss << c << " ";
-            oss << "\n";
-            oss << "[DBG] good_vertex: ";
-            for (double xi : good_vertex)
-                oss << xi << " ";
-            oss << "\n";
-            std::cerr << oss.str();
-            std::cout << oss.str();
-            std::cout.flush();
-            std::cerr.flush();
-        }
-
-        // Helper: Print warning if Phase II hops are unexpectedly large
-        inline void print_large_phase2_warning(int phase2_iterations, int initial_face_size,
-                                               int verbosity)
-        {
-            if (verbosity >= 3 && phase2_iterations > 3)
-            {
-                std::cerr << "[WARN] Large Phase II hops: " << phase2_iterations
-                          << " (initial_face_size=" << initial_face_size << ")\n";
-            }
-        }
-
-        // Helper: Print ray intersection trace
-        inline void print_ray_trace(int best_t_min_idx, double best_t_min, int best_t_max_idx,
-                                    double best_t_max, const std::vector<int> &initial_face,
-                                    const std::vector<double> &t_vals, int verbosity)
-        {
-            std::ostringstream oss;
-            oss << "[TRACE] Computed ray t in (0,1): t_min_idx=" << best_t_min_idx
-                << " t_min=" << best_t_min
-                << " , t_max_idx=" << best_t_max_idx << " t_max=" << best_t_max << "\n";
-            oss << "[TRACE] initial_face returned: ";
-            for (int c : initial_face)
-                oss << c << " ";
-            oss << "\n";
-            std::cerr << oss.str();
-            std::cout << oss.str();
-
-            if (verbosity >= 3)
-            {
-                std::ostringstream oss2;
-                oss2 << "[TRACE] constraints with 0<t<1: ";
-                for (size_t ci = 0; ci < t_vals.size(); ++ci)
-                {
-                    double t = t_vals[ci];
-                    if (t > 0.0 && t < 1.0)
-                        oss2 << ci << ":" << t << " ";
-                }
-                oss2 << "\n";
-                std::cerr << oss2.str();
-                std::cout << oss2.str();
-            }
-        }
-#endif
-
         bool is_feasible_ptr(const double *GEOQP_RESTRICT x, const double *GEOQP_RESTRICT A,
                              const double *GEOQP_RESTRICT b, int m, int n, double tol)
         {
@@ -185,8 +114,7 @@ namespace geoqp
         std::vector<int> ws_optimal_face_;
         std::vector<double> ws_lambda_local_;
         std::vector<double> ws_Ax_bar_;
-        std::vector<double> ws_temp_n_; // For Cholesky-based objective computation
-        std::vector<double> ws_d_;      // For ray computation in debug paths
+        std::vector<double> ws_temp_n_;
 
         // Workspace for bound-constraint expansion (lb/ub → A/b rows)
         std::vector<double> ws_A_exp_;
@@ -400,26 +328,9 @@ namespace geoqp
                     std::cout << "Initial face has " << ws_initial_face_.size() << " constraints\n";
                 }
 
-// Debug: When verbose, compute ray intersection parameter t
-#ifdef GEOQP_DEBUG
-                if (config_.verbosity >= 3)
-                {
-                    compute_ax_bar(A_ptr, x_bar.data(), m_exp, problem.n);
-                    compute_and_print_ray_trace(A_ptr, x_bar, ws_good_vertex_,
-                                                m_exp, problem.n);
-                }
-#endif
-
                 // Phase II: Find optimal face
                 ws_optimal_face_ = face_hopper.find_optimal_face(
                     ws_initial_face_, sol.phase2_iterations, sol.phase2_facet_hops);
-
-#ifdef GEOQP_DEBUG
-                print_phase2_debug(sol.phase2_iterations, static_cast<int>(ws_initial_face_.size()),
-                                   ws_initial_face_, ws_good_vertex_, config_.verbosity);
-                print_large_phase2_warning(sol.phase2_iterations, static_cast<int>(ws_initial_face_.size()),
-                                           config_.verbosity);
-#endif
 
                 auto phase2_end = Clock::now();
                 sol.phase2_time = std::chrono::duration<double>(phase2_end - phase2_start).count();
@@ -549,7 +460,9 @@ namespace geoqp
             sol.solve_time = std::chrono::duration<double>(end_time - start_time).count();
 
             return sol;
-        }        const Config &config() const { return config_; }
+        }
+
+        const Config &config() const { return config_; }
         void set_config(const Config &config) { config_ = config; }
 
         void setup(int n, int m, const double *Q, const double *A)
@@ -585,7 +498,6 @@ namespace geoqp
             ws_lambda_local_.reserve(m);
             ws_Ax_bar_.resize(m);
             ws_temp_n_.resize(n);
-            ws_d_.resize(n);
 
             std::vector<double> dummy_b(m, 0.0);
             std::vector<double> dummy_x_bar(n, 0.0);
@@ -650,7 +562,6 @@ namespace geoqp
             ws_lambda_local_.clear();
             ws_Ax_bar_.clear();
             ws_temp_n_.clear();
-            ws_d_.clear();
 
             cached_polytope_.reset();
             cached_initializer_.reset();
@@ -976,57 +887,6 @@ namespace geoqp
             return 0.5 * quad_obj + lin_obj;
         }
 
-#ifdef GEOQP_DEBUG
-        // Debug helper: Compute and print ray intersection trace
-        inline void compute_and_print_ray_trace(const double *GEOQP_RESTRICT A,
-                                                const std::vector<double> &x_bar,
-                                                const std::vector<double> &good_vertex,
-                                                int m, int n)
-        {
-            // Compute direction d = x_bar - good_vertex
-            for (int i = 0; i < n; ++i)
-                ws_d_[i] = x_bar[i] - good_vertex[i];
-
-            int best_t_min_idx = -1, best_t_max_idx = -1;
-            double best_t_min = 1e300, best_t_max = -1e300;
-
-            std::vector<double> t_vals(m);
-            for (int ci = 0; ci < m; ++ci)
-            {
-                const double *row = A + ci * n;
-                double dot_g = 0.0;
-                double dot_d = 0.0;
-                for (int j = 0; j < n; ++j)
-                {
-                    dot_g += row[j] * good_vertex[j];
-                    dot_d += row[j] * ws_d_[j];
-                }
-                double numer = ws_Ax_bar_[ci] - dot_g;
-                double denom = dot_d;
-                double t = std::numeric_limits<double>::infinity();
-                if (std::abs(denom) > 1e-18)
-                    t = numer / denom;
-                t_vals[ci] = t;
-                if (t > 0.0 && t < 1.0)
-                {
-                    if (t < best_t_min)
-                    {
-                        best_t_min = t;
-                        best_t_min_idx = ci;
-                    }
-                    if (t > best_t_max)
-                    {
-                        best_t_max = t;
-                        best_t_max_idx = ci;
-                    }
-                }
-            }
-
-            print_ray_trace(best_t_min_idx, best_t_min, best_t_max_idx, best_t_max,
-                            ws_initial_face_, t_vals, config_.verbosity);
-        }
-#endif
-
         Config config_;
 
         bool is_setup_ = false;
@@ -1060,9 +920,8 @@ namespace geoqp
         return impl_->solve(problem);
     }
 
-    Solution Solver::solve(const Problem &problem, const Solution &warm_start)
+    Solution Solver::solve(const Problem &problem, const Solution & /*warm_start*/)
     {
-        // TODO: Implement warm start
         return impl_->solve(problem);
     }
 
