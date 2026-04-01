@@ -13,9 +13,15 @@ if(qpOASES_FOUND)
     if(QpSolversEigen_FOUND AND OsqpEigen_FOUND)
         target_link_libraries(benchmark_box PRIVATE
             geoqp
+            QpSolversEigen::QpSolversEigen
             OsqpEigen::OsqpEigen
             ${qpOASES_LIBRARY})
         target_compile_definitions(benchmark_box PRIVATE HAVE_OSQP=1)
+    elseif(QpSolversEigen_FOUND)
+        target_link_libraries(benchmark_box PRIVATE
+            geoqp
+            QpSolversEigen::QpSolversEigen
+            ${qpOASES_LIBRARY})
     else()
         target_link_libraries(benchmark_box PRIVATE
             geoqp

@@ -116,11 +116,12 @@ namespace geoqp
                 }
             }
 
-            // Precompute Q_inv if Q is dense and n is manageable.
-            // Skipped for cold-start paths (precompute_q_inv=false) where Q changes
-            // every call; per-column Cholesky solves (O(k n²)) are cheaper overall
-            // than full Q_inv precomputation (O(n³)) when k << n.
-            if (precompute_q_inv && q_is_dense_ && n_ <= 256 && !Q_chol_.empty())
+            // Precompute Q_inv when requested and n is manageable.
+            // Converts per-pivot Cholesky solves from O(k·n²) to O(k·n) column
+            // lookups.  The q_is_dense_ guard is dropped here — block-diagonal Qs
+            // (e.g. 2-D MPC with decoupled x/y) have exactly half the matrix zero
+            // and would be incorrectly excluded by the density heuristic.
+            if (precompute_q_inv && n_ <= 256 && !Q_chol_.empty())
             {
                 Q_inv_.resize(n_ * n_);
                 std::vector<double> e(n_, 0.0);
@@ -131,7 +132,7 @@ namespace geoqp
                     e[i] = 0.0;
                 }
                 if (config_.verbosity >= 2)
-                    std::cout << "  Q is dense - precomputed Q_inv for fast access\n";
+                    std::cout << "  Precomputed Q_inv for O(k·n) per-pivot projection\n";
             }
 
             // Preallocate all workspaces up-front

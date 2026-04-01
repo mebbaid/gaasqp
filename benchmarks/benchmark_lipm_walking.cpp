@@ -360,9 +360,10 @@ static Result runGeoQP(const DenseQP &qp, geoqp::FaceHoppingStrategy strat, cons
 
     geoqp::Config cfg;
     cfg.face_hopping_strategy = strat;
-    // keep caller control of cfg.use_caching by passing via env var
+    // Enable caching (incremental Schur complement) by default;
+    // can be overridden to 0 via env var for comparison.
     const char *env = std::getenv("GEOQP_USE_CACHING");
-    cfg.use_caching = (env && std::string(env) == "1");
+    cfg.use_caching = !(env && std::string(env) == "0");
     cfg.warm_start = false;
     cfg.tolerance = 1e-7;
     cfg.constraint_tolerance = 1e-6; // relax constraint feasibility tolerance for robustness
@@ -566,6 +567,8 @@ int main()
     std::vector<int> horizons;
     for (int h = 5; h <= 50; h += 5)
         horizons.push_back(h);
+    for (int h = 60; h <= 120; h += 15)
+        horizons.push_back(h);
 
     // reset Schur instrumentation counters once
     geoqp::internal::schur_stats_reset();
@@ -574,10 +577,11 @@ int main()
     int repeats = repeats_env ? std::atoi(repeats_env) : 30;
 
     const char *caching_env = std::getenv("GEOQP_USE_CACHING");
+    const bool caching_on = !(caching_env && std::string(caching_env) == "0");
 
     std::cout << "\nResults (horizons)\n";
     std::cout << "# repeats=" << repeats
-              << " GEOQP_USE_CACHING=" << (caching_env ? caching_env : "(unset)") << "\n";
+              << " GEOQP_USE_CACHING=" << (caching_on ? "1" : "0") << "\n";
     std::cout << "CASE format: n=<horizon> QP_n=<n> QP_m=<m> run_idx=<i>"
                  " Geo_us=<ms> qpO_us=<ms> OSQP_us=<ms>"
                  " Geo_it=<it> qpO_it=<it> OSQP_it=<it>"
