@@ -254,19 +254,23 @@ namespace geoqp
             const std::vector<int> &get_active_constraints() const { return active_constraints_; }
             int size() const { return k_; }
 
-            // Cached k×k Schur complement (box mode only).  Row-major, stride k.
-            // Used by find_optimal_face_box_schur for O(k²) sequential validation
-            // instead of O(k²) scattered Q_inv access.
-            const double *get_S_matrix() const { return S_.data(); }
+            // Access the cached S matrix (s_stride_-wide stride, k_ active rows/cols used).
+            // Safe to call only in box mode.  Used for O(k²) sequential validation.
+            const double *get_S_matrix()  const { return S_.data(); }
+            int           get_S_stride()  const { return s_stride_; }
 
         private:
             std::vector<double> L_S_;
-            std::vector<double> S_;           // cached k×k symmetric Schur complement (box mode)
+            // S_: n_ × n_ preallocated Schur complement.  Only the top-left k_ × k_
+            // submatrix (with row stride n_) is valid.  Static stride avoids O(k²)
+            // relayout on each add_constraint_box call.
+            std::vector<double> S_;
             std::vector<int> active_constraints_;
             int k_;
             const double *A_ptr_ = nullptr;
             const double *L_Q_ptr_ = nullptr;
-            int n_ = 0;
+            int n_ = 0;         // Q_inv row stride (= problem half-dimension for box paths)
+            int s_stride_ = 0;  // S_ row stride (= 2*n_ to accommodate up to 2n constraints)
             ConstraintCache *cache_ptr_ = nullptr;
             // Box-mode context (set by initialize_box, used by remove_constraint fallback)
             bool is_box_mode_ = false;
@@ -406,6 +410,15 @@ namespace geoqp
 
             std::vector<double> Q_chol_;
             mutable std::vector<double> Q_inv_;
+            // Compact N×N inverse of the scalar sub-Hessian H_s (same as Q_inv
+            // restricted to even-even or odd-odd indices for the block-diagonal
+            // 2D DCM case).  Populated alongside Q_inv_ when has_diagonal_constraints_
+            // and Q has the 2×2-block structure.  Used by find_optimal_face_box_schur
+            // to halve k, n in every inner-loop operation.
+            mutable std::vector<double> H_s_inv_;
+            // Per-constraint half-index: constraint_var_half_[i] = constraint_var_[i]/2
+            // Valid when H_s_inv_ is populated.
+            std::vector<int> constraint_var_half_;
             bool has_diagonal_constraints_ = false;
             bool q_is_dense_ = false;
 
@@ -430,7 +443,8 @@ namespace geoqp
             mutable std::vector<double> ws_opt_lambda_;
             mutable std::vector<int> ws_opt_violated_;
             mutable std::vector<int> ws_opt_smaller_face_;
-            mutable std::vector<char> ws_opt_is_active_set_; 
+            mutable std::vector<char> ws_opt_is_active_set_;
+            mutable std::vector<double> ws_lambda_y_;  // y-axis lambda scratch (box_schur)
 
             bool q_is_diagonal_ = false;
             std::vector<double> Q_diag_;

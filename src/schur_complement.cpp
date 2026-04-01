@@ -324,14 +324,21 @@ namespace geoqp
             L_Q_ptr_ = nullptr;
             cache_ptr_ = nullptr;
 
+            // S_ uses static stride s_stride_ = 2*n to accommodate up to 2n constraints
+            // (each variable has at most 2 box bounds).  This avoids relayout on adds
+            // and prevents out-of-bounds when k_ grows beyond n during active-set iters.
+            // Set stride and resize BEFORE the k_==0 early-return so that
+            // add_constraint_box can safely extend into S_ even from an empty face.
+            s_stride_ = 2 * n;
+            if (static_cast<int>(S_.size()) < s_stride_ * s_stride_)
+                S_.resize(s_stride_ * s_stride_);   // contents of unused portions don't matter
+
             if (k_ == 0)
             {
                 L_S_.clear();
                 return true;
             }
 
-            // Build S[i,j] = sign_i * Q_inv[v_i * n + v_j] * sign_j  — O(k²)
-            S_.resize(k_ * k_);
             for (int i = 0; i < k_; ++i)
             {
                 const int vi = constraint_var[face[i]];
@@ -341,21 +348,27 @@ namespace geoqp
                 {
                     const int vj = constraint_var[face[j]];
                     const double sj = constraint_sign[face[j]];
-                    S_[i * k_ + j] = si * Q_row_i[vj] * sj;
+                    S_[i * s_stride_ + j] = si * Q_row_i[vj] * sj;
                 }
             }
 
             // Sanity check: diagonal must be positive
             for (int i = 0; i < k_; ++i)
             {
-                if (S_[i * k_ + i] <= 1e-14)
+                if (S_[i * s_stride_ + i] <= 1e-14)
                     return false;
             }
+
+            // Build compact k×k S for Cholesky (LinearAlgebra::cholesky expects stride=k)
+            std::vector<double> S_compact(k_ * k_);
+            for (int i = 0; i < k_; ++i)
+                for (int j = 0; j < k_; ++j)
+                    S_compact[i * k_ + j] = S_[i * s_stride_ + j];
 
             L_S_.resize(k_ * k_);
             try
             {
-                LinearAlgebra::cholesky(S_.data(), L_S_.data(), k_);
+                LinearAlgebra::cholesky(S_compact.data(), L_S_.data(), k_);
                 return true;
             }
             catch (...)
@@ -397,20 +410,14 @@ namespace geoqp
                 schur_stats_get().extend_success += 1;
                 L_S_ = std::move(L_new);
 
-                // Extend S_ from k×k to (k+1)×(k+1) — O(k²) data movement, sequential
-                const int k_new = k_ + 1;
-                std::vector<double> S_new(k_new * k_new);
+                // Extend S_ with new row/column — O(k) writes, no relayout needed
+                // because S_ uses static stride s_stride_.
                 for (int i = 0; i < k_; ++i)
                 {
-                    for (int j = 0; j < k_; ++j)
-                        S_new[i * k_new + j] = S_[i * k_ + j];
-                    S_new[i * k_new + k_] = s[i];  // new column
+                    S_[i * s_stride_ + k_] = s[i];   // new column entry for existing row i
+                    S_[k_ * s_stride_ + i] = s[i];   // new row entry (symmetric)
                 }
-                // new row (symmetric) + diagonal
-                for (int j = 0; j < k_; ++j)
-                    S_new[k_ * k_new + j] = s[j];
-                S_new[k_ * k_new + k_] = sigma;
-                S_ = std::move(S_new);
+                S_[k_ * s_stride_ + k_] = sigma;     // new diagonal
 
                 active_constraints_.push_back(constraint_idx);
                 k_++;
@@ -435,7 +442,6 @@ namespace geoqp
             if (k_ == 1)
             {
                 L_S_.clear();
-                S_.clear();
                 active_constraints_.clear();
                 k_ = 0;
                 return true;
@@ -451,24 +457,30 @@ namespace geoqp
                 ++stats_.shrink_success;
                 schur_stats_get().shrink_success += 1;
 
-                // Compact S_ by removing row and column face_index — O(k²), sequential
+                // Compact S_ in-place: remove row face_index and column face_index.
+                // Two-phase memmove approach — all sequential memory operations.
                 if (is_box_mode_ && !S_.empty())
                 {
+                    double *Sptr = S_.data();
                     const int k_old = k_;
-                    const int k_new = k_ - 1;
-                    std::vector<double> S_compact(k_new * k_new);
-                    for (int i = 0; i < k_old; ++i)
+
+                    // Phase 1: shift rows face_index+1..k_old-1 up by s_stride_ doubles
+                    if (face_index < k_old - 1)
+                        std::memmove(Sptr + face_index * s_stride_,
+                                     Sptr + (face_index + 1) * s_stride_,
+                                     static_cast<std::size_t>(k_old - face_index - 1) * s_stride_ * sizeof(double));
+
+                    // Phase 2: for each of the k_new remaining rows, shift columns
+                    // face_index+1..k_old-1 left by 1 to close the gap.
+                    const int k_new = k_old - 1;
+                    if (face_index < k_old - 1)
                     {
-                        if (i == face_index) continue;
-                        const int i_new = i < face_index ? i : i - 1;
-                        for (int j = 0; j < k_old; ++j)
-                        {
-                            if (j == face_index) continue;
-                            const int j_new = j < face_index ? j : j - 1;
-                            S_compact[i_new * k_new + j_new] = S_[i * k_old + j];
-                        }
+                        for (int i = 0; i < k_new; ++i)
+                            std::memmove(Sptr + i * s_stride_ + face_index,
+                                         Sptr + i * s_stride_ + face_index + 1,
+                                         static_cast<std::size_t>(k_old - face_index - 1) * sizeof(double));
                     }
-                    S_ = std::move(S_compact);
+                    // If face_index == k_old-1: last row/col removed; no shifting needed for phase 1/2.
                 }
 
                 L_S_ = std::move(L_new);

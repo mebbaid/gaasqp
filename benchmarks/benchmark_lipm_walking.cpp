@@ -450,6 +450,8 @@ static Result runOSQP(const DenseQP &qp)
         return res;
 
     solver.setBooleanParameter("verbose", false);
+    solver.setRealNumberParameter("eps_abs", 1e-7);
+    solver.setRealNumberParameter("eps_rel", 1e-7);
     solver.data()->setNumberOfVariables(n);
     solver.data()->setNumberOfInequalityConstraints(m_total);
     solver.data()->setHessianMatrix(H_s);

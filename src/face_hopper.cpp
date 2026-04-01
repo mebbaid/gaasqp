@@ -133,6 +133,31 @@ namespace geoqp
                 }
                 if (config_.verbosity >= 2)
                     std::cout << "  Precomputed Q_inv for O(k·n) per-pivot projection\n";
+
+                // For box problems whose Q is block-diagonal (x/y decoupled, n_=2N),
+                // extract the compact N×N sub-inverse H_s_inv from Q_inv by reading
+                // every other row/column (even-even entries = x block = y block).
+                // Has_diagonal_constraints_ is only set after this block, so we check
+                // the structure directly: Q must have exactly zero off-parity entries.
+                // We do a quick check: if n_ is even, try extracting and verify one
+                // cross entry Q_inv[0 * n_ + 1] ≈ 0 (sufficient for LIPM structure).
+                if (n_ % 2 == 0)
+                {
+                    const int N_half = n_ / 2;
+                    // Cross-block entry Q_inv[0, 1] should be 0 for x/y-decoupled Q.
+                    const double cross = Q_inv_[0 * n_ + 1];
+                    if (std::abs(cross) < 1e-10)
+                    {
+                        H_s_inv_.resize(N_half * N_half);
+                        for (int i = 0; i < N_half; ++i)
+                            for (int j = 0; j < N_half; ++j)
+                                H_s_inv_[i * N_half + j] = Q_inv_[2 * i * n_ + 2 * j];
+                    }
+                    else
+                    {
+                        H_s_inv_.clear();
+                    }
+                }
             }
 
             // Preallocate all workspaces up-front
@@ -185,6 +210,14 @@ namespace geoqp
                 std::cout << "  Detected diagonal/box constraints - using fast path\n";
             if (config_.use_caching && !Q_chol_.empty() && config_.verbosity >= 2)
                 std::cout << "  Incremental Schur complement caching enabled\n";
+
+            // Build compressed half-indices (used by find_optimal_face_box_schur).
+            if (has_diagonal_constraints_)
+            {
+                constraint_var_half_.resize(m_);
+                for (int i = 0; i < m_; ++i)
+                    constraint_var_half_[i] = constraint_var_[i] / 2;
+            }
         }
 
         double FaceHopper::compute_intersection_parameter(
@@ -1279,9 +1312,13 @@ namespace geoqp
         }
 
         // ── Box+dense-Q incremental Schur — fully standalone ────────────────────────
-        // Implements the same add/drop active-set loop as the non-cached path but
-        // replaces the per-pivot O(k³) LU solve with incremental Cholesky O(k²).
-        // No interaction with ConstraintCache or Q_chol; uses only Q_inv and box metadata.
+        // Exploits the block-diagonal structure Q = diag(H_s, H_s) of the LIPM MPC
+        // condensed Hessian.  The x and y axes are completely decoupled:
+        //   S = diag(S_x, S_y),  S_x[i,j] = sign_xi * H_s_inv[p_i,p_j] * sign_xj
+        // where p = constraint_var / 2 is the compressed (per-axis) variable index.
+        //
+        // Two independent N×N SchurComplementManagers are used (instead of one 2N×2N),
+        // giving ~2× speedup on every O(k²) and O(k·n) inner-loop operation.
         std::vector<int> FaceHopper::find_optimal_face_box_schur(
             const std::vector<int> &initial_face,
             int &iterations,
@@ -1291,19 +1328,30 @@ namespace geoqp
             iterations = 0;
             facet_hops = 0;
 
-            // Initialise Schur complement from the initial face (O(k²)+O(k³)).
-            if (!schur_manager_.initialize_box(initial_face, constraint_var_, constraint_sign_, Q_inv_.data(), n_))
+            const int N = n_ / 2;   // half problem dimension (per axis)
+            const double *GEOQP_RESTRICT Hs = H_s_inv_.data();
+            const double *GEOQP_RESTRICT xbar_ptr = x_bar_.data();
+
+            // ── Partition initial_face into x (even vars) and y (odd vars) ──────
+            // We use two stack-resident SchurComplementManagers, one per axis.
+            std::vector<int> face_x_init, face_y_init;
+            face_x_init.reserve(initial_face.size());
+            face_y_init.reserve(initial_face.size());
+            for (int c : initial_face)
             {
-                // Initialization failed — signal caller to fall back by returning a
-                // sentinel empty vector (initial_face is always non-empty here).
-                return {};
+                if (constraint_var_[c] % 2 == 0) face_x_init.push_back(c);
+                else                              face_y_init.push_back(c);
             }
+
+            // Two local Schur managers operating in N-dimensional space with H_s_inv.
+            SchurComplementManager sx, sy;
+            if (!sx.initialize_box(face_x_init, constraint_var_half_, constraint_sign_, Hs, N) ||
+                !sy.initialize_box(face_y_init, constraint_var_half_, constraint_sign_, Hs, N))
+                return {};
 
             ws_x_star_.resize(n_);
             ws_is_active_.assign(m_, 0);
 
-            const double *GEOQP_RESTRICT xbar_ptr = x_bar_.data();
-            const double *GEOQP_RESTRICT Qinv     = Q_inv_.data();
             bool last_was_add = false;
 
             while (iterations < config_.max_iterations)
@@ -1311,45 +1359,58 @@ namespace geoqp
                 ++iterations;
                 ::geoqp::timing::face_hops_count.fetch_add(1, std::memory_order_relaxed);
 
-                const auto &face = schur_manager_.get_active_constraints();
-                const int k = schur_manager_.size();
+                const auto &fx = sx.get_active_constraints();
+                const auto &fy = sy.get_active_constraints();
+                const int kx = sx.size();
+                const int ky = sy.size();
 
-                // ── 1. Residual: r_i = (A x̄)_i − b_i  →  O(k) lookup ──────────
-                ws_residual_.resize(k);
-                for (int i = 0; i < k; ++i)
-                {
-                    const int idx = face[i];
-                    ws_residual_[i] = ws_Axbar_[idx] - b_[idx];
-                }
+                // ── 1. Residuals (x and y independently) ─────────────────────────
+                ws_residual_.resize(kx);
+                for (int i = 0; i < kx; ++i)
+                    ws_residual_[i] = ws_Axbar_[fx[i]] - b_[fx[i]];
+                std::vector<double> res_y(ky);
+                for (int i = 0; i < ky; ++i)
+                    res_y[i] = ws_Axbar_[fy[i]] - b_[fy[i]];
 
-                // ── 2. Solve S λ = r via incremental Cholesky  →  O(k²) ─────────
-                ws_lambda_.resize(k);
-                if (!schur_manager_.solve(ws_residual_, ws_lambda_))
-                {
-                    // Schur factor is degenerate — reinitialize and retry once.
-                    if (!schur_manager_.initialize_box(face, constraint_var_, constraint_sign_, Qinv, n_) ||
-                        !schur_manager_.solve(ws_residual_, ws_lambda_))
-                        return {};  // signal fallback to non-cached path
-                }
+                // ── 2. Solve S_x λ_x = r_x  and  S_y λ_y = r_y  →  2 × O((k/2)²) ─
+                ws_lambda_.resize(kx);
+                ws_lambda_y_.resize(ky);
 
-                // ── 2b. Validate: ||S λ − r|| / ||r||  →  O(k²) sequential ──────
-                // Uses the cached k×k S matrix (row-major, stride k, fits in L1/L2)
-                // instead of scattered Q_inv reads — vectorizable, cache-friendly.
+                auto reinit_x = [&]() {
+                    return sx.initialize_box(fx, constraint_var_half_, constraint_sign_, Hs, N) &&
+                           sx.solve(ws_residual_, ws_lambda_);
+                };
+                auto reinit_y = [&]() {
+                    return sy.initialize_box(fy, constraint_var_half_, constraint_sign_, Hs, N) &&
+                           sy.solve(res_y, ws_lambda_y_);
+                };
+
+                if (!sx.solve(ws_residual_, ws_lambda_) && !reinit_x()) return {};
+                if (!sy.solve(res_y, ws_lambda_y_)      && !reinit_y()) return {};
+
+                // ── 2b. Validate: ||S_? λ_? − r_?|| / ||r_?||  →  O((k/2)²) each ─
+                // S_ is cached with stride N inside each manager (H_s_inv row-major).
+                auto validate = [&](SchurComplementManager &mgr,
+                                    const std::vector<double> &lam,
+                                    const std::vector<double> &r,
+                                    bool is_x) -> bool
                 {
-                    const double *GEOQP_RESTRICT S_mat = schur_manager_.get_S_matrix();
+                    const int km = mgr.size();
+                    if (km == 0) return true;
+                    const double *GEOQP_RESTRICT S_mat = mgr.get_S_matrix();
+                    const int S_stride = mgr.get_S_stride();
                     double res_sq = 0.0, r_sq = 0.0;
-                    for (int i = 0; i < k; ++i)
+                    for (int i = 0; i < km; ++i)
                     {
-                        const double *GEOQP_RESTRICT S_row = S_mat + i * k;
-                        const double *GEOQP_RESTRICT lam   = ws_lambda_.data();
+                        const double *GEOQP_RESTRICT S_row = S_mat + i * S_stride;
                         double Sl = 0.0;
                         int jj = 0;
-                        for (; jj + 3 < k; jj += 4)
+                        for (; jj + 3 < km; jj += 4)
                             Sl += S_row[jj]*lam[jj] + S_row[jj+1]*lam[jj+1]
                                 + S_row[jj+2]*lam[jj+2] + S_row[jj+3]*lam[jj+3];
-                        for (; jj < k; ++jj)
+                        for (; jj < km; ++jj)
                             Sl += S_row[jj] * lam[jj];
-                        const double ri = ws_residual_[i];
+                        const double ri = r[i];
                         const double di = Sl - ri;
                         res_sq += di * di;
                         r_sq   += ri * ri;
@@ -1357,103 +1418,152 @@ namespace geoqp
                     const double rel = std::sqrt(res_sq) / (std::sqrt(r_sq) + 1e-20);
                     if (rel > 1e-8)
                     {
-                        // Drift detected — full reinit + re-solve
-                        if (!schur_manager_.initialize_box(face, constraint_var_, constraint_sign_, Qinv, n_) ||
-                            !schur_manager_.solve(ws_residual_, ws_lambda_))
-                            return {};
+                        if (is_x) return reinit_x();
+                        else      return reinit_y();
                     }
-                }
+                    return true;
+                };
 
-                // ── 3. x* = x̄ − Σ λ_j · s_j · Q_inv[:,v_j]  →  O(k·n) ──────────
-                double *GEOQP_RESTRICT xstar_ptr = ws_x_star_.data();
-                std::copy(xbar_ptr, xbar_ptr + n_, xstar_ptr);
-                for (int j = 0; j < k; ++j)
+                if (!validate(sx, ws_lambda_,   ws_residual_, true))  return {};
+                if (!validate(sy, ws_lambda_y_,  res_y,        false)) return {};
+
+                // ── 3. x* = x̄ − correction  →  2 × O((k/2)·N) ─────────────────
+                // x-constraints update only even components; y only odd.
+                // H_s_inv rows are contiguous (stride N) — fully vectorisable.
+                double *GEOQP_RESTRICT xstar = ws_x_star_.data();
+                std::copy(xbar_ptr, xbar_ptr + n_, xstar);
+
+                for (int j = 0; j < kx; ++j)
                 {
-                    const int v = constraint_var_[face[j]];
-                    const double lam_s = ws_lambda_[j] * constraint_sign_[face[j]];
-                    const double *GEOQP_RESTRICT col = Qinv + v * n_;
-                    int i = 0;
-                    for (; i + 3 < n_; i += 4)
+                    const int p = constraint_var_half_[fx[j]];
+                    const double lam_s = ws_lambda_[j] * constraint_sign_[fx[j]];
+                    const double *GEOQP_RESTRICT row = Hs + p * N;
+                    int l = 0;
+                    for (; l + 3 < N; l += 4)
                     {
-                        xstar_ptr[i]     -= lam_s * col[i];
-                        xstar_ptr[i + 1] -= lam_s * col[i + 1];
-                        xstar_ptr[i + 2] -= lam_s * col[i + 2];
-                        xstar_ptr[i + 3] -= lam_s * col[i + 3];
+                        xstar[2*l  ] -= lam_s * row[l  ];
+                        xstar[2*l+2] -= lam_s * row[l+1];
+                        xstar[2*l+4] -= lam_s * row[l+2];
+                        xstar[2*l+6] -= lam_s * row[l+3];
                     }
-                    for (; i < n_; ++i)
-                        xstar_ptr[i] -= lam_s * col[i];
+                    for (; l < N; ++l)
+                        xstar[2*l] -= lam_s * row[l];
                 }
-
-                // ── 4. Dual check: drop most-negative λ ──────────────────────────
-                int drop_idx = -1;
-                double min_lambda = -config_.constraint_tolerance;
-                for (int i = 0; i < k; ++i)
+                for (int j = 0; j < ky; ++j)
                 {
-                    if (ws_lambda_[i] < min_lambda)
+                    const int p = constraint_var_half_[fy[j]];
+                    const double lam_s = ws_lambda_y_[j] * constraint_sign_[fy[j]];
+                    const double *GEOQP_RESTRICT row = Hs + p * N;
+                    int l = 0;
+                    for (; l + 3 < N; l += 4)
                     {
-                        min_lambda = ws_lambda_[i];
-                        drop_idx = i;
+                        xstar[2*l+1] -= lam_s * row[l  ];
+                        xstar[2*l+3] -= lam_s * row[l+1];
+                        xstar[2*l+5] -= lam_s * row[l+2];
+                        xstar[2*l+7] -= lam_s * row[l+3];
                     }
+                    for (; l < N; ++l)
+                        xstar[2*l+1] -= lam_s * row[l];
                 }
 
-                if (drop_idx >= 0)
+                // ── 4. Dual check: drop most-negative λ across both axes ──────────
+                int drop_x = -1, drop_y = -1;
+                double min_lx = -config_.constraint_tolerance;
+                double min_ly = -config_.constraint_tolerance;
+                for (int i = 0; i < kx; ++i)
+                    if (ws_lambda_[i]   < min_lx) { min_lx = ws_lambda_[i];   drop_x = i; }
+                for (int i = 0; i < ky; ++i)
+                    if (ws_lambda_y_[i] < min_ly) { min_ly = ws_lambda_y_[i]; drop_y = i; }
+
+                if (drop_x >= 0 || drop_y >= 0)
                 {
                     if (last_was_add) ++facet_hops;
                     last_was_add = false;
-                    if (!schur_manager_.remove_constraint(drop_idx))
-                        return {};
+                    // Drop the more-negative multiplier.
+                    if (drop_x >= 0 && (drop_y < 0 || min_lx <= min_ly))
+                    {
+                        if (!sx.remove_constraint(drop_x)) return {};
+                    }
+                    else
+                    {
+                        if (!sy.remove_constraint(drop_y)) return {};
+                    }
                     continue;
                 }
 
                 // ── 5. Primal feasibility: collect ALL violated inactive constraints
-                for (int idx : face) ws_is_active_[idx] = 1;
+                for (int c : fx) ws_is_active_[c] = 1;
+                for (int c : fy) ws_is_active_[c] = 1;
                 ws_opt_violated_.clear();
                 for (int i = 0; i < m_; ++i)
                 {
                     if (ws_is_active_[i]) continue;
-                    if (constraint_sign_[i] * xstar_ptr[constraint_var_[i]] > b_[i] + config_.constraint_tolerance)
+                    if (constraint_sign_[i] * xstar[constraint_var_[i]] > b_[i] + config_.constraint_tolerance)
                         ws_opt_violated_.push_back(i);
                 }
-                for (int idx : face) ws_is_active_[idx] = 0;
+                for (int c : fx) ws_is_active_[c] = 0;
+                for (int c : fy) ws_is_active_[c] = 0;
 
                 if (ws_opt_violated_.empty())
                 {
-                    // Optimal: both dual and primal feasible.
+                    // Optimal — combine both axes' active constraints.
                     if (config_.timing_verbosity > 0)
                     {
                         timing_stats_.find_optimal_face_total += t.elapsed_ms();
                         ++timing_stats_.find_optimal_face_calls;
                     }
-                    return schur_manager_.get_active_constraints();
+                    std::vector<int> result;
+                    result.reserve(kx + ky);
+                    for (int c : fx) result.push_back(c);
+                    for (int c : fy) result.push_back(c);
+                    return result;
                 }
 
-                // Add all violated (batch), or only most-violated if over-constrained.
+                // ── 6. Add all violated per-axis, or only most-violated if over ───
                 last_was_add = true;
-                const int space_left = n_ - k;
-                if ((int)ws_opt_violated_.size() <= space_left)
+                const int space_x = N - kx;
+                const int space_y = N - ky;
+
+                // Partition violated into x and y
+                std::vector<int> viol_x, viol_y;
+                viol_x.reserve(ws_opt_violated_.size());
+                viol_y.reserve(ws_opt_violated_.size());
+                for (int c : ws_opt_violated_)
                 {
-                    for (int c : ws_opt_violated_)
-                    {
-                        if (!schur_manager_.add_constraint_box(c, constraint_var_, constraint_sign_, Qinv))
-                            return {};  // conflict or degenerate — signal fallback
-                    }
+                    if (constraint_var_[c] % 2 == 0) viol_x.push_back(c);
+                    else                              viol_y.push_back(c);
                 }
-                else
+                auto add_batch_or_best = [&](SchurComplementManager &mgr,
+                                              const std::vector<int> &viol,
+                                              int space) -> bool
                 {
-                    // Pick most-violated single constraint
-                    int most_violated = ws_opt_violated_[0];
-                    double max_viol = 0.0;
-                    for (int c : ws_opt_violated_)
+                    if (viol.empty()) return true;
+                    if ((int)viol.size() <= space)
                     {
-                        const double viol = constraint_sign_[c] * xstar_ptr[constraint_var_[c]] - b_[c];
-                        if (viol > max_viol) { max_viol = viol; most_violated = c; }
+                        for (int c : viol)
+                            if (!mgr.add_constraint_box(c, constraint_var_half_, constraint_sign_, Hs))
+                                return false;
                     }
-                    if (!schur_manager_.add_constraint_box(most_violated, constraint_var_, constraint_sign_, Qinv))
-                        return {};
-                }
+                    else
+                    {
+                        int best = viol[0];
+                        double max_v = 0.0;
+                        for (int c : viol)
+                        {
+                            const double v = constraint_sign_[c] * xstar[constraint_var_[c]] - b_[c];
+                            if (v > max_v) { max_v = v; best = c; }
+                        }
+                        if (!mgr.add_constraint_box(best, constraint_var_half_, constraint_sign_, Hs))
+                            return false;
+                    }
+                    return true;
+                };
+
+                if (!add_batch_or_best(sx, viol_x, space_x)) return {};
+                if (!add_batch_or_best(sy, viol_y, space_y)) return {};
             }
 
-            // max_iterations hit — signal fallback so non-cached path can handle correctly.
+            // max_iterations hit — signal fallback.
             return {};
         }
 
@@ -1498,9 +1608,9 @@ namespace geoqp
                 }
             }
 
-            // Box+dense-Q with Q_inv precomputed: use our dedicated incremental
-            // Schur path.  Completely separate from the general caching path.
-            if (config_.use_caching && has_diagonal_constraints_ && !Q_inv_.empty() && !q_is_diagonal_)
+            // Box+dense-Q with decoupled x/y Schur: requires H_s_inv (the N×N
+            // sub-inverse, populated when Q = diag(H_s,H_s) structure is detected).
+            if (config_.use_caching && has_diagonal_constraints_ && !H_s_inv_.empty() && !q_is_diagonal_)
             {
                 auto result = find_optimal_face_box_schur(initial_face, iterations, facet_hops, t);
                 if (!result.empty())

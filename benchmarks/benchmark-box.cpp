@@ -586,6 +586,8 @@ static double solveOSQP_time(const QPProblem &prob, bool &success, double &objVa
     success = osqp.instantiateSolver("osqp");
     if (!success) { osqpIter = 0; objVal = 0.0; return 0.0; }
     osqp.setBooleanParameter("verbose", false);
+    osqp.setRealNumberParameter("eps_abs", 1e-10);
+    osqp.setRealNumberParameter("eps_rel", 1e-10);
     osqp.data()->setNumberOfVariables(n);
     osqp.data()->setNumberOfInequalityConstraints(total);
     Eigen::VectorXd grad = prob.g;
