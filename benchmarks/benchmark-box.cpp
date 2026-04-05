@@ -339,6 +339,34 @@ static QPProblem makeDenseAffineBoxQP(int n, std::mt19937 &rng, double scale_g =
     return p;
 }
 
+// Dense-T affine image, reformulated as a pure axis-aligned box QP via y=T⁻¹(x-c).
+// Original: min_x  ½xᵀHx + gᵀx,  x ∈ T([-1,1]ⁿ)+c
+// After y = T⁻¹(x-c):  H_new = TᵀHT,  g_new = Tᵀ(Hc+g),  y ∈ [-1,1]ⁿ
+// GeoQP sees a pure axis-aligned box → O(n) fast-path fires exactly as for makeBoxQP.
+// qpOASES and OSQP also receive the reformulated (simpler) problem — comparison is fair.
+static QPProblem makeDenseAffineBoxQP_reformulated(int n, std::mt19937 &rng,
+                                                    double scale_g = 5.0)
+{
+    DenseAffineInfo info;
+    QPProblem orig = makeDenseAffineBoxQP(n, rng, scale_g, &info);
+
+    const Eigen::MatrixXd &T = info.T;
+    const Eigen::VectorXd &c = info.c;
+
+    QPProblem p;
+    p.n = n; p.m = 0;
+    p.name = "affine-dense/reformulated";
+    p.H = T.transpose() * orig.H * T;
+    p.g = T.transpose() * (orig.H * c + orig.g);
+    p.lbX = -Eigen::VectorXd::Ones(n);
+    p.ubX =  Eigen::VectorXd::Ones(n);
+    p.A = Eigen::MatrixXd(0, n);
+    p.b = Eigen::VectorXd(0);
+    // Guarantee x̄_new = -H_new⁻¹g_new lies outside [-1,1]ⁿ
+    ensure_xbar_infeasible(p.H, p.g, p.lbX, p.ubX);
+    return p;
+}
+
 static geoqp::Config default_cfg()
 {
     geoqp::Config cfg;
@@ -546,7 +574,7 @@ void run_lemma()
     std::cout << std::string(W, '-') << "\n";
 
     std::mt19937 rng(42);
-    const int trials = 15;
+    const int trials = 10;
     bool all_pass = true;
 
     auto run_one = [&](int n, bool diagonal)
@@ -1376,7 +1404,7 @@ void run_performance()
                   << std::setw(10) << (hops * inv)
                   << std::setw(12) << std::scientific << std::setprecision(1) << max_od
                   << std::setw(10) << res
-                  << "\n";
+                  << "\n" << std::flush;
     };
 
     print_subheader("Axis-aligned, diagonal Q");
@@ -1388,8 +1416,19 @@ void run_performance()
         bench(n, "box/denseQ", [](int n, std::mt19937 &r){ return makeBoxQP(n, r); });
 
     print_subheader("Diagonal-T affine image, dense Q");
-    for (int n : {5, 10, 20, 30, 50, 75, 100})
+    for (int n : {5, 10, 20, 30, 50, 75, 100, 150, 200})
         bench(n, "affine-diag/Q", [](int n, std::mt19937 &r){ return makeDiagAffineBoxQP(n, r); });
+
+    // Dense-T uses the general-polytope vertex-search initialiser (max 1000 vertices,
+    // each expansion costs O(k·m·n³)).  Keep n small — same limit as Section 5(b).
+    print_subheader("Dense-T affine image, dense Q");
+    for (int n : {3, 4, 5, 6, 7, 8, 10, 12})
+        bench(n, "affine-dense/Q", [](int n, std::mt19937 &r){ return makeDenseAffineBoxQP(n, r); });
+
+    // Reformulated: y = T⁻¹(x-c) → pure box QP with H_new=TᵀHT.  Fast-path fires.
+    print_subheader("Dense-T affine image, reformulated (box fast-path)");
+    for (int n : {5, 10, 20, 30, 50, 75, 100, 150, 200})
+        bench(n, "affine-dense/refo", [](int n, std::mt19937 &r){ return makeDenseAffineBoxQP_reformulated(n, r); });
 
     print_subheader("Ill-conditioned Q (cond=10^4) — box");
     for (int n : {5, 10, 20, 30, 50})

@@ -10,10 +10,24 @@
  * The input-increment penalty uses the Theta matrix: Theta * U = [u_0 - u_prev; u_1 - u_0; ...]
  * After condensing xi via the dynamics the Hessian H is dense (2N x 2N).
  *
- * Constraints:
- *   lb_k <= u_k <= ub_k  (per-step 2D box on ZMP position, one box per support phase)
- * This is an axis-aligned box on U in R^{2N}: lb <= U <= ub.  No general A matrix is
- * required — the feasible set is exactly the box P = T(B)+c treated in the paper.
+ * Constraints (two modes, selected via GEOQP_ENABLE_DS):
+ *
+ *   GEOQP_ENABLE_DS=0 (default): pure box
+ *     lb_k <= u_k <= ub_k  (axis-aligned box per step, m=0). GeoQP box fast-path fires
+ *     for every step regardless of SS/DS.
+ *
+ *   GEOQP_ENABLE_DS=1: realistic SS + DS support polygons
+ *     Single-support steps: pure box (GeoQP fast-path fires).
+ *     Double-support steps: convex hull of both feet via Andrews' monotone chain,
+ *       expressed as general halfplane rows A_k * u_k <= b_k added to C/lbA/ubA.
+ *       GeoQP general polytope path is exercised for DS steps.
+ *
+ * Environment variables:
+ *   GEOQP_REPEATS      — number of solver repetitions per horizon (default: 30)
+ *   GEOQP_USE_CACHING  — 0 to disable warm-start caching (default: 1)
+ *   GEOQP_ENABLE_DS    — 1 to enable realistic SS+DS constraints (default: 0)
+ *   MPC_Q_SCALE        — DCM tracking weight Q (default: 1.0)
+ *   MPC_R_SCALE        — input-increment weight R (default: 0.01)
  *
  * Solvers compared:
  *   1. GeoQP  (Dense active-set, geometric initialisation)
@@ -121,6 +135,97 @@ struct DenseQP
 
 // Per-step support box: [lx, ux] x [ly, uy]
 struct SupportBox { double lx, ux, ly, uy; };
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Per-step support polygon
+//
+//  During single-support (SS) the ZMP constraint is an axis-aligned rectangle
+//  — represented as lb/ub bounds, firing GeoQP's box fast-path.
+//
+//  During double-support (DS) the ZMP constraint is the convex hull of both
+//  feet, computed via Andrews' monotone chain.  The result is a set of
+//  halfplane constraints  A_k * u_k <= b_k  (typically 6 rows for two
+//  offset rectangles), passed as general A/b rows in the QP.
+//
+//  is_box == true  →  use lb/ub (SS)
+//  is_box == false →  use halfplanes A_rows/b_rows (DS)
+// ─────────────────────────────────────────────────────────────────────────────
+struct SupportPolygon
+{
+    bool is_box = true;
+    // SS: axis-aligned bounds
+    double lx = 0, ux = 0, ly = 0, uy = 0;
+    // DS: halfplane rows  A_rows[i] = {a0, a1},  b_rows[i] = b_i
+    //     constraint: a0*u_x + a1*u_y <= b_i
+    std::vector<std::array<double, 2>> A_rows;
+    std::vector<double> b_rows;
+};
+
+// Monotone-chain 2-D convex hull of a set of points.
+// Returns vertices in counter-clockwise order.
+static std::vector<std::array<double,2>> convexHull2D(std::vector<std::array<double,2>> pts)
+{
+    int n = static_cast<int>(pts.size());
+    if (n < 3) return pts;
+    std::sort(pts.begin(), pts.end(), [](const auto &a, const auto &b){
+        return a[0] < b[0] || (a[0] == b[0] && a[1] < b[1]);
+    });
+    auto cross = [](const auto &o, const auto &a, const auto &b){
+        return (a[0]-o[0])*(b[1]-o[1]) - (a[1]-o[1])*(b[0]-o[0]);
+    };
+    std::vector<std::array<double,2>> h(2*n);
+    int k = 0;
+    for (int i = 0; i < n; ++i) {
+        while (k >= 2 && cross(h[k-2], h[k-1], pts[i]) <= 0) --k;
+        h[k++] = pts[i];
+    }
+    for (int i = n-2, t = k+1; i >= 0; --i) {
+        while (k >= t && cross(h[k-2], h[k-1], pts[i]) <= 0) --k;
+        h[k++] = pts[i];
+    }
+    h.resize(k-1);
+    return h;
+}
+
+// Build halfplane constraints from a CCW convex hull polygon.
+// Each edge (p0→p1) gives:  (p1.y-p0.y)*u_x + (p0.x-p1.x)*u_y <= p0.x*p1.y - p1.x*p0.y
+static SupportPolygon polygonFromHull(const std::vector<std::array<double,2>> &hull)
+{
+    SupportPolygon sp;
+    sp.is_box = false;
+    int n = static_cast<int>(hull.size());
+    for (int i = 0; i < n; ++i) {
+        const auto &p0 = hull[i];
+        const auto &p1 = hull[(i+1) % n];
+        double a0 = p1[1]-p0[1];
+        double a1 = p0[0]-p1[0];
+        double b  = p0[0]*p1[1] - p1[0]*p0[1];
+        // Normalise to unit L2 norm.  This is required so GeoQP's box-constraint
+        // detector (which checks |nz_val| ≈ 1.0) recognises axis-aligned edges
+        // (degenerate DS with identical feet) as box rows, enabling the fast
+        // diagonal path and avoiding a numerically ill-conditioned Schur system.
+        const double norm = std::sqrt(a0*a0 + a1*a1);
+        if (norm > 1e-12) { a0 /= norm; a1 /= norm; b /= norm; }
+        sp.A_rows.push_back({a0, a1});
+        sp.b_rows.push_back(b);
+    }
+    return sp;
+}
+
+// Build the convex hull of two foot rectangles for a DS step.
+// left_foot and right_foot are (cx, cy) foot centres; hx, hy are half-extents.
+static SupportPolygon makeDSPolygon(double lx, double rx,  // left/right foot x
+                                    double ly, double ry,  // left/right foot y
+                                    double hx, double hy)
+{
+    std::vector<std::array<double,2>> pts;
+    pts.reserve(8);
+    for (double fx : {lx, rx})
+        for (double fy : {ly, ry})
+            for (auto [dx, dy] : std::array<std::array<double,2>,4>{{{-hx,-hy},{-hx,hy},{hx,-hy},{hx,hy}}})
+                pts.push_back({fx+dx, fy+dy});
+    return polygonFromHull(convexHull2D(pts));
+}
 
 DenseQP buildQP(const Parameters &p,
                 const std::vector<double>        &xi0,          // 2D DCM: [xi_x, xi_y]
@@ -254,19 +359,84 @@ DenseQP buildQP(const Parameters &p,
     return qp;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  buildQP overload for mixed SS/DS support polygons (GEOQP_ENABLE_DS=1)
+//
+//  SS steps contribute box bounds only (qp.m unchanged from their contribution).
+//  DS steps contribute rows to C / lbA / ubA and have infinite box bounds.
+// ─────────────────────────────────────────────────────────────────────────────
+DenseQP buildQP(const Parameters                    &p,
+                const std::vector<double>            &xi0,
+                const std::vector<double>            &u_prev,
+                const std::vector<SupportPolygon>    &support,
+                const std::vector<double>            &xi_ref)
+{
+    // Reuse box overload for shared Hessian/gradient logic: build with dummy boxes
+    // then overwrite the constraint portion.
+    const int N = p.N;
+    const int n = 2 * N;
+
+    // Count general (DS) constraint rows
+    int m_total = 0;
+    for (const auto &sp : support)
+        if (!sp.is_box)
+            m_total += static_cast<int>(sp.b_rows.size());
+
+    // Build temporarily with infinite boxes to get H, g, const_term
+    std::vector<SupportBox> dummy(N, {-1e20, 1e20, -1e20, 1e20});
+    DenseQP qp = buildQP(p, xi0, u_prev, dummy, xi_ref);
+
+    qp.m = m_total;
+
+    // Overwrite per-step bounds; allocate general constraint arrays
+    for (int k = 0; k < N; ++k)
+    {
+        const auto &sp = support[k];
+        if (sp.is_box)
+        {
+            qp.lb[2*k    ] = sp.lx;  qp.ub[2*k    ] = sp.ux;
+            qp.lb[2*k + 1] = sp.ly;  qp.ub[2*k + 1] = sp.uy;
+        }
+        else
+        {
+            // DS step: feasibility enforced by A rows; use sentinel outside
+            // GeoQP's ±1e30 bound-expansion threshold so no spurious rows are added.
+            qp.lb[2*k    ] = qp.lb[2*k + 1] = -1e31;
+            qp.ub[2*k    ] = qp.ub[2*k + 1] =  1e31;
+        }
+    }
+
+    if (m_total > 0)
+    {
+        qp.C.assign(m_total * n, 0.0);
+        qp.lbA.assign(m_total, -1e20);
+        qp.ubA.resize(m_total);
+
+        int row = 0;
+        for (int k = 0; k < N; ++k)
+        {
+            const auto &sp = support[k];
+            if (sp.is_box) continue;
+            for (int r = 0; r < (int)sp.b_rows.size(); ++r)
+            {
+                qp.C[row * n + 2*k    ] = sp.A_rows[r][0];
+                qp.C[row * n + 2*k + 1] = sp.A_rows[r][1];
+                qp.ubA[row] = sp.b_rows[r];
+                ++row;
+            }
+        }
+    }
+
+    return qp;
+}
+
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  DCM walking schedule
+//  DCM walking schedule — pure-box version (default, fast-path)
 //
-//  Generates per-step ZMP support boxes for the MPC preview horizon.
-//  Foot placements alternate left/right by stride_y; stride_x is the forward
-//  step length.  Within each foot the ZMP is constrained to a rectangle of
-//  half-size foot_half_x x foot_half_y centred on the foot position cx, cy.
-//
-//  To keep a pure box (no general A), the support box is simply
-//    [cx - foot_half_x, cx + foot_half_x] x [cy - foot_half_y, cy + foot_half_y]
-//  for each preview step.  During double-support we use the union rectangle
-//  (or simply the current support foot box — either stays a box).
+//  Generate per-step ZMP support boxes for the MPC preview horizon.
+//  During both SS and DS the constraint is the axis-aligned bounding rectangle
+//  of the current foot.  This keeps qp.m == 0 and fires GeoQP's box fast-path.
 // ─────────────────────────────────────────────────────────────────────────────
 static std::vector<SupportBox> makeSupportBoxes(const Parameters &p,
                                                  double cx0, double cy0,
@@ -275,9 +445,6 @@ static std::vector<SupportBox> makeSupportBoxes(const Parameters &p,
     const double hx = p.foot_half_x;
     const double hy = p.foot_half_y;
 
-    // Enumerate foot placements for the preview horizon.
-    // We precompute enough steps by tracking which foot and its position.
-    // foot sign: +1 = right, -1 = left (alternate)
     const int nb_dsp = std::max(1, (int)std::round(p.dsp_duration / p.dt));
     const int nb_ssp = std::max(1, (int)std::round(p.ssp_duration / p.dt));
     const int step_len = nb_dsp + nb_ssp;
@@ -285,21 +452,14 @@ static std::vector<SupportBox> makeSupportBoxes(const Parameters &p,
     std::vector<SupportBox> boxes;
     boxes.reserve(N);
 
-    double foot_x = cx0;
-    double foot_y = cy0;
-    int    foot_sign = 1;  // first step is right foot
-    int    phase_idx = 0;  // within current step cycle
+    double foot_x = cx0, foot_y = cy0;
+    int foot_sign = 1, phase_idx = 0;
 
     for (int k = 0; k < N; ++k)
     {
-        // Both double-support and single-support use the same foot rectangle.
-        SupportBox box = {foot_x - hx, foot_x + hx, foot_y - hy, foot_y + hy};
-        boxes.push_back(box);
-
-        ++phase_idx;
-        if (phase_idx >= step_len)
+        boxes.push_back({foot_x - hx, foot_x + hx, foot_y - hy, foot_y + hy});
+        if (++phase_idx >= step_len)
         {
-            // Advance to next footstep
             phase_idx = 0;
             foot_x += p.stride_x;
             foot_y += foot_sign * p.stride_y;
@@ -307,6 +467,59 @@ static std::vector<SupportBox> makeSupportBoxes(const Parameters &p,
         }
     }
     return boxes;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  DCM walking schedule — SS/DS version (GEOQP_ENABLE_DS=1)
+//
+//  SS steps: pure box → fire GeoQP box fast-path.
+//  DS steps: convex hull of both feet → general Ax≤b rows, general polytope path.
+// ─────────────────────────────────────────────────────────────────────────────
+static std::vector<SupportPolygon> makeSupportPolygons(const Parameters &p,
+                                                        double cx0, double cy0,
+                                                        int N)
+{
+    const double hx = p.foot_half_x;
+    const double hy = p.foot_half_y;
+
+    const int nb_dsp = std::max(1, (int)std::round(p.dsp_duration / p.dt));
+    const int nb_ssp = std::max(1, (int)std::round(p.ssp_duration / p.dt));
+    const int step_len = nb_dsp + nb_ssp;
+
+    std::vector<SupportPolygon> polys;
+    polys.reserve(N);
+
+    double foot_x = cx0, foot_y = cy0;
+    double prev_foot_x = cx0, prev_foot_y = cy0;
+    int foot_sign = 1, phase_idx = 0;
+
+    for (int k = 0; k < N; ++k)
+    {
+        if (phase_idx < nb_dsp)
+        {
+            // Double-support: convex hull of departing foot (prev) + arriving foot (current)
+            polys.push_back(makeDSPolygon(prev_foot_x, foot_x,
+                                          prev_foot_y, foot_y, hx, hy));
+        }
+        else
+        {
+            // Single-support: pure box
+            SupportPolygon sp;
+            sp.is_box = true;
+            sp.lx = foot_x - hx; sp.ux = foot_x + hx;
+            sp.ly = foot_y - hy; sp.uy = foot_y + hy;
+            polys.push_back(sp);
+        }
+        if (++phase_idx >= step_len)
+        {
+            phase_idx = 0;
+            prev_foot_x = foot_x; prev_foot_y = foot_y;
+            foot_x += p.stride_x;
+            foot_y += foot_sign * p.stride_y;
+            foot_sign = -foot_sign;
+        }
+    }
+    return polys;
 }
 
 // Build a DCM reference trajectory: drive towards a goal walking straight.
@@ -344,10 +557,10 @@ static Result runGeoQP(const DenseQP &qp, geoqp::FaceHoppingStrategy strat, cons
     prob.lb = qp.lb;
     prob.ub = qp.ub;
 
-    // m=0: no general A constraints — pure box problem
-    prob.m = 0;
-    prob.A.clear();
-    prob.b.clear();
+    // Pass general A*x <= b rows (populated for DS steps; empty for pure-box mode)
+    prob.m = qp.m;
+    prob.A = qp.C;
+    prob.b = qp.ubA;
 
     geoqp::Config cfg;
     cfg.face_hopping_strategy = strat;
@@ -572,11 +785,17 @@ int main()
     const char *caching_env = std::getenv("GEOQP_USE_CACHING");
     const bool caching_on = !(caching_env && std::string(caching_env) == "0");
 
+    const char *ds_env = std::getenv("GEOQP_ENABLE_DS");
+    const bool enable_ds = (ds_env && std::string(ds_env) == "1");
+
     std::cout << "\nResults (horizons)\n";
     std::cout << "# repeats=" << repeats
-              << " GEOQP_USE_CACHING=" << (caching_on ? "1" : "0") << "\n";
-    std::cout << "CASE format: n=<horizon> QP_n=<n> QP_m=<m> run_idx=<i>"
-                 " Geo_us=<ms> qpO_us=<ms> OSQP_us=<ms>"
+              << " GEOQP_USE_CACHING=" << (caching_on ? "1" : "0")
+              << " GEOQP_ENABLE_DS=" << (enable_ds ? "1" : "0")
+              << " constraints=" << (enable_ds ? "SS-box+DS-hull" : "pure-box")
+              << "\n";
+    std::cout << "CASE format: n=<horizon> QP_n=<n> QP_m=<m> mode=<mode> run_idx=<i>"
+                 " Geo_ms=<ms> qpO_ms=<ms> OSQP_ms=<ms>"
                  " Geo_it=<it> qpO_it=<it> OSQP_it=<it>"
                  " Geo_hops=<hops> AvgPivot=<pivots>"
                  " AvgObjGeo=<obj> Diff_vs_qpO=<diff>"
@@ -590,12 +809,23 @@ int main()
         const std::vector<double> xi0   = {xi0_x, xi0_y};
         const std::vector<double> u_prev = {u_prev_x, u_prev_y};
 
-        auto support = makeSupportBoxes(pc, cx0, cy0, h);
         // Goal: walk to first foot landing ~N*stride_x ahead
         double goal_x = cx0 + pc.N * pc.stride_x * 0.5;
         auto xi_ref   = makeDCMRef(h, goal_x, cy0);
 
-        DenseQP qp = buildQP(pc, xi0, u_prev, support, xi_ref);
+        DenseQP qp;
+        if (enable_ds)
+        {
+            auto support = makeSupportPolygons(pc, cx0, cy0, h);
+            qp = buildQP(pc, xi0, u_prev, support, xi_ref);
+        }
+        else
+        {
+            auto support = makeSupportBoxes(pc, cx0, cy0, h);
+            qp = buildQP(pc, xi0, u_prev, support, xi_ref);
+        }
+
+        const char *mode_str = enable_ds ? "DS" : "box";
 
         for (int run_idx = 0; run_idx < repeats; ++run_idx)
         {
@@ -615,10 +845,11 @@ int main()
                       << "n=" << h << " "
                       << "QP_n=" << qp.n << " "
                       << "QP_m=" << qp.m << " "
+                      << "mode=" << mode_str << " "
                       << "run_idx=" << run_idx << " "
-                      << "Geo_us=" << geo_res.time_ms << " "
-                      << "qpO_us=" << qpo_res.time_ms << " "
-                      << "OSQP_us=" << osqp_res.time_ms << " "
+                      << "Geo_ms=" << geo_res.time_ms << " "
+                      << "qpO_ms=" << qpo_res.time_ms << " "
+                      << "OSQP_ms=" << osqp_res.time_ms << " "
                       << "Geo_it=" << geo_res.iterations << " "
                       << "qpO_it=" << qpo_res.iterations << " "
                       << "OSQP_it=" << -1 << " "

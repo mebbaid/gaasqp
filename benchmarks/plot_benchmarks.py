@@ -118,6 +118,12 @@ def _parse_table(block, extractor):
         if not s or s.startswith(("===", "---", ">>>", "***")):
             continue
         parts = s.split()
+        # Handle merged n+type when label overflows the fixed-width column
+        # (e.g., "5affine-dense/refo" → ["5", "affine-dense/refo", ...])
+        if parts and not _numeric(parts[0]):
+            m = re.match(r'^(\d+)(\S+)$', parts[0])
+            if m:
+                parts = [m.group(1), m.group(2)] + parts[1:]
         if not parts or not _numeric(parts[0]):
             continue
         try:
@@ -147,9 +153,11 @@ def parse_benchmark(filepath):
 
     perf_blk = _extract_block(raw, r"PERFORMANCE.*GeoQP vs qpOASES")
     for tag, sub_re in [
-        ("perf_diag",  r"Axis-aligned, diagonal Q"),
-        ("perf_dense", r"Axis-aligned, dense Q"),
-        ("perf_affine", r"Diagonal-T affine image"),
+        ("perf_diag",        r"Axis-aligned, diagonal Q"),
+        ("perf_dense",       r"Axis-aligned, dense Q"),
+        ("perf_affine",            r"Diagonal-T affine image"),
+        ("perf_affine_dense",      r"Dense-T affine image, dense Q"),
+        ("perf_affine_dense_refo", r"Dense-T affine image, reformulated"),
     ]:
         sub = _extract_sub_block(perf_blk, sub_re)
         # Format variants (field indices: n type Geo qpO [OSQP_us] ratio Pivot qpO_iter [OSQP_iter] Hops ObjDiff Result)
@@ -288,40 +296,54 @@ def _save(fig, outdir, name):
 # ===========================================================================
 
 def fig01_performance(data, outdir):
-    # Panel A: dense axis-aligned Q (GeoQP vs qpOASES vs OSQP)
-    rows_dense = sorted(data.get("perf_dense", []), key=lambda r: r["n"]) if data.get("perf_dense") else []
-    # Panel B: affine-diag entries from perf_affine (T diagonal)
-    perf_aff = data.get("perf_affine", [])
-    rows_affine_diag = sorted([r for r in perf_aff if "affine-diag" in r.get("type", "").lower()], key=lambda r: r["n"]) if perf_aff else []
+    # Panel A: axis-aligned dense Q
+    rows_dense = sorted(data.get("perf_dense", []), key=lambda r: r["n"])
+    # Panel B: reformulated dense-T affine image (y = T⁻¹(x-c) → pure box)
 
-    if not rows_dense and not rows_affine_diag:
+    if not rows_dense and not data.get("perf_affine_dense_refo"):
         print("  [skip] fig01_performance (no data)"); return
 
     fig, axes = plt.subplots(1, 2, figsize=(W2, H_FIG))
 
-    def _panel(ax, rows, title, geo_color=C_GEO):
-        rows = sorted(rows, key=lambda r: r["n"])
-        d = _to_arrays(rows, ["n", "Geo_us", "qpO_us"])
-        ax.plot(d["n"], d["Geo_us"],  "o-",  color=C_GEO, label="GaasQP",   zorder=3)
+    # ---- Panel (a): axis-aligned box only ----
+    ax = axes[0]
+    has_data_a = False
+    if rows_dense:
+        has_data_a = True
+        d = _to_arrays(rows_dense, ["n", "Geo_us", "qpO_us"])
+        ax.plot(d["n"], d["Geo_us"], "o-",  color=C_GEO_DIAG, label="GaasQP",   zorder=3)
         ax.plot(d["n"], d["qpO_us"], "s--", color=C_QPO,       label="qpOASES", zorder=3)
-        osqp_rows = [r for r in rows if r.get("OSQP_us") is not None]
+        osqp_rows = [r for r in rows_dense if r.get("OSQP_us") is not None]
+        if osqp_rows:
+            do = _to_arrays(osqp_rows, ["n", "OSQP_us"])
+            ax.plot(do["n"], do["OSQP_us"], "^:", color=C_OSQP, label="OSQP", zorder=2)
+    if has_data_a:
+        ax.set_xscale("log"); ax.set_yscale("log")
+        ax.set_xlabel(r"Dimension $n$")
+        ax.set_ylabel(r"Solve time ($\mu$s)")
+        ax.set_title(r"(a) Axis-aligned Box, dense $H$")
+        ax.legend(fontsize=7)
+    else:
+        ax.set_visible(False)
+
+    # ---- Panel (b): reformulated dense-T affine image ----
+    ax = axes[1]
+    rows_affine_dense_refo = sorted(data.get("perf_affine_dense_refo", []), key=lambda r: r["n"])
+    if rows_affine_dense_refo:
+        d = _to_arrays(rows_affine_dense_refo, ["n", "Geo_us", "qpO_us"])
+        ax.plot(d["n"], d["Geo_us"], "o-",  color=C_GEO_DIAG, label="GaasQP",   zorder=3)
+        ax.plot(d["n"], d["qpO_us"], "s--", color=C_QPO,       label="qpOASES", zorder=3)
+        osqp_rows = [r for r in rows_affine_dense_refo if r.get("OSQP_us") is not None]
         if osqp_rows:
             do = _to_arrays(osqp_rows, ["n", "OSQP_us"])
             ax.plot(do["n"], do["OSQP_us"], "^:", color=C_OSQP, label="OSQP", zorder=2)
         ax.set_xscale("log"); ax.set_yscale("log")
         ax.set_xlabel(r"Dimension $n$")
         ax.set_ylabel(r"Solve time ($\mu$s)")
-        ax.set_title(title)
-        ax.legend()
-
-    if rows_dense:
-        _panel(axes[0], rows_dense, r"(a) Axis-aligned Box (dense $H$)")
+        ax.set_title(r"(b) Affine Image, dense $T$, dense $H$")
+        ax.legend(fontsize=7)
     else:
-        axes[0].set_visible(False)
-    if rows_affine_diag:
-        _panel(axes[1], rows_affine_diag, r"(b) Affine Image (diagonal $T$, Dense $H$)")
-    else:
-        axes[1].set_visible(False)
+        ax.set_visible(False)
 
     fig.tight_layout()
     _save(fig, outdir, "fig01_performance")
@@ -345,53 +367,56 @@ def fig02_iterations(data, outdir):
     fig, axes = plt.subplots(1, 2, figsize=(W2, H_FIG),
                              gridspec_kw={"wspace": 0.30})
 
-    # Panel definitions: (geo_qtype_for_hops, color, perf_key, title, perf_filter_fn)
-    panels = [
-        ("dense",    C_GEO_DENSE, "perf_dense", r"(a) Axis-aligned Box (dense $H$)", None),
-        ("diagonal", C_GEO_DIAG,  "perf_affine", r"(b) Affine Image (diagonal $T$, Dense $H$)", lambda r: "affine-diag" in r.get("type", "").lower()),
-    ]
+    # Panel (a): axis-aligned box only
+    ax = axes[0]
+    sub_dense = sorted(
+        [r for r in _filter(rows_hop, "Qtype", "dense") if r.get("n_solved", 0) > 0],
+        key=lambda r: r["n"],
+    )
+    if sub_dense:
+        d = _to_arrays(sub_dense, ["n", "AvgPivot"])
+        ax.plot(d["n"], d["AvgPivot"], "o-", color=C_GEO_DIAG,
+                linewidth=1.6, label="GaasQP", zorder=3)
+    perf_dense_rows = sorted(
+        [r for r in data.get("perf_dense", []) if r.get("qpO_iter") is not None],
+        key=lambda r: r["n"],
+    )
+    if perf_dense_rows:
+        dp = _to_arrays(perf_dense_rows, ["n", "qpO_iter"])
+        ax.plot(dp["n"], dp["qpO_iter"], "s--", color=C_QPO,
+                linewidth=1.4, label="qpOASES", zorder=2)
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_ylim(bottom=0.9)
+    ax.set_xlabel(r"$n$")
+    ax.set_title(r"(a) Axis-aligned Box, dense $H$", pad=4)
+    ax.legend(fontsize=7, loc="upper left")
+    ax.set_ylabel("Iterations")
 
-    for col_idx, (geo_qtype, col, perf_key, title, perf_filter) in enumerate(panels):
-        ax = axes[col_idx]
-
-        # GeoQP pivots: normally from hops_vs_n matched by Qtype (geo_qtype).
-        # For the affine-diag panel the hops_vs_n table contains only box QP
-        # entries; use the AvgPivot reported in the PERFORMANCE affine block
-        # instead so panel (b) actually plots the affine-diag case.
-        if perf_key == "perf_affine" and perf_filter is not None:
-            geo_rows = sorted([r for r in data.get(perf_key, []) if perf_filter(r) and r.get("AvgPivot") is not None], key=lambda r: r["n"]) 
-            if geo_rows:
-                dg = _to_arrays(geo_rows, ["n", "AvgPivot"])
-                ax.plot(dg["n"], dg["AvgPivot"], "o-", color=C_GEO,
-                    linewidth=1.6, label="GaaQP", zorder=3)
-        else:
-            sub = sorted(
-                [r for r in _filter(rows_hop, "Qtype", geo_qtype) if r.get("n_solved", 0) > 0],
-                key=lambda r: r["n"],
-            )
-            if sub:
-                d = _to_arrays(sub, ["n", "AvgPivot", "MaxPivot"])
-                ax.plot(d["n"], d["AvgPivot"], "o-", color=C_GEO,
-                    linewidth=1.6, label="GaasQP", zorder=3)
-
-        # qpOASES iterations: for perf_affine we may need to filter to affine-diag rows
-        perf_rows = sorted(
-            [r for r in data.get(perf_key, []) if (r.get("qpO_iter") is not None and (perf_filter(r) if perf_filter else True))],
-            key=lambda r: r["n"],
-        )
-        if perf_rows:
-            dp = _to_arrays(perf_rows, ["n", "qpO_iter"])
-            ax.plot(dp["n"], dp["qpO_iter"], "s--", color=C_QPO,
-                    linewidth=1.4, label="qpOASES", zorder=2)
-
-        ax.set_xscale("log")
-        ax.set_yscale("log")
-        ax.set_ylim(bottom=0.9)
-        ax.set_xlabel(r"$n$")
-        ax.set_title(title, pad=4)
-        ax.legend(fontsize=7, loc="upper left")
-        if col_idx == 0:
-            ax.set_ylabel("Iterations")
+    # Panel (b): reformulated dense-T affine image
+    ax = axes[1]
+    aff_refo_rows = sorted(
+        [r for r in data.get("perf_affine_dense_refo", []) if r.get("AvgPivot") is not None],
+        key=lambda r: r["n"],
+    )
+    if aff_refo_rows:
+        dg = _to_arrays(aff_refo_rows, ["n", "AvgPivot"])
+        ax.plot(dg["n"], dg["AvgPivot"], "o-", color=C_GEO_DIAG,
+                linewidth=1.6, label="GaasQP", zorder=3)
+    aff_refo_qpo = sorted(
+        [r for r in data.get("perf_affine_dense_refo", []) if r.get("qpO_iter") is not None],
+        key=lambda r: r["n"],
+    )
+    if aff_refo_qpo:
+        dp2 = _to_arrays(aff_refo_qpo, ["n", "qpO_iter"])
+        ax.plot(dp2["n"], dp2["qpO_iter"], "s--", color=C_QPO,
+                linewidth=1.4, label="qpOASES", zorder=2)
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_ylim(bottom=0.9)
+    ax.set_xlabel(r"$n$")
+    ax.set_title(r"(b) Affine Image, dense $T$, dense $H$", pad=4)
+    ax.legend(fontsize=7, loc="upper left")
 
     fig.tight_layout()
     _save(fig, outdir, "fig02_iterations")

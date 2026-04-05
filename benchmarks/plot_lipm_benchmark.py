@@ -127,9 +127,9 @@ def fig01_performance(off_rows, on_rows, outdir):
             series.append(np.array(vals) if vals else np.array([np.nan]))
         return series
 
-    geo_series = solver_series('Geo_us')
-    qpo_series = solver_series('qpO_us')
-    osqp_series = solver_series('OSQP_us')
+    geo_series = solver_series('Geo_ms')
+    qpo_series = solver_series('qpO_ms')
+    osqp_series = solver_series('OSQP_ms')
 
     fig, ax = plt.subplots(figsize=(W2, 3.0))
 
@@ -231,8 +231,8 @@ def fig03_violin(off_rows, on_rows, outdir):
         # If no iteration-like data at all, fallback to solve-time distributions
         total_samples = sum(int(d.size) for d in data)
         if total_samples == 0:
-            geo = np.array([float(r['Geo_us']) for r in rows if int(r.get('QP_n', r.get('n'))) == nn and r.get('Geo_us') is not None])
-            qpo = np.array([float(r['qpO_us']) for r in rows if int(r.get('QP_n', r.get('n'))) == nn and r.get('qpO_us') is not None])
+            geo = np.array([float(r['Geo_ms']) for r in rows if int(r.get('QP_n', r.get('n'))) == nn and r.get('Geo_ms') is not None])
+            qpo = np.array([float(r['qpO_ms']) for r in rows if int(r.get('QP_n', r.get('n'))) == nn and r.get('qpO_ms') is not None])
             data = [geo, qpo]
             total_samples = sum(int(d.size) for d in data)
             ylabel = 'Solve time (ms)'
@@ -282,15 +282,15 @@ def fig04_cdf(off_rows, on_rows, outdir):
     for nn in sizes:
         counts_per_size[nn] = sum(1 for r in rows if int(r.get('QP_n', r.get('n'))) == nn and r.get('Geo_us') is not None)
     nn = max(counts_per_size, key=lambda k: counts_per_size[k])
-    geo = sorted([float(r['Geo_us']) for r in rows if int(r.get('QP_n', r.get('n'))) == nn and r.get('Geo_us') is not None])
-    qpo = sorted([float(r['qpO_us']) for r in rows if int(r.get('QP_n', r.get('n'))) == nn and r.get('qpO_us') is not None])
-    osqp = sorted([float(r['OSQP_us']) for r in rows if int(r.get('QP_n', r.get('n'))) == nn and r.get('OSQP_us') is not None])
+    geo = sorted([float(r['Geo_ms']) for r in rows if int(r.get('QP_n', r.get('n'))) == nn and r.get('Geo_ms') is not None])
+    qpo = sorted([float(r['qpO_ms']) for r in rows if int(r.get('QP_n', r.get('n'))) == nn and r.get('qpO_ms') is not None])
+    osqp = sorted([float(r['OSQP_ms']) for r in rows if int(r.get('QP_n', r.get('n'))) == nn and r.get('OSQP_ms') is not None])
     total_samples = len(geo) + len(qpo) + len(osqp)
     if total_samples < 4:
         # aggregate across all sizes
-        geo = sorted([float(r['Geo_us']) for r in rows if r.get('Geo_us') is not None])
-        qpo = sorted([float(r['qpO_us']) for r in rows if r.get('qpO_us') is not None])
-        osqp = sorted([float(r['OSQP_us']) for r in rows if r.get('OSQP_us') is not None])
+        geo = sorted([float(r['Geo_ms']) for r in rows if r.get('Geo_ms') is not None])
+        qpo = sorted([float(r['qpO_ms']) for r in rows if r.get('qpO_ms') is not None])
+        osqp = sorted([float(r['OSQP_ms']) for r in rows if r.get('OSQP_ms') is not None])
         nn = 'all'
 
     def ecdf(data):

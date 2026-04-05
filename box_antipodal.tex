@@ -1,19 +1,172 @@
+%Version 3.1 December 2024
+% See section 11 of the User Manual for version history
+%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%                                                                 %%
+%% Please do not use \input{...} to include other tex files.       %%
+%% Submit your LaTeX manuscript as one .tex document.              %%
+%%                                                                 %%
+%% All additional figures and files should be attached             %%
+%% separately and not embedded in the \TeX\ document itself.       %%
+%%                                                                 %%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
-\subsection{Background}
-Consider the strictly convex\footnote{The case when $Q \succeq 0$ is treated in a later section.} quadratic program
-\begin{equation}\label{eq:qp}
+%%\documentclass[referee,sn-basic]{sn-jnl}% referee option is meant for double line spacing
+
+%%=======================================================%%
+%% to print line numbers in the margin use lineno option %%
+%%=======================================================%%
+
+%%\documentclass[lineno,pdflatex,sn-basic]{sn-jnl}% Basic Springer Nature Reference Style/Chemistry Reference Style
+
+%%=========================================================================================%%
+%% the documentclass is set to pdflatex as default. You can delete it if not appropriate.  %%
+%%=========================================================================================%%
+
+%%\documentclass[sn-basic]{sn-jnl}% Basic Springer Nature Reference Style/Chemistry Reference Style
+
+%%Note: the following reference styles support Namedate and Numbered referencing. By default the style follows the most common style. To switch between the options you can add or remove Numbered in the optional parenthesis. 
+%%The option is available for: sn-basic.bst, sn-chicago.bst%  
+ 
+%%\documentclass[pdflatex,sn-nature]{sn-jnl}% Style for submissions to Nature Portfolio journals
+%%\documentclass[pdflatex,sn-basic]{sn-jnl}% Basic Springer Nature Reference Style/Chemistry Reference Style
+\documentclass[pdflatex,sn-mathphys-num]{sn-jnl}% Math and Physical Sciences Numbered Reference Style
+% \documentclass[pdflatex,sn-mathphys-ay]{sn-jnl}% Math and Physical Sciences Author Year Reference Style
+%%\documentclass[pdflatex,sn-aps]{sn-jnl}% American Physical Society (APS) Reference Style
+%%\documentclass[pdflatex,sn-vancouver-num]{sn-jnl}% Vancouver Numbered Reference Style
+%%\documentclass[pdflatex,sn-vancouver-ay]{sn-jnl}% Vancouver Author Year Reference Style
+%%\documentclass[pdflatex,sn-apa]{sn-jnl}% APA Reference Style
+%%\documentclass[pdflatex,sn-chicago]{sn-jnl}% Chicago-based Humanities Reference Style
+
+%%%% Standard Packages
+%%<additional latex packages if required can be included here>
+
+\usepackage{graphicx}%
+\usepackage{multirow}%
+\usepackage{amsmath,amssymb,amsfonts}%
+% \usepackage{amsthm}%
+\usepackage{mathrsfs}%
+\usepackage[title]{appendix}%
+\usepackage{xcolor}%
+\usepackage{textcomp}%
+\usepackage{manyfoot}%
+\usepackage{booktabs}%
+\usepackage{algorithm}%
+\usepackage{algorithmicx}%
+\usepackage{algpseudocode}%
+\usepackage{listings}%
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, calc, positioning,3d}
+\usepackage{tikz-3dplot}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{csquotes}
+\usepackage{subfigure}
+
+\theoremstyle{thmstyleone}%
+\newtheorem{theorem}{Theorem}%  meant for continuous numbers
+%%\newtheorem{theorem}{Theorem}[section]% meant for sectionwise numbers
+%% optional argument [theorem] produces theorem numbering sequence instead of independent numbers for Proposition
+\newtheorem{proposition}[theorem]{Proposition}% 
+%%\newtheorem{proposition}{Proposition}% to get separate numbers for theorem and proposition etc.
+\newtheorem{lemma}[theorem]{Lemma}% 
+\newtheorem{corollary}[theorem]{Corollary}% 
+
+
+\theoremstyle{thmstyletwo}%
+\newtheorem{example}{Example}%
+\newtheorem{remark}{Remark}%
+\theoremstyle{thmstylethree}%
+\newtheorem{assumption}[theorem]{Assumption}
+
+\theoremstyle{thmstylethree}%
+\newtheorem{definition}{Definition}%
+
+
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator{\dist}{dist}
+\DeclareMathOperator{\diam}{diam}
+\DeclareMathOperator{\relint}{relint}
+\DeclareMathOperator{\aff}{aff}
+\DeclareMathOperator{\conv}{conv}
+\DeclareMathOperator{\cone}{cone}
+\DeclareMathOperator{\Proj}{Proj}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\norm}[1]{\|#1\|}
+\newcommand{\inner}[2]{\langle #1, #2 \rangle}
+\newcommand{\abs}[1]{|#1|}
+
+\newcommand\Moesays[1]{\textcolor{red}{#1}} 
+\newcommand{\Pset}{\mathcal{P}}
+\newcommand{\E}{\mathcal{E}}
+\newcommand{\bx}{\bar{x}}
+\newcommand{\hx}{\hat{x}}
+
+
+\raggedbottom
+%%\unnumbered% uncomment this for unnumbered level heads
+
+\begin{document}
+
+\title[Article Title]{Antipodal Initialization for Box-Constrained Quadratic Programs}
+
+%%=============================================================%%
+%% GivenName	-> \fnm{Joergen W.}
+%% Particle	-> \spfx{van der} -> surname prefix
+%% FamilyName	-> \sur{Ploeg}
+%% Suffix	-> \sfx{IV}
+%% \author*[1,2]{\fnm{Joergen W.} \spfx{van der} \sur{Ploeg} 
+%%  \sfx{IV}}\email{iauthor@gmail.com}
+%%=============================================================%%
+
+\author*[1]{\fnm{Mohamed} \sur{Elobaid}}\email{mohamed.elobaid@kaust.edu.sa}
+% \author[1]{\fnm{Shinkyu} \sur{Park}}
+% \author[1]{\fnm{Eric} \sur{Feron}}
+% \author[2,3]{\fnm{Second} \sur{Author}}\email{iiauthor@gmail.com}
+% \equalcont{These authors contributed equally to this work.}
+
+
+\affil[1]{\orgdiv{CEMSE}, \orgname{King Abdullah University of Science and Technology}, \orgaddress{\city{Thuwal}, \postcode{23955-6900}, \country{KSA}}}
+
+% \affil[2]{\orgdiv{Department}, \orgname{Organization}, \orgaddress{\street{Street}, \city{City}, \postcode{10587}, \state{State}, \country{Country}}}
+
+% \affil[3]{\orgdiv{Department}, \orgname{Organization}, \orgaddress{\street{Street}, \city{City}, \postcode{610101}, \state{State}, \country{Country}}}
+
+%%==================================%%
+%% Sample for unstructured abstract %%
+%%==================================%%
+
+\abstract{For box polytopes (and affine images thereof) we show that among all vertices from which the ray toward the exterior unconstrained minimizer initially enters the interior of the polytope (good vertices), the one farthest in the Euclidean sense has the property that this ray exits through a facet that either contains the optimal solution or is adjacent to such a facet under standard regularity conditions. Consequently, the induced active set differs from the optimal one by at most a single constraint, leading to a small number of iterations for warm-started active-set solvers. We present a practical algorithm exploiting this initialization strategy and an open-source implementation, \texttt{GaasQP}, demonstrating improved performance on structured (randomized QPs) and non-trivial (Humanoid Robot MPC walking) problems compared with state-of-the-art solvers. Code: \url{https://github.com/mebbaid/gaasqp.git}.}
+
+
+\keywords{Quadratic Programs, Convex Optimization, Active Set}
+
+%%\pacs[JEL Classification]{D8, H51}
+
+%%\pacs[MSC Classification]{35A01, 65L10, 65L12, 65L20, 65L70}
+
+\maketitle
+
+\section{Introduction}\label{sec1}
+
+Consider the strictly convex quadratic program
+\begin{equation}\tag{P}\label{eq:qp}
 \begin{aligned}
-\min_{x \in \mathbb{R}^n} \quad & f(x) = \tfrac{1}{2}x^\top Q x + g^\top x \\
+\min_{x \in \mathbb{R}^n} \quad & f(x) = \tfrac{1}{2}x^\top H x + g^\top x \\
 \text{subject to} \quad & a_i^\top x \leq b_i, \quad i = 1,\ldots,m,
 \end{aligned}
 \end{equation}
-where $Q\succ0$ and the feasible region
+where $H\succ0$ assumed symmetric for clarity\footnote{if not, one could replace it with its symmetrization $\frac{1}{2}(H + H^\top)$ WLOG.} and the feasible region
 \[
 \mathcal P = \{x\in\mathbb R^n : Ax\le b\}
 \]
-is a polytope.
+is a polytope of special structure as detailed below.
 
-\noindent In this work we focus on the class of problems in which $\mathcal{P}$ is a box or, more generally, an affine image of a box. That is, $\mathcal{P}$ can be written as
+\begin{assumption}\label{assumption_1}
+Throughout, we assume the following holds true:
+\begin{itemize}[]
+    \item $\mathbf{\mathcal{H}1}$: The polytope $\mathcal{P}$ is a box or an affine image of a box. That is
 \[
 \mathcal{P} = T(\mathcal{B}) = \{Tx + c : x \in \mathcal{B}\},
 \]
@@ -21,9 +174,13 @@ where $T \in \mathbb{R}^{n\times n}$ is nonsingular, $c \in \mathbb{R}^n$, and
 \[
 \mathcal{B} = \{x \in \mathbb{R}^n : \ell \le x \le u\}
 \]
-is an axis-aligned box defined by lower and upper bounds $\ell,u \in \mathbb{R}^n$ with $\ell < u$ componentwise.
+is an axis-aligned box and the bounds $\ell,u \in \mathbb{R}^n$ are such that $\ell < u$ componentwise.
+\item $\mathbf{\mathcal{H}2}$: The unconstrained minimizer $\bar{x} = -H^{-1}g$ is an exterior point, i.e., $\bar x \notin \Pset$
+\end{itemize}
+\end{assumption}
+
 \begin{remark}\label{rem:halfspace-rep-boxes}
-The half-space representation of $\mathcal P$ can be written as
+The half-space representation of $\mathcal P$ is
 \[
 A =
 \begin{bmatrix}
@@ -32,30 +189,67 @@ T^{-1} \\ -T^{-1}
 \qquad
 b =
 \begin{bmatrix}
-u + T^{-1}c \\ -\ell - T^{-1}c
-\end{bmatrix}.
+u \\ -\ell
+\end{bmatrix}
+\quad (c=0).
 \]
+Conversely, given $Ax\le b$ with $m=2n$, Assumption~$\mathcal{H}1$ holds if and only if
+the rows of $A$ admit an antipodal pairing $a_{i_k}=-a_{j_k}$, $k=1,\dots,n$,
+with $\{a_{i_k}\}$ forming an invertible matrix.
+The factorization $T^{-1}:=[a_{i_k}]$ and bounds $u_k:=b_{i_k}$, $\ell_k:=-b_{j_k}$
+recover the canonical representation in $O(n^3)$.
 \end{remark}
 
-\noindent Let $\bar x=-Q^{-1}g$ denote the unconstrained minimizer.
-Throughout we assume $\bar x\notin\mathcal P$.
+\subsection{Related Works}\label{sec:literature}
+ Problem~\ref{eq:qp} is a well understood class of problems in the context of active set algorithms \citep{box_1, box_2, box_3}. They may arise naturally for instance in engineering applications like Model Predictive Control when one utilizes single-shooting \cite{mpc_box}, In mathematical Physics applications like obstacle problems \cite{box_5, obstacle_problems}, and in computer vision applications \cite{face_rec} to name a few. In addition, they may arise as subproblems in the context of sequential quadratic programming to solver nonlinear programs \cite{box_4}.
 
-For $\mathcal I\subseteq\{1,\dots,m\}$ define
-\[
+When solving (\ref{eq:qp}) via active-set methods, one  maintains a working set of
+constraints treated as equalities and solve a sequence of equality-constrained problems on the
+corresponding face, adding violated constraints and removing those with negative multipliers (possibly in batch) until the optimality conditions are satisfied~\cite{nocedal2006numerical}.
+For box-constrained problems, $m=2n$ and each constraint involves a single variable, so the active-set (and any working subset) has a simple structure, namely it is a subset of the (transformed) coordinate hyperplanes
+
+The quality of the initial (working) active set determines the number of pivots, and hence total solve time.
+Several initialization regimes appear in the literature. Of note are those that make use of the problem structure. For instance those exploiting the exterior global minimizer $\bar x$ as an initialization guess \citep{dax, goldfarb1983numerically}, and similar ideas which rank constraints by their violation or dual residual at
+$\bar{x}$ and seed the working set with the most-violated subset. These heuristics reduce the number of pivots in practice
+but provides no guarantee nor exploit the feasible set structure ~\cite{goldfarb1983numerically}. Other recently popular approaches, specially in control applications when solving a sequence of related QPs
+(e.g.\ in MPC), is to reuse the previous working set. These are effective when the consecutive problems differ only in the linear term~\cite{mpc_box}.
+
+None of these approaches, to the author's knowledge, exploits the geometry of the polytope relative to $\bar{x}$ to derive a provably near-optimal starting face. The present paper fills this gap for the class of box polytopes and their affine images. Furthermore, the proposed initialization strategy yields  a provable worst-case pivot count for well structured problems. The paper also details a possible implementation, accompanied by open-source software, as well extensive numerical experiments highlighting the benefits obtained. 
+
+
+
+ 
+
+\subsection{Preliminaries}\label{sec:preliminaries}
+We fix some notations first, then establish a useful notion of a particular type of vertices of $\Pset$. For $\mathcal I\subseteq\{1,\dots,m\}$ define
+$
 F(\mathcal I)
 =
 \{x\in\mathcal P : a_i^\top x=b_i,\ i\in\mathcal I\}.
-\]
+$ 
 A nonempty set of this form is called a \emph{face} of $\mathcal P$.
-Faces of dimension $n-1$, $n-2$ and $0$ are called \emph{facets}, \emph{ridges} and \emph{vertices}, respectively. Two facets are said to be \emph{adjacent} if they share a common ridge.
-
-For a feasible point $x\in\mathcal P$ we denote the active set by
+Faces of dimension $n-1$, $n-2$ and $0$ are called \emph{facets}, \emph{ridges} and \emph{vertices}, respectively \cite{polytopes, conv_book_2}. Two facets are said to be \emph{adjacent} if they share a common ridge. For a feasible point $x\in\mathcal P$ we denote the active set by
 \[
 \mathcal A(x)=\{i: a_i^\top x=b_i\}.
 \]
+
+Throughout the sequel, we denote the $H$-weighted norm by
+$
+\|x\|_H := \sqrt{x^\top H x},
+$
+and the associated inner product by
+$
+\langle x, y\rangle_H := x^\top H y.
+$
+When the subscript is omitted, norms and inner products are understood to be with respect to the standard Euclidean metric. 
+
+
+We denote by $\relint(C)$ the relative interior of a convex set $C$, i.e., its interior relative to its affine hull.
+
 A central object of this paper is the notion of a \emph{good vertex} relative to an exterior point.
+
 \begin{definition}\label{def:good_vertex}
-Let $\bar{x} \notin \mathcal{P}$. A vertex $v$ of $\mathcal{P}$ is called
+A vertex $v$ of $\mathcal{P}$ is called
 \emph{good} (with respect to $\bar{x}$) if the ray from $v$ toward $\bar{x}$
 initially enters the interior of $\mathcal{P}$, i.e.,
 \[
@@ -74,13 +268,12 @@ Geometrically, a vertex is good if $\bar{x}$ lies inside the cone generated
 by the edges of $\mathcal P$ incident to $v$.
 \end{remark}
 
-\begin{lemma}
-Let $\mathcal P = T(\mathcal B)+c,
-\quad
-\mathcal B = \{y\in\mathbb R^n : \ell \le y \le u\},
+It is always possible, for the class of feasible sets considered, to find at least one such vertex relative to the exterior minimizer.
+
+\begin{lemma}\label{lem:good_vertex}
+Let $\mathcal P, \ \bar x
 $ 
-where $T\in\mathbb R^{n\times n}$ is nonsingular and $\ell<u$ component-wise.
-Let $\bar x \notin \mathcal P$, and define $\bar y := T^{-1}(\bar x-c)$.
+be as in Assumption~\ref{assumption_1} and define $\bar y := T^{-1}(\bar x-c)$, Then
 
 \begin{enumerate}
 \item[(i)] The set $V_\text{good}$ of good vertices of $\mathcal P$ (with respect to $\bar x$) is nonempty.
@@ -114,309 +307,185 @@ a_i^\top(\bar x - v)
 -(\bar y_i - \ell_i) & \text{if } y_i=\ell_i,
 \end{cases}
 \]
-so $v$ is good if and only if
+By Definition~\ref{def:good_vertex}, $v$ is good iff $a_i^\top(\bar{x}-v)<0$
+for all $i\in\mathcal{A}(v)$, which is equivalent to the conditions in $(ii)$. To show $(i)$, note that since $\bar{x}\notin\mathcal{P}$ we have $\bar{y}\notin\mathcal{B}$,
+so $\bar{y}_j\notin[\ell_j,u_j]$ for at least one $j$.
+For every coordinate $i$, since $\ell_i < u_i$, at least one of
+$\bar{y}_i>\ell_i$ or $\bar{y}_i<u_i$ holds.
+Define $y$ componentwise by
 \[
-\begin{cases}
-\bar y_i < u_i & \text{if } y_i=u_i,\\
-\bar y_i > \ell_i & \text{if } y_i=\ell_i,
-\end{cases}
+  y_i :=
+  \begin{cases}
+    \ell_i & \text{if } \bar{y}_i > \ell_i,\\
+    u_i   & \text{if } \bar{y}_i \leq \ell_i
+             \;\;(\text{in which case } \bar{y}_i < u_i \text{ holds}).
+  \end{cases}
 \]
-which proves (ii). To show (i), note that $\bar x \notin \mathcal P$ implies $\bar y \notin \mathcal B$, so $\bar y_i \notin [\ell_i,u_i] \ \text{for at least one } i,
-$
-and in particular, for every $i$ at least one of the strict inequalities
-$\bar y_i > \ell_i$ or $\bar y_i < u_i$ holds. Define $y\in\mathcal B$ component-wise by
-\[
-y_i :=
-\begin{cases}
-\ell_i & \text{if } \bar y_i > \ell_i,\\
-u_i & \text{if } \bar y_i < u_i.
-\end{cases}
-\]
-This definition is well posed (at least one case always applies), and yields a vertex $y$ of $\mathcal B$. Moreover, by construction,
-\[
-y_i=\ell_i \ \Rightarrow\ \bar y_i>\ell_i,
-\qquad
-y_i=u_i \ \Rightarrow\ \bar y_i<u_i,
-\]
-for all $i$. By part (ii), the vertex $v=Ty+c$ is therefore good. This proves (i).
+Then $y\in\{\ell_i,u_i\}^n$ is a vertex of $\mathcal{B}$, and by
+construction satisfies the conditions of $(ii)$, so $v=Ty+c$ is a good
+vertex.
 \end{proof}
 
-\begin{figure}[t!]
-\centering
-\fbox{
-\begin{minipage}{0.95\textwidth}
-\centering
-\begin{subfigure}[b]{0.3\textwidth}
-\centering
-\begin{tikzpicture}[scale=1.1]
-\coordinate (v1) at (1,0); \coordinate (v2) at (2,0.5);
-\coordinate (v3) at (2.5,1.5); \coordinate (v4) at (2,2.5);
-\coordinate (v5) at (1,3); \coordinate (v6) at (0,2.5);
-\coordinate (v7) at (-0.5,1.5); \coordinate (v8) at (0,0.5);
-\draw[thick] (v1) -- (v2) -- (v3) -- (v4) -- (v5) -- (v6) -- (v7) -- (v8) -- cycle;
-\fill[blue!10] (v1) -- (v2) -- (v3) -- (v4) -- (v5) -- (v6) -- (v7) -- (v8) -- cycle;
-\coordinate (xbar) at (3.5,1.5); \filldraw[red] (xbar) circle (2pt); \node[above right] at (xbar) {$\bar{x}$};
-\foreach \v in {v6,v7,v8} {\filldraw[green!70!black] (\v) circle (2.5pt);}
-\draw[dashed,->,green!70!black] (v6) -- ($(v6)!0.9!(xbar)$);
-\draw[dashed,->,green!70!black] (v7) -- ($(v7)!0.9!(xbar)$);
-\draw[dashed,->,green!70!black] (v8) -- ($(v8)!0.9!(xbar)$);
-\end{tikzpicture}
-\caption{Several good vertices}
-\end{subfigure}
-\hfill
-\begin{subfigure}[b]{0.3\textwidth}
-\centering
-\begin{tikzpicture}[scale=3.5,tdplot_main_coords]
-\tdplotsetmaincoords{60}{120}
 
-\coordinate (v1) at (0,0,0); 
-\coordinate (v2) at (1,0,0);
-\coordinate (v3) at (0.5,0.866,0);
-\coordinate (v4) at (0.5,0.289,0.816); 
-
-\draw[thick] (v1) -- (v2) -- (v3) -- cycle;
-\draw[thick] (v1) -- (v4); \draw[thick] (v2) -- (v4); \draw[thick] (v3) -- (v4);
-
-\fill[blue!10,opacity=0.5] (v1) -- (v2) -- (v3) -- cycle;
-\fill[blue!10,opacity=0.5] (v1) -- (v2) -- (v4) -- cycle;
-\fill[blue!10,opacity=0.5] (v2) -- (v3) -- (v4) -- cycle;
-\fill[blue!10,opacity=0.5] (v3) -- (v1) -- (v4) -- cycle;
-
-\coordinate (xbar) at (1.4,0.5,0.8); \filldraw[red] (xbar) circle (0.8pt); \node[above] at (xbar) {$\bar{x}$};
-
-\filldraw[green!70!black] (v1) circle (0.8pt); 
-%\node[left] at (v1) {$v_{\text{good}}$};
-\draw[dashed,->,green!70!black] (v1) -- ($(v1)!0.9!(xbar)$);
-
-% % Other vertex labels
-\end{tikzpicture}
-\caption{Single good vertex}
-\end{subfigure}
-\begin{subfigure}[b]{0.3\textwidth}
-\centering
-\begin{tikzpicture}[scale=1.5]
-
-% --- House polytope vertices ---
-\coordinate (v1) at (0,0);
-\coordinate (v2) at (2,0);
-\coordinate (v4) at (1.2,0.5);  % small roof peak
-\coordinate (v5) at (0.8,0.5);
-
-\draw[thick]
-  (v1) -- (v2)  -- (v4) -- (v5) -- cycle;
-\fill[blue!10]
-  (v1) -- (v2) --  (v4) -- (v5) -- cycle;
-
-\coordinate (xbar) at (1.0,2.1);
-\filldraw[red] (xbar) circle (2pt);
-\node[above right] at (xbar) {$\bar{x}$};
-
-\foreach \v in {v1, v2, v4,v5}
-  \draw[dashed,->,gray] (\v) -- ($( \v)!0.9!(xbar)$);
-\end{tikzpicture}
-\caption{No good vertex exists}
-\end{subfigure}
-
-\caption{\emph{Good vertices} in 2D and 3D. Green is good; red is the exterior $\bar{x}$.}
-\end{minipage}
-} % end fbox
-\end{figure}
 
 \section{Main Results}\label{sec2}
 
-In this section, we give some intermediate lemmas and state our main results. 
-Throughout the sequel, we denote the $Q$-weighted norm by
-$
-\|x\|_Q := \sqrt{x^\top Q x},
-$
-and the associated inner product by
-$
-\langle x, y\rangle_Q := x^\top Q y.
-$
-When the subscript is omitted, norms and inner products are understood to be with respect to the standard Euclidean metric.
-
+In this section, we state our main results, and some consequences thereafter. 
 
 \begin{theorem}\label{thm:halfbox_affine}
-Let $\mathcal P = T(\mathcal B)+c$, where $T\in\mathbb R^{n\times n}$ is
-nonsingular and $\mathcal B=\{x\in\mathbb R^n:\ell\le x\le u\}$.
-Let $\bar x\notin\mathcal P$ and let $x^\star$ denote the solution of
-\eqref{eq:qp} with unconstrained minimizer $\bar x=-Q^{-1}g$.
-Let $m=\frac{\ell+u}{2}$, $h_i=\frac{u_i-\ell_i}{2}$, $c_0=Tm+c$, and set
+Let $\mathcal P, \ \bar x
+$ 
+be as in Assumption~\ref{assumption_1} and let $x^\star$ denote the solution of
+\eqref{eq:qp}.
+Let $\mu=\frac{1}{2}(\ell+u)$ be the midpoint, $h_i=\frac{1}{2}(u_i-\ell_i)$ the half-width, $c_0=T\mu+c$, and denote $\bar y := T^{-1}(\bar x - c)$. Set
 \[
-\bar y := T^{-1}(\bar x - c), \quad
-s_i := \operatorname{sign}(\bar y_i - m_i),
+s_i := \begin{cases} \operatorname{sign}(\bar{y}_i - \mu_i) & \text{if } 
+\bar{y}_i \ne \mu_i, \\ +1 & \text{if } \bar{y}_i = \mu_i, \end{cases}
 \]
 with the splitting normal $\eta\in\mathbb R^n$ defined componentwise by
 $\eta_i := s_i/h_i$.
-Define
+The sets
 \[
 \mathcal P_+ := \bigl\{x\in\mathcal P : \eta^\top T^{-1}(x-c_0) \ge 0\bigr\},
 \qquad
 \mathcal P_- := \bigl\{x\in\mathcal P : \eta^\top T^{-1}(x-c_0) < 0\bigr\}.
 \]
-Then $x^\star \in \mathcal P_+$.
+are the two halves of $\mathcal{P}$ separated by the hyperplane
+associated with $\eta$, with $\mathcal{P}_+$ being the half
+on the same side as $\bar{x}$.
+Then $x^\star \in \mathcal{P}_+$.
 \end{theorem}
 \begin{proof}
-Define
+Define the invertible affine map $\phi\colon x\mapsto\xi$ where
 \[
-  \xi_i := \frac{s_i(y_i-m_i)}{h_i},\quad y=T^{-1}(x-c).
+  \xi_i := \frac{s_i(y_i-\mu_i)}{h_i},
+  \qquad y := T^{-1}(x-c),
 \]
-This is an invertible affine map sending $\mathcal{B}$ to the hypercube
-$\Xi=[-1,1]^n$, under which the condition
-$\eta^\top T^{-1}(x-c_0)\ge 0$ becomes $\mathbf{1}^\top\xi\ge 0$.
-Write $\xi^\star$ and $\bar\xi$ for the images of $x^\star$ and
-$\bar x$.  Since $s_i=\operatorname{sign}(\bar y_i-m_i)$,
+with Jacobian $D := \mathrm{diag}(s_i/h_i)\,T^{-1}$.
+Note that $\phi$ sends $\mathcal{B}$ and $\mathcal{P}$ bijectively to
+$\mathbb{B} := [-1,1]^n$.
+Since $\bar{x} = -H^{-1}g$, substituting $x = D^{-1}\xi + c_0$ gives
 \[
-  \bar\xi_i = \frac{|\bar y_i-m_i|}{h_i} \geq 0
-  \quad\forall i, \quad \bar \xi_j > 0 \ \text{form some $j$}
-  \qquad\implies \quad
-  \mathbf{1}^\top\bar\xi>0.                              
+  f(x) = \tfrac{1}{2}\|\xi - \bar\xi\|_{\tilde{H}}^2 + \mathrm{const},
+  \qquad \tilde{H} := D^{-\top}HD^{-1} \succ 0,
 \]
-Because $\bar x\notin\mathcal{P}$, we have $\bar\xi\notin\Xi$.
-Minimizing $f$ over $\mathcal{P}$ is equivalent to minimizing the
-strictly convex function
-$\tilde f(\xi)=\tfrac12\|\xi-\bar\xi\|_{\tilde Q}^2+\mathrm{const}$,
-$\tilde Q\succ 0$, over $\Xi$; so $\xi^\star$ is its unique minimizer.
+where $\bar\xi := \phi(\bar{x})$. Hence minimizing $f$ over $\mathcal{P}$
+is equivalent to minimizing $\tilde{f}(\xi) :=
+\tfrac{1}{2}\|\xi-\bar\xi\|_{\tilde{H}}^2$ over $\mathbb{B}$, with unique
+minimizer $\xi^\star := \phi(x^\star)$.
 
 \smallskip\noindent
-Let $\xi_e:=\mathrm{proj}_\Xi(\bar\xi)$ be the Euclidean projection of
-$\bar\xi$ onto $\Xi$, with residual $w:=\bar\xi-\xi_e$.  From the above we have,
-$(\xi_e)_i=\min(\bar\xi_i,1)$ for all $i$, so
+By definition of $s_i$,
 \[
-  w\ne 0,\quad
-  \mathbf{1}^\top w>0.                                    
+  \bar\xi_i = \frac{s_i(\bar{y}_i-\mu_i)}{h_i}
+            = \frac{|\bar{y}_i-\mu_i|}{h_i} \geq 0 \quad\forall\,i.
 \]
-The projection inequality gives $\langle w,\xi-\xi_e\rangle\le 0$ for all
-$\xi\in\Xi$, i.e.,
-\begin{equation*}
-  \langle w,\xi\rangle \le \langle w,\xi_e\rangle \qquad\forall\xi\in\Xi.
+Since $\bar{y}\notin\mathcal{B}$, there exists $j$ with
+$|\bar{y}_j-\mu_j|>h_j$, so $\bar\xi_j>1$ and $\bar\xi\notin\mathbb{B}$.
+The condition $x\in\mathcal{P}_+$ translates as
+\[
+  \eta^\top T^{-1}(x-c_0)
+  = \sum_i \frac{s_i}{h_i}(y_i-\mu_i)
+  = \sum_i \frac{s_i}{h_i}\cdot\frac{\xi_i h_i}{s_i}
+  = \mathbf{1}^\top\xi \ge 0,
+\]
+where we used $s_i^2=1$. It therefore suffices to show
+$\mathbf{1}^\top\xi^\star\ge 0$.
+
+\smallskip\noindent
+Let $\xi_e := \mathrm{proj}_{\mathbb{B}}(\bar\xi)$ and $w := \bar\xi-\xi_e$.
+Since $\bar\xi_i\ge 0$ for all $i$, the projection clips only at $+1$:
+$(\xi_e)_i = \min(\bar\xi_i,1)\in[0,1]$.
+Hence $w_i = \bar\xi_i - (\xi_e)_i \ge 0$ for all $i$, and
+$w\ne 0$ since $\bar\xi\notin\mathbb{B}$, giving $\mathbf{1}^\top w > 0$.
+The projection inequality $\langle w,\xi-\xi_e\rangle\le 0$ for all
+$\xi\in\mathbb{B}$, combined with central symmetry of $\mathbb{B}$ applied to $-\xi$,
+yields
+\begin{equation*} 
+  |\langle w,\xi\rangle| \le \langle w,\xi_e\rangle
+  \quad\forall\,\xi\in\mathbb{B}.
 \end{equation*}
-Since $\Xi$ is centrally symmetric,
-substituting $-\xi$ into the projection inequality:
-\begin{equation*}
-  \langle w,-\xi-\xi_e\rangle\le 0
-  \implies
-  \langle w,\xi\rangle \ge -\langle w,\xi_e\rangle \qquad\forall\xi\in\Xi.
-\end{equation*}
-Combining 
-\[
-  |\langle w,\xi\rangle|\le\langle w,\xi_e\rangle \qquad\forall\xi\in\Xi.
-\]
-Setting $\xi=0$ yields $\langle w,\xi_e\rangle\ge 0$, and since
-$\bar\xi=\xi_e+w$,
-\[
-  \langle w,\bar\xi\rangle
-  =\langle w,\xi_e\rangle+\|w\|^2>0.                     
-\]
 
 \smallskip\noindent
-Now assume for contradiction that $\mathbf{1}^\top\xi^\star<0$.
-Consider the segment $\gamma(s)=(1-s)\xi^\star+s\bar\xi$, $s\in[0,1]$,
-and define
-\[
-  s^\star:=\sup\{s\in[0,1]:\gamma(s)\in\Xi\},\quad
-  p:=\gamma(s^\star)\in\Xi
-\]
-
-\smallskip\noindent
-Decompose $\bar\xi-\xi^\star = w+(\xi_e-\xi^\star)$ and compute
+Now assume for contradiction that $\mathbf{1}^\top\xi^\star < 0$. Since $\mathbf{1}^\top\xi_e\ge 0$,
+we have $\xi_e\ne\xi^\star$. Decomposing
+$\bar\xi-\xi^\star = w+(\xi_e-\xi^\star)$ and
+applying the above inequality with $\xi=\xi^\star$:
 \[
   \langle\bar\xi-\xi^\star,\,\xi_e-\xi^\star\rangle
-  = \langle w,\xi_e\rangle
-    -\langle w,\xi^\star\rangle
-    +\|\xi_e-\xi^\star\|^2.                                
+  = \langle w,\xi_e-\xi^\star\rangle + \|\xi_e-\xi^\star\|^2
+  \ge \|\xi_e-\xi^\star\|^2 > 0.
 \]
-Now note from the above that $\langle w,\xi^\star\rangle\le\langle w,\xi_e\rangle$,
-so the right-hand side satisfies
-\[
-  \langle\bar\xi-\xi^\star,\,\xi_e-\xi^\star\rangle
-  \ge\|\xi_e-\xi^\star\|^2 > 0.
-\]
-Hence $\bar\xi-\xi^\star$ is not an outward normal of $\Xi$ at
-$\xi^\star$, so $\gamma(s)\in\operatorname{relint}(\Xi)$
-for all sufficiently small $s>0$, giving $s^\star>0$. Additionally, since $\bar\xi\notin\Xi$, we know $s^\star<1$.
-
-\smallskip\noindent
-Since $s^\star\in(0,1)$, the point $p=\gamma(s^\star)$ lies strictly
-between $\xi^\star$ and $\bar\xi$.  Since $\tilde f(\xi)=\tfrac{1}{2}\|\xi-\bar\xi\|_{\tilde Q}^2$,
-\[
-  \tilde f(\gamma(s)) = \tfrac{1}{2}(1-s)^2\|\xi^\star-\bar\xi\|_{\tilde Q}^2,
-\]
-which is strictly decreasing in $s$ on $[0,1)$. Hence
-\[
-  \tilde f(p) = \tilde f(\gamma(s^\star)) < \tilde f(\gamma(0)) = \tilde f(\xi^\star),
-\]
-contradicting optimality of $\xi^\star$ over $\Xi$.
-Therefore $\mathbf{1}^\top\xi^\star\ge 0$, i.e.\ $x^\star\in\mathcal{P}_+$.
+Hence $\bar\xi-\xi^\star$ is not an outward normal of $\mathbb{B}$ at $\xi^\star$,
+so the segment $\gamma(\tau):=(1-\tau)\xi^\star+\tau\bar\xi\in\operatorname{relint}(\mathbb{B})$
+for all sufficiently small $\tau>0$. Define
+$\tau^\star:=\sup\{\tau\in[0,1]:\gamma(\tau)\in\mathbb{B}\}\in(0,1)$,
+where $\tau^\star>0$ follows from the above and $\tau^\star<1$ from
+$\bar\xi\notin\mathbb{B}$. Since $\tilde{f}(\gamma(\tau))=
+\tfrac{1}{2}(1-\tau)^2\|\xi^\star-\bar\xi\|_{\tilde{H}}^2$ is strictly
+decreasing in $\tau$, the point $p:=\gamma(\tau^\star)\in\mathbb{B}$ satisfies
+$\tilde{f}(p)<\tilde{f}(\xi^\star)$, contradicting optimality of
+$\xi^\star$ over $\mathbb{B}$. Therefore $\mathbf{1}^\top\xi^\star\ge 0$,
+i.e.\ $x^\star\in\mathcal{P}_+$.
 \end{proof}
 
-\begin{corollary}\label{cor:three_halfspaces}
-Let $\hat v$ be the farthest, in $Q$-norm sense, good vertex with respect to $\bar x$, i.e.,
-\[
-  \hat v \;:=\; \operatorname*{arg\,max}_{v\in V_\text{good}}\; f(v).
-\]
-Let
-\[
-  T_{\hat v} \;:=\; \ker\!\bigl(\nabla f(\hat v)^\top\bigr)
-  \;=\; \bigl\{d\in\mathbb{R}^n : \nabla f(\hat v)^\top d = 0\bigr\}
-\]
-be the tangent space to the level set $\{x:f(x)=f(\hat v)\}$ at $\hat v$.
-Define the \emph{gradient halfspace}
-\[
-  H_1 := \bigl\{x\in\mathbb{R}^n : {-}\nabla f(\hat v)^\top(x-\hat v)\ge 0\bigr\},
-\]
-whose inward normal $-\nabla f(\hat v)$ is the inward normal to the level set at $\hat v$.
-Let $t(\hat v)\in T_{\hat v}$ be any vector satisfying $t(\hat v)^\top(x^\star-\hat v)\ge 0$,
-and define the \emph{tangent halfspace}
-\[
-  H_2 := \bigl\{x\in\mathbb{R}^n : t(\hat v)^\top(x-\hat v)\ge 0\bigr\},
-\]
-whose inward normal $t(\hat v)$ lies in the tangent space $T_{\hat v}$
-and is therefore orthogonal to the inward normal $-\nabla f(\hat v)$ of $H_1$.
-For $n=2$, $T_{\hat v}$ is one-dimensional and $t(\hat v)$ is unique up to positive scaling.
+\begin{remark}[\texorpdfstring{$\xi$}{xi}-coordinates]\label{rem:xi_coords}
+Under the map $\xi_i = s_i(y_i-\mu_i)/h_i$, the half $\mathcal{P}_+$
+corresponds to $\{\xi\in\mathbb{B} : \mathbf{1}^\top\xi\ge 0\}$, i.e.\ the half of
+$[-1,1]^n$ containing the all-ones vertex $\mathbf{1}$, which lies in the
+direction of $\bar{x}$ from $c_0$ by construction of $s_i$.
+In the isotropic case $h_i\equiv h$, the normal $\eta$ is proportional to
+$\bar{x}-c_0$, and $\mathcal{P}_+$ is the half of $\mathcal{P}$ cut by the
+hyperplane through $c_0$ orthogonal to $\bar{x}-c_0$.
+\end{remark}
 
-Then $x^\star \in \mathcal P_+\cap H_1\cap H_2$, and the cone $H_1\cap H_2$ is a right angle at $\hat v$.
+\begin{figure}[t!]
+  \fbox{\parbox{0.98\linewidth}{\centering\vspace{0.05cm}
+     \centering
+     \begin{subfigure}{0.45\textwidth}
+         \centering
+         \includegraphics[width=\textwidth]{case_1_journal.png}
+         % \caption{Description of Case A}
+         \label{fig:case_a}
+     \end{subfigure}
+     \hfill 
+     \begin{subfigure}{0.45\textwidth}
+         \centering
+         \includegraphics[width=\textwidth]{case_3_journal.png}
+         % \caption{Description of Case B}
+         \label{fig:case_b}
+     \end{subfigure}
+     \vspace{0.05cm}}}
+     \caption{Illustration of the consequences of the results in $\mathbb{R}^2$ with a slightly ill-conditioned and dense $Q$. The shaded blue area denote the near half $\Pset_+$. The shaded Green shows Corollary~\ref{cor:three_halfspaces}. On the left, a cases from Proposition~\ref{prop:two_hops} where the exit facet $F_0$ and the optimum coincide $F^\star$. On the right a case where they are adjacent.}
+     \label{fig:overall_comparison}
+     
+\end{figure}
+
+\begin{corollary}\label{cor:three_halfspaces}
+Let $\hat v$ be the farthest, in Euclidean sense, good vertex with respect to $\bar x$, i.e., $
+  \hat v \in \; \operatorname*{arg\,max}_{\substack{v\,\in\, V_\text{good}}}\;
+                \|v - \bar x\|_2. $
+Define
+\begin{align*}
+  H_1 &:= \bigl\{x\in\mathbb{R}^n : {-}\nabla f(\hat v)^\top(x-\hat v)\ge 0\bigr\}
+  % H_2 &:= \bigl\{x\in\mathbb{R}^n : (\bar x - \hat v)^\top(x-\hat v)\ge 0\bigr\}.
+\end{align*}
+Then $x^\star \in \mathcal P_+\cap H_1$.
 \end{corollary}
 
 \begin{proof}
 $x^\star\in\mathcal{P}_+$ by Theorem~\ref{thm:halfbox_affine}.
-
-\smallskip\noindent\emph{$\nabla f(\hat v)\ne 0$ and existence of $t(\hat v)$.}\;
-Since $Q\succ 0$, we have $\nabla f(\hat v)=Q(\hat v-\bar x)=0$ only if $\hat v=\bar x$.
-But $\hat v\in\mathcal{P}$ and $\bar x\notin\mathcal{P}$, so $\hat v\ne\bar x$ and
-$\nabla f(\hat v)\ne 0$.
-Hence $T_{\hat v}=\ker(\nabla f(\hat v)^\top)$ has dimension $n-1\ge 1$,
-and for any nonzero $d_0\in T_{\hat v}$, at least one of $d_0$ or $-d_0$
-satisfies the sign condition $(\cdot)^\top(x^\star-\hat v)\ge 0$ (since a subspace
-contains both $d_0$ and $-d_0$).
-We fix $t(\hat v)$ to be whichever of the two has nonnegative inner product with $x^\star-\hat v$.
-
-\smallskip\noindent\emph{$x^\star\in H_1$.}\;
 Since $\hat v\in\mathcal{P}$ and $x^\star$ is optimal, $f(x^\star)\le f(\hat v)$.
-Convexity of $f$ gives
-\[
-  \nabla f(\hat v)^\top(x^\star - \hat v)\le f(x^\star)-f(\hat v)\le 0,
-\]
-hence $x^\star\in H_1$.
-
-\smallskip\noindent\emph{$x^\star\in H_2$.}\;
-By construction, $t(\hat v)^\top(x^\star-\hat v)\ge 0$, i.e.\ $x^\star\in H_2$.
-
-\smallskip\noindent\emph{Right-angle cone.}\;
-Since $t(\hat v)\in T_{\hat v}=\ker(\nabla f(\hat v)^\top)$, we have
-$\nabla f(\hat v)^\top t(\hat v)=0$, so the inward normals
-$-\nabla f(\hat v)$ of $H_1$ and $t(\hat v)$ of $H_2$ are orthogonal.
-The boundaries $\partial H_1=\{\nabla f(\hat v)^\top(x-\hat v)=0\}$ and
-$\partial H_2=\{t(\hat v)^\top(x-\hat v)=0\}$ are perpendicular hyperplanes through $\hat v$,
-and $H_1\cap H_2$ is therefore a right-angle cone at $\hat v$.\qed
+Convexity of $f$ then gives
+ $\nabla f(\hat v)^\top(x^\star - \hat v)\le f(x^\star)-f(\hat v)\le 0$, thus $x^\star \in H_1$. 
 \end{proof}
 
+A direct application of Theorem~\ref{thm:halfbox_affine} is the following interesting result. 
 
-\begin{theorem}\label{thm:two_hops}
-Set $\hat{y}:=T^{-1}(\hat{v}-c)$, $\bar{y}:=T^{-1}(\bar{x}-c)$, and
-\[
-  d := \bar{y}-\hat{y}, \qquad d_i \ne 0 \;\;\forall i,
-\]
+\begin{proposition}\label{prop:two_hops}
+Let $\hat{v}$ be as in Corollary~\ref{cor:three_halfspaces}. Set $\hat{y}:=T^{-1}(\hat{v}-c)$, $\bar{y}:=T^{-1}(\bar{x}-c)$, and
+$d := \bar{y}-\hat{y}.
+$ with $d_i \ne 0 \;\;\forall i$ by Lemma~\ref{lem:good_vertex}.  
 Define the \emph{exit facet}
 \[
   F_0 := \bigl\{x\in\mathcal{P} : (T^{-1}(x-c))_{i_0}=\hat{y}^{\mathrm{opp}}_{i_0}\bigr\},
@@ -424,237 +493,222 @@ Define the \emph{exit facet}
   i_0 := \operatorname*{arg\,min}_{i}\frac{u_i-\ell_i}{|d_i|},
 \]
 where $\hat{y}^{\mathrm{opp}}_i := u_i$ if $\hat{y}_i=\ell_i$, and $\hat{y}^{\mathrm{opp}}_i := \ell_i$ if $\hat{y}_i=u_i$.
-Let $F^\star$ denote the optimal face, i.e.\ the minimal face of $\mathcal{P}$ containing $x^\star$.
-Then, for any $Q\succ 0$:
+Let $F^\star$ denote the optimal face, i.e.\ a facet of $\mathcal{P}$ containing $x^\star$.
+Then the following holds
 \begin{enumerate}
   \item[(i)] The ray $r(t):=\hat{v}+t(\bar{x}-\hat{v})$ exits $\mathcal{P}$ through $F_0$.
   \item[(ii)] $F_0$ is adjacent to $F^\star$, so $x^\star$ is reachable from $\hat{v}$
   in at most \emph{two} facet-adjacency hops: $\hat{v}\to F_0\to F^\star$.
 \end{enumerate}
-\end{theorem}
+\end{proposition}
 
 \begin{proof}
-For $(i)$, the $i$-th coordinate of $r(t)$ in $y$-space is $\hat{y}_i+td_i$.
-Since $\hat{v}$ is good, $\operatorname{sign}(d_i)=\operatorname{sign}(\hat{y}^{\mathrm{opp}}_i-\hat{y}_i)$ for every $i$
-(Definition~\ref{def:good_vertex}), so the ray moves strictly toward the far wall $\hat{y}^{\mathrm{opp}}_i$.
+For $(i)$, note that the $i$-th coordinate of $r(t)$ in $y$-space is $\hat{y}_i+td_i$.
+Since $\hat{v}$ is good, $\operatorname{sign}(d_i)=\operatorname{sign}(\hat{y}^{\mathrm{opp}}_i-\hat{y}_i)$ for every $i$ by definition, so the ray moves strictly toward the far wall $\hat{y}^{\mathrm{opp}}_i$.
 The ray reaches wall $i$ at time
 \[
   t_i = \frac{\hat{y}^{\mathrm{opp}}_i - \hat{y}_i}{d_i} = \frac{u_i-\ell_i}{|d_i|} > 0,
 \]
 and the first exit is at $t_0=\min_i t_i$, occurring through the facet indexed by $i_0$.
 
-For $(ii)$, since $\hat{v}$ is good the ray enters $\operatorname{relint}(\mathcal{B})$ immediately,
-so $r(t)\in\operatorname{relint}(\mathcal{P})$ for small $t>0$.
-In the normalized coordinates of Theorem~\ref{thm:halfbox_affine}, the Lemma gives
-$\hat{y}_i = \ell_i$ when $\bar{y}_i > m_i$ and $\hat{y}_i = u_i$ when $\bar{y}_i < m_i$,
-so $\hat{\xi}_i = s_i(\hat{y}_i - m_i)/h_i = -1$ for every $i$, i.e.\ $\mathbf{1}^\top\hat{\xi} = -n$.
-Since $\mathbf{1}^\top\bar{\xi} > 0$, the functional $\mathbf{1}^\top\xi(t)$ along the ray increases
-monotonically from $-n$ toward $\mathbf{1}^\top\bar{\xi}$ as $t$ grows, so it is
-non-negative at $t = t_0$.  Hence $r(t_0) \in \overline{\mathcal{P}_+}$ and $F_0 \subset \overline{\mathcal{P}_+}$.
-
-The parallel opposite of $F_0$ is
+\noindent Concerning $(ii)$, 
+we work in the $\xi$-coordinates of Remark~\ref{rem:xi_coords}, and we note $\hat{v}\mapsto-\mathbf{1}$ and
+$\bar{\xi}_i\ge 0$ for all $i$ with $\mathbf{1}^\top\bar{\xi}>0$.
+The ray in these coordinates is $\xi(t) = -\mathbf{1}+t(\bar{\xi}+\mathbf{1}), \quad t\in[0,1],
+$
+so
 \[
-  \bar{F}^{(i_0)} := \{x\in\mathcal{P} : (T^{-1}(x-c))_{i_0} = \hat{y}_{i_0}\}.
+  \frac{d}{dt}\,\mathbf{1}^\top\xi(t)
+  = \mathbf{1}^\top(\bar{\xi}+\mathbf{1})
+  = \sum_i(\bar{\xi}_i+1) > 0.
 \]
-Since $\mathcal{P}$ is centrally symmetric about $c_0$, the splitting functional $\eta^\top T^{-1}(x-c_0)$
-is odd under the reflection $x\mapsto 2c_0-x$.
-Hence for any $x\in F_0\subset\overline{\mathcal{P}_+}$,
-$\eta^\top T^{-1}(x-c_0)\ge 0$ implies $\eta^\top T^{-1}((2c_0-x)-c_0)=-\eta^\top T^{-1}(x-c_0)\le 0$,
-giving $\bar{F}^{(i_0)}\subset\mathcal{P}_-$.
+Thus $\mathbf{1}^\top\xi(t)$ is strictly increasing from
+$\mathbf{1}^\top\xi(0)=-n<0$ to $\mathbf{1}^\top\xi(1)=\mathbf{1}^\top\bar{\xi}>0$.
+Since $t_0<1$ and
+$\mathbf{1}^\top\xi(1)>0$, strict monotonicity gives
+$\mathbf{1}^\top\xi(t_0)>0$, so $r(t_0)\in\mathcal{P}_+$ and hence
+$F_0\subset\overline{\mathcal{P}_+}$.
 
-In $\mathcal{B}$, every facet is adjacent to all other facets except its parallel opposite.
-Hence $F_0$ is adjacent to every facet of $\mathcal{P}$ except $\bar{F}^{(i_0)}\subset\mathcal{P}_-$,
-and in particular to every facet intersecting $\overline{\mathcal{P}_+}$.
-By Theorem~\ref{thm:halfbox_affine}, $x^\star\in\partial\mathcal{P}\cap\overline{\mathcal{P}_+}$,
-so $F^\star$ intersects $\overline{\mathcal{P}_+}$, and $F_0$ is adjacent to $F^\star$.
+\noindent The parallel opposite of $F_0$ in $\mathcal{P}$ is
+\[
+  \bar{F}^{(i_0)} := \bigl\{x\in\mathcal{P}:(T^{-1}(x-c))_{i_0}=\hat{y}_{i_0}\bigr\}.
+\]
+Since $\mathcal{P}$ is centrally symmetric about $c_0=T\mu+c$, the involution
+$x\mapsto 2c_0-x$ sends $F_0$ to $\bar{F}^{(i_0)}$, and reverses the sign of
+$\eta^\top T^{-1}(x-c_0)$, so $F_0\subset\overline{\mathcal{P}_+}$ implies
+$\bar{F}^{(i_0)}\subset\overline{\mathcal{P}_-}$.
+
+\noindent In the box every facet is adjacent to all $2n-2$ other facets
+except its parallel opposite. Hence $F_0$ is adjacent to every facet of
+$\mathcal{P}$ except $\bar{F}^{(i_0)}\subset\overline{\mathcal{P}_-}$.
+By Theorem~\ref{thm:halfbox_affine}, $x^\star\in\overline{\mathcal{P}_+}$,
+so any facet $F^\star$ containing $x^\star$ intersects $\overline{\mathcal{P}_+}$
+and therefore $F^\star\ne\bar{F}^{(i_0)}$.
+Hence $F_0$ is adjacent to $F^\star$, giving the two-hop chain
+$\hat{v}\to F_0\to F^\star$.
 \end{proof}
 
 
-\section{Algorithmic Implications}\label{sec3}
+%\subsection{Algorithmic Implications}\label{sec3}
 
-Theorem~\ref{thm:two_hops} yields a two-phase initialisation, followed by a short active-set phase.
-For the box case $\mathcal{P}=T(\mathcal{B})+c$, every object in Theorem~\ref{thm:two_hops} is available in closed form after the single change of variables $\bar{y}=T^{-1}(\bar{x}-c)$, and we exploit this throughout.
+The preceding discussion motivates a two-phase initialization, followed by a short \enquote{face-hopping} active-set phase.
+For the box case $\mathcal{P}=T(\mathcal{B})+c$, every object in Proposition~\ref{prop:two_hops} is available in closed form after the change of variables $\bar{y}=T^{-1}(\bar{x}-c)$, and we exploit this throughout. Algorithm~\ref{alg:init_box} details the implementation.
 
 \begin{algorithm}[H]
-\caption{Box Initialisation (Phases~1 and~2)}
+\caption{Geometry-Accelarated Active Set Solver}
 \label{alg:init_box}
 \begin{algorithmic}
-\Require $T,c,\ell,u\in\mathbb{R}^n$,\quad unconstrained minimizer $\bar{x}=-Q^{-1}g$
-\Ensure Exit-face active set $\mathcal{A}_0$ with initial point $\hat{x}_0\in F_0$
-\State $\bar{y} \gets T^{-1}(\bar{x}-c)$
+\Require $(H,g,A,b)$,\quad unconstrained minimizer $\bar{x}=-H^{-1}g$
+\Ensure Exit-face active set $\mathcal{A}_0$ with warm-start point $\hat{x}_0\in F_0$
 \State
-\State \textbf{Phase 1 — Farthest good vertex} \Comment{Lemma, $O(n)$}
-\For{$i = 1,\ldots,n$}
+\If{$\mathcal{P}=T(\mathcal{B})+c$ \textbf{(box case)}} \Comment{$O(n)$, Lemma~\ref{lem:good_vertex} + Proposition~\ref{prop:two_hops}(i)}
+  \State $\bar{y} \gets T^{-1}(\bar{x}-c)$
+  \For{$i = 1,\ldots,n$} \Comment{componentwise}
     \State $\hat{y}_i \gets \ell_i$ if $\bar{y}_i > \ell_i$, else $\hat{y}_i \gets u_i$
-    \Comment{good-vertex condition}
-\EndFor
-\State $\hat{v} \gets T\hat{y}+c$
-\State
-\State \textbf{Phase 2 — Closed-form exit face} \Comment{Theorem~\ref{thm:two_hops}(i), $O(n)$}
-\State $d \gets \bar{y}-\hat{y}$ \Comment{all $d_i\ne 0$ by goodness}
-\State $i_0 \gets \arg\min_{i}\,(u_i-\ell_i)/|d_i|$ \Comment{first-exit coordinate}
-\State $\hat{y}^{\mathrm{opp}}_{i_0} \gets u_{i_0}$ if $\hat{y}_{i_0}=\ell_{i_0}$, else $\hat{y}^{\mathrm{opp}}_{i_0} \gets \ell_{i_0}$
-\State $\hat{x}_0 \gets T(\hat{y} + t_0 d) + c$,\quad $t_0 = (u_{i_0}-\ell_{i_0})/|d_{i_0}|$
-\State $\mathcal{A}_0 \gets \{\text{constraint at wall } \hat{y}^{\mathrm{opp}}_{i_0} \text{ of coordinate } i_0\}$
+  \EndFor
+  \Comment{$\hat{v}=T\hat{y}+c$ is good by Lemma~\ref{lem:good_vertex}(ii)}
+  \State $d \gets \bar{y}-\hat{y}$;\quad
+         $i_0 \gets \arg\min_{i}\,(u_i-\ell_i)/|d_i|$ \Comment{first-exit coordinate}
+  \State $\hat{x}_0 \gets T\!\left(\hat{y} + \tfrac{u_{i_0}-\ell_{i_0}}{|d_{i_0}|}\,d\right)+c$;\quad
+         $\mathcal{A}_0 \gets \{\text{wall } \hat{y}^{\mathrm{opp}}_{i_0}\text{ of coordinate }i_0\}$
+\Else \Comment{general polytope heuristic}
+  \State Find an initial vertex $v_0\in\mathcal{P}$ (by LP)
+  \State $\hat{v} \gets \arg\max_{v\in\text{neighbors}(v_0)}\,\|v-\bar{x}\|_2^2$
+         \Comment{greedy neighbor search}
+  \State $i_0 \gets \arg\min_{i\notin\mathcal{A}(\hat{v})}\,
+         \frac{b_i - a_i^\top\hat{v}}{a_i^\top(\bar{x}-\hat{v})}$,
+         \quad with $a_i^\top(\bar{x}-\hat{v})>0$ \Comment{first ray-exit constraint}
+  \State $\hat{x}_0 \gets \hat{v} + t_0(\bar{x}-\hat{v})$,\;
+         $t_0=(b_{i_0}-a_{i_0}^\top\hat{v})/(a_{i_0}^\top(\bar{x}-\hat{v}))$;\quad
+         $\mathcal{A}_0 \gets \mathcal{A}(\hat{v})\cup\{i_0\}$
+\EndIf
 \State \Return $(\hat{x}_0,\,\mathcal{A}_0)$
+\State
+\textbf{Phase 2 (active-set):} initialize Schur complement starting from $\mathcal{A}_0$,
+iteratively drop the most-negative-multiplier constraint and add all primal-violated constraints,
+updating the Schur complement with rank-1 operations, until KKT holds.
 \end{algorithmic}
 \end{algorithm}
+
+\noindent
+By Proposition~\ref{prop:two_hops}(ii), $F^\star$ lies at most one hop from $F_0$,
+so Phase~2 in Algorithm~\ref{alg:init_box} above terminates in a small number of active-set pivots regardless of $n$.
+
+%%----------------------------------------------------------------------
+%% COMMENTED OUT FOR OPTIMIZATION LETTERS: full Algorithm 2 + strategy discussion
+%% Uncomment for a longer venue (e.g. Math. Prog. Computation).
+%%----------------------------------------------------------------------
+%
+% Let $\mathcal{A}$ denote the current active set with multipliers $\lambda\in\mathbb{R}^{|\mathcal{A}|}$,
+% and let $L_{ii}$ be the $i$-th diagonal of the Cholesky factor of the Schur complement.
+% The \emph{sensitivity} of constraint $i\in\mathcal{A}$ is
+% \[
+%   s_i := \frac{\lambda_i^2}{2\,L_{ii}^2},
+% \]
+% which estimates the objective improvement from relaxing constraint $i$.
+% Four drop strategies are implemented:
+% \begin{itemize}
+%   \item \textsc{Standard}: drop $i^\star = \arg\min_{i\in\mathcal{A}}\lambda_i$ (Dantzig pivot).
+%   \item \textsc{Sensitivity}: drop $i^\star = \arg\max_{i:\lambda_i<-\varepsilon}\,s_i$ (single best improvement).
+%   \item \textsc{Batch}: drop all $i$ with $s_i \ge \tfrac{1}{2}s_{\max}$, up to $B=10$ simultaneously.
+%   \item \textsc{Neighbors}: currently identical to \textsc{Sensitivity}; face-adjacency restriction is reserved for future work.
+% \end{itemize}
+% Violated constraints are added in batch ($V=\{i\notin\mathcal{A}:a_i^\top x > b_i+\varepsilon\}$).
+% The Schur complement is updated incrementally with each rank-1 add/drop.
+%
+% \begin{algorithm}[H]
+% \caption{Face Hopping}
+% \label{alg:facehopping}
+% \begin{algorithmic}
+% \Require Exit-face active set $\mathcal{A}_0$, $(H, g, A, b)$, Cholesky $L_H$ of $H$, strategy $\sigma$
+% \Ensure Optimal-face active set $\mathcal{A}^\star$
+% \State $\mathcal{A} \gets \mathcal{A}_0$;\quad initialise Schur complement from $L_H$
+% \Repeat
+%   \State Solve the equality-constrained QP on face $\mathcal{A}$ via the Schur complement; compute $\lambda$
+%   \If{$\lambda_i \ge -\varepsilon$ $\forall i\!\in\!\mathcal{A}$} \Comment{dual feasible}
+%     \State $V \gets \{i\notin\mathcal{A}: a_i^\top x > b_i+\varepsilon\}$
+%     \If{$V = \emptyset$} \Return $\mathcal{A}$ \Comment{KKT satisfied} \EndIf
+%     \State $\mathcal{A} \gets \mathcal{A} \cup V$;\quad update Schur
+%   \Else \Comment{drop via strategy $\sigma$}
+%     \State select $i^\star$ (or batch) according to $\sigma$;\quad
+%            $\mathcal{A} \gets \mathcal{A}\setminus\{i^\star\}$;\quad update Schur
+%   \EndIf
+% \Until{max iterations}
+% \State \Return $\mathcal{A}$
+% \end{algorithmic}
+% \end{algorithm}
+%%----------------------------------------------------------------------
+
+
+
+
+\section{Numerical Experiments}\label{sec:benchmarks}
+
+Numerical evaluations are carried in two regimes comparing our open-source algorithm against a state of the art active-set solver \texttt{qpOASES}\cite{qpoases}, and a modern first order ADMM solver \texttt{OSQP}\cite{osqp}. The first regime verifies the claims of Section~\ref{sec2} on randomized box QPs and assesses algorithmic effort across problem sizes and feasible set types.
+The second evaluates the solver on a structured MPC instance from
+legged-robot locomotion, where the Hessian has a known block-diagonal structure and solution accuracy requirements are demanding.
+All timings are wall-clock measurements on a single core (Apple M-series, clang~15, \texttt{-O3}), reported as medians over 30 independent solves; the first cold run is excluded to avoid cache effects. \texttt{GaasQP} uses the \textsc{STANDARD} pivot strategy throughout. Every comparison uses identical primal-dual tolerances: $\varepsilon_{\text{abs}}
+= \varepsilon_{\text{rel}} = 10^{-10}$ for the randomized suite and $10^{-7}$ for the MPC suite, applied uniformly to all solvers.
 
 \begin{remark}
-The algorithm extends to general polytopes $(A,b)$ by replacing Phase~1 with a greedy vertex search (sort constraints by $a_i^\top(\bar{x}-\bar{c})$, test $O(n)$ candidate active sets) and Phase~2 with a ray-tracing scan over all $m$ constraints, at cost $O(n^3\log m)$ and $O(mn)$ respectively.
-The active-set phase (Algorithm~\ref{alg:facehopping}) is identical in both cases.
-\end{remark}
-
-By Theorem~\ref{thm:two_hops}(ii), the optimal face $F^\star$ lies at most one hop from $F_0$, so Phase~3 terminates in at most two facet transitions.
-Let $\mathcal{A}$ denote the current active set with multipliers $\lambda\in\mathbb{R}^{|\mathcal{A}|}$, and let $L_{ii}$ be the $i$-th diagonal of the Cholesky factor of the Schur complement.
-The \emph{sensitivity} of constraint $i\in\mathcal{A}$ is
-\[
-  s_i := \frac{\lambda_i^2}{2\,L_{ii}^2},
-\]
-which estimates the objective improvement from relaxing constraint $i$.
-Four drop strategies are implemented:
-\begin{itemize}
-  \item \textsc{Standard}: drop $i^\star = \arg\min_{i\in\mathcal{A}}\lambda_i$ (Dantzig pivot).
-  \item \textsc{Sensitivity}: drop $i^\star = \arg\max_{i:\lambda_i<-\varepsilon}\,s_i$ (single best improvement).
-  \item \textsc{Batch}: drop all $i$ with $s_i \ge \tfrac{1}{2}s_{\max}$, up to $B=10$ simultaneously.
-  \item \textsc{Neighbors}: same score as \textsc{Sensitivity}, restricted to face-adjacent candidates.
-\end{itemize}
-Violated constraints are added in batch ($V=\{i\notin\mathcal{A}:a_i^\top x > b_i+\varepsilon\}$).
-The Schur complement is updated incrementally with each rank-1 add/drop.
-
-\begin{algorithm}[H]
-\caption{Phase 3 --- Face Hopping}
-\label{alg:facehopping}
-\begin{algorithmic}
-\Require Exit-face active set $\mathcal{A}_0$, $(Q, g, A, b)$, Cholesky $L_Q$ of $Q$, strategy $\sigma$
-\Ensure Optimal-face active set $\mathcal{A}^\star$
-\State $\mathcal{A} \gets \mathcal{A}_0$;\quad initialise Schur complement from $L_Q$
-\Repeat
-  \State Solve equality QP: $x \gets (Q+0)^{-1}(\text{using Schur})$;\quad compute $\lambda$
-  \If{$\lambda_i \ge -\varepsilon$ $\forall i\!\in\!\mathcal{A}$} \Comment{dual feasible}
-    \State $V \gets \{i\notin\mathcal{A}: a_i^\top x > b_i+\varepsilon\}$
-    \If{$V = \emptyset$} \Return $\mathcal{A}$ \Comment{KKT satisfied} \EndIf
-    \State $\mathcal{A} \gets \mathcal{A} \cup V$;\quad update Schur
-  \Else \Comment{drop via strategy $\sigma$}
-    \State select $i^\star$ (or batch) according to $\sigma$;\quad
-           $\mathcal{A} \gets \mathcal{A}\setminus\{i^\star\}$;\quad update Schur
-  \EndIf
-\Until{max iterations}
-\State \Return $\mathcal{A}$
-\end{algorithmic}
-\end{algorithm}
-
-\subsubsection{Complexity}
-
-For box constraints $\mathcal{P}=T(\mathcal{B})+c$ with $n$ variables and $m=2n$ constraints:
-\begin{itemize}
-  \item \emph{Phase~1} (farthest good vertex): $O(n)$ — one pass over coordinates.
-  \item \emph{Phase~2} (ray trace): $O(n)$ — $n$ exit-time comparisons.
-  \item \emph{Phase~3} (face hopping): $O(k^2 n)$ per iteration, where $k=|\mathcal{A}|$; at most $O(n)$ iterations by Theorem~\ref{thm:two_hops}.
-    Each Schur complement rank-1 update costs $O(k^2)$.
-\end{itemize}
-For general polytopes, Phase~1 costs $O(n^3\log m)$ (vertex enumeration heuristic) and Phase~2 costs $O(mn)$.
-
-\begin{remark}[Constant pivot count for diagonal $Q$]\label{rem:diag_pivots}
-When $Q=\operatorname{diag}(q_1,\dots,q_n)$ the problem separates coordinate-wise:
-$x_i^\star=\operatorname{clip}(-g_i/q_i,\,\ell_i,\,u_i)$.
-Phase~1 selects $\hat{y}_i$ to match the direction of each $d_i$, so Phase~2's ray already lands on the correct exit face.
-Because $Q$ is diagonal, the Schur solve on the initial active set $\mathcal{A}_0=\{i_0\}$ yields the unconstrained optimum $x_j=-g_j/q_j$ for all free $j$.
-The violated set $V=\{j:\lvert g_j/q_j\rvert>\text{bound}_j\}$ is then added in a single batch, and one further solve verifies dual feasibility, giving \emph{exactly two active-set pivots} regardless of how many coordinates are clamped.
-This contrasts with a dense $Q$, where off-diagonal coupling keeps the optimal active set small (typically $O(1)$ constraints) but requires several pivots to resolve; the iteration counts for warmstarted general-purpose solvers such as qpOASES therefore grow as $O(n)$ for diagonal $Q$ (one iteration per active constraint) while staying nearly constant for dense $Q$.
+\texttt{OSQP} default absolute and
+relative tolerances are notably looser than those of interior-point or active-set methods. This allows faster convergence at the cost of lower accuracy (e.g., $O(10^{-4})$ in the
+objective). Under the tighter tolerances used (for a fair comparison), \texttt{OSQP}'s ADMM iterations increase substantially making it slower than active-set competitors on the small dense QPs
+studied herein.
+This is not a limitation of OSQP per se; it is the appropriate operating regime for control applications that require high-accuracy primal--dual
+feasibility, where the QP size is typically small. For larger problem sizes, \texttt{OSQP} excels with better scaling.
 \end{remark}
 
 
-\subsection{Numerical Experiments}\label{sec:benchmarks}
+\subsection{Randomized Box QPs}\label{sec:bench_random}
 
-We report two complementary sets of experiments.
-The first verifies the geometric claims of Sections~\ref{sec2}--\ref{sec3}
-on randomized box QPs and assesses algorithmic effort across problem sizes and
-Hessian types.
-The second evaluates the solver on a structured MPC instance from
-legged-robot locomotion, where the Hessian has a known block-diagonal structure
-and solution accuracy requirements are demanding.
-All timings are wall-clock measurements on a single core (Apple M-series,
-clang~15, \texttt{-O3}), reported as medians over 30 independent solves; the
-first (cold) run is excluded to avoid cache effects.
-Every comparison uses identical primal-dual tolerances: $\varepsilon_{\text{abs}}
-= \varepsilon_{\text{rel}} = 10^{-10}$ for the randomized suite and $10^{-7}$
-for the MPC suite, applied uniformly to all solvers.
+Random instances of~\eqref{eq:qp} with $\mathcal{B}=[-1,1]^n$, and $\Pset$ as in Assumption~\ref{assumption_1}, 
+for $n\in\{5,10,20,30,50,75,100,150,200\}$ 
+with 30 independent trials per size
+are solved.
+Two Hessian types are tested: (i)~\emph{diagonal $H$}, entries
+$q_i\sim\mathrm{Uniform}(0.5,4)$; and (ii)~\emph{dense $H=R^\top R$}
+($R$ random Gaussian, $\kappa(H)\approx10$).
+For the affine image experiments the transformation is a random
+dense $T$.
+In this setting, the problem is reformulated via $y=T^{-1}(x-c)\in[-1,1]^n$,
+giving $H_{\mathrm{new}}=T^\top HT$, so \texttt{GaasQP}'s box fast-path applies.
+The unconstrained minimizer $\bar{x}=-H^{-1}g$ is placed outside $\mathcal{P}$
+by at least twice the per-dimension half-width.
+A separate sweep varies $\kappa(H)\in\{1,10,10^2,10^3,10^4,10^6\}$ at $n=15$
 
-\paragraph{Remark on OSQP tolerances.}
-OSQP~\cite{osqp} is a first-order ADMM solver whose default absolute and
-relative tolerances are $10^{-4}$, far looser than those of interior-point or
-active-set methods.
-At those defaults OSQP appears very fast and nominally ``converges'', but the
-returned solution can deviate from the true optimum by $O(10^{-3})$ in the
-objective.
-For a fair comparison we set \texttt{eps\_abs} $=$ \texttt{eps\_rel} $=
-10^{-10}$ (randomized suite) and $10^{-7}$ (MPC suite), matching the
-tolerances of GeoQP and qpOASES.
-Under tight tolerances, OSQP's ADMM iterations increase substantially---a
-known phenomenon for first-order methods on ill-conditioned or dense
-problems---making it slower than active-set competitors on the dense QPs
-studied here.
-This is not a limitation of OSQP per se; it is the appropriate operating
-regime for control applications that require high-accuracy primal--dual
-feasibility.
+Across all tested instances the solver returns \texttt{vertices\_explored}$=1$, confirming the $O(n)$
+fast-path of Lemma~\ref{lem:good_vertex}.
+In every case the returned $\hat{v}$ satisfies Definition~1 and coincides with the Euclidean-farthest good vertex among all $2^n$ candidates enumerated by brute force.
+Theorem~\ref{thm:halfbox_affine}, and
+Corollary~\ref{cor:three_halfspaces} are verified numerically wherein the margins $v^\top(x^\star-c_0)\ge0$ and $-\nabla f(\hat{v})^\top(x^\star-\hat{v})\ge0$ are strictly positive in
+every trial, with minimum observed values of order $10^{-1}\  -  \ 10^{0}$.
 
-%----------------------------------------------------------------------
-\subsubsection{Randomized Box QPs}\label{sec:bench_random}
-%----------------------------------------------------------------------
+\begin{figure}[t]
+  \centering
+  \fbox{\parbox{0.95\linewidth}{\centering\vspace{0.5cm}
+      \includegraphics[width=\linewidth]{fig02_iterations.pdf}
+  \vspace{0.1cm}}}
+  \caption{Average active set iterations comparison, with $30$ trials for each problem size showcasing both when $\Pset$ is a pure box (a) and when its the affine image of a box (b).}
+  \label{fig:box_iterations}
+\end{figure}
 
-\paragraph{Setup.}
-We generate random instances of~\eqref{eq:qp} with $\mathcal{P}=[-1,1]^n$
-for $n\in\{5,10,20,30,50,75,100,150,200\}$.
-Two Hessian types are considered: (i)~\emph{diagonal $Q$}, with i.i.d.\
-entries $q_i \sim \mathrm{Uniform}(0.5,4)$; and (ii)~\emph{dense $Q = R^\top
-R$} ($R$ random Gaussian, then regularized), which has condition number
-$\kappa(Q)\approx 10$.
-For each size and type we generate 30 independent instances and report medians.
-A separate sweep varies $\kappa(Q)\in\{1,10,10^2,10^3,10^4,10^6\}$ at $n=15$
-to probe numerical robustness.
-The unconstrained minimizer $\bar{x}=-Q^{-1}g$ is constructed to lie outside
-$[-1,1]^n$ by a margin of at least twice the per-dimension half-width, so the
-box constraint is always active and the problem is non-trivial.
-
-\paragraph{Lemma and propositions verification.}
-Across all $660$ tested instances (11 sizes $\times$ 2 types $\times$ 30 trials)
-the solver returns \texttt{vertices\_explored}$=1$, confirming the $O(n)$
-fast-path of the Lemma: Phase~1 visits exactly one vertex.
-In every case the returned vertex $\hat{v}$ satisfies Definition~1 (good
-vertex) and coincides with the Euclidean-farthest good vertex among all $2^n$
-candidates enumerated by brute force (verified up to $n=16$).
-Theorem~\ref{thm:halfbox_affine} (Proposition~1) and
-Corollary~\ref{cor:three_halfspaces} (Proposition~2) are verified numerically:
-the margins $v^\top(x^*-c_0)\ge0$, $-\nabla f(\hat{v})^\top(x^*-\hat{v})\ge0$,
-and $({\bar{x}}-\hat{v})^\top(x^*-\hat{v})\ge0$ are all strictly positive in
-every trial, with minimum observed values of order $10^{-1}$--$10^{0}$.
-
-\paragraph{Phase-3 effort and hop counts.}
-Table~\ref{tab:hops} summarises algorithmic effort in Phase~3.
-The two key quantities are the number of active-set \emph{pivots}
-(add/drop transitions per solve) and the number of \emph{facet hops}
-(transitions to an adjacent face, i.e.\ one drop followed by at least one add).
-
-For diagonal $Q$ the constant-pivot behavior of Remark~\ref{rem:diag_pivots}
-is confirmed: every instance uses exactly $2$ pivots, independent of $n$.
-For dense $Q$ the average pivot count grows slowly with $n$---from $2.6$ at
-$n=4$ to $11.0$ at $n=200$---while the facet-hop count stays below~$2$ on
+Table~\ref{tab:hops} and Figure~\ref{fig:box_iterations} report pivot (standard constraint add/remove) and hop counts (facet change). For diagonal $H$, exactly $2$ pivots are used for all $n$.
+For dense $H$ the average pivot count grows slowly from $3.6$ at $n=10$ to
+$11.0$ at $n=200$, while the facet-hop count stays at or below $1.2$ on
 average.
-The hop bound of Theorem~\ref{thm:two_hops} ($\text{MaxHops}\le2$) holds in
-all but two out of $600$ instances; the two exceptions arise at $\kappa(Q)
-\approx 10^6$ and involve $3$ hops, which we attribute to the failure of the
-good-vertex-farthest assumption under near-degenerate Hessians.
+The two-hop bound of Proposition~\ref{prop:two_hops} holds in all main instances; the only violations ($3$ hops in $2$ instances) occur in the condition sweep at $\kappa(H)=10^6$ and are attributed to near-degenerate Hessian geometry.
+As shown in Figure~\ref{fig:box_iterations}, this low iteration count translates directly into a decisive pivot advantage over \texttt{qpOASES}.
 
 \begin{table}[h]
 \centering
-\caption{Phase-3 effort on randomized box QPs. Values are medians over 30
+\caption{Randomized box QPs. Values are medians over 30
 trials. `Hops' counts facet transitions; `Bound OK' asserts $\le2$ hops.}
 \label{tab:hops}
 \smallskip
 \begin{tabular}{rrccccc}
 \hline
-$n$ & $Q$ type & AvgPivot & MaxPivot & AvgHops & MaxHops & Bound OK \\
+$n$ & $H$ type & AvgPivot & MaxPivot & AvgHops & MaxHops & Bound OK \\
 \hline
   10 & diagonal &  2.0 &  2 & 0.0 & 0 & \checkmark \\
   10 & dense    &  3.6 &  7 & 0.5 & 1 & \checkmark \\
@@ -668,222 +722,286 @@ $n$ & $Q$ type & AvgPivot & MaxPivot & AvgHops & MaxHops & Bound OK \\
 \end{tabular}
 \end{table}
 
-\paragraph{Timing comparison against qpOASES and OSQP.}
-Table~\ref{tab:perf} reports median solve times.
-For diagonal $Q$ GeoQP is uniformly $2.2$--$3.0\times$ faster than qpOASES,
-which must perform $O(n)$ active-set iterations (one per violated bound) whereas
-GeoQP uses exactly $2$ pivots.
-For dense $Q$ the picture is more nuanced: GeoQP is within $10$--$28\%$ of
-qpOASES for $n\le100$ and $20$--$28\%$ slower at $n\ge150$.
-This is expected---qpOASES' dense Cholesky factorization is highly tuned, and
-without structural exploitation both solvers perform similar work.
-OSQP, even under tight tolerances ($\varepsilon=10^{-10}$), is $2$--$8\times$
-slower than both active-set methods on dense problems, confirming that
-first-order ADMM is not competitive at high accuracy on dense small-to-medium QPs.
+
+Table~\ref{tab:perf} and Figure~\ref{fig:box_timing} report solve times.
+For diagonal $H$, \texttt{GaasQP} is $1.8$--$2.9\times$ faster than \texttt{qpOASES}
+(ratio $0.55\times$ at $n=10$, growing to $0.34\times$ at $n=200$), because
+\texttt{qpOASES} requires $O(n)$ active-set steps while \texttt{GaasQP} uses exactly $2$ pivots.
+For dense $H$ (Figure~\ref{fig:box_timing}, panel~(a)), both solvers perform
+comparably: \texttt{GaasQP} is within $20\%$ of \texttt{qpOASES} across all sizes, with the gap widening modestly at $n\ge100$.
+For the affine image case (panel~(b)), the change-of-variables reformulation
+enables one to take advantage of \texttt{GaasQP}'s box fast-path solve times closely match the
+axis-aligned box with dense-$H$ case, giving \texttt{GaasQP} a ratio of $0.98\times$--$1.64\times$ across the tested
+range.
+\texttt{OSQP} under tight tolerances ($\varepsilon=10^{-10}$) is $1.3\times \ - \ 4\times$
+slower than the active-set methods on dense $H$, and substantially more penalized on the affine case which we attribute to the fact that conditioning $\kappa(T)^2\kappa(H)$ inflates ADMM iterations.
+
+\begin{figure}[!h]
+  \centering
+  \fbox{\parbox{0.95\linewidth}{\centering\vspace{0.5cm}
+      \includegraphics[width=\linewidth]{fig01_performance.pdf}
+  \vspace{0.1cm}}}
+  \caption{Computational time average comparison shows competitive performance in pure cpu wall time over both box (a) and transformed box (b) feasible set cases}
+  \label{fig:box_timing}
+\end{figure}
 
 \begin{table}[h]
 \centering
-\caption{Median solve times ($\mu$s) for GeoQP, qpOASES, and OSQP on
-randomized box QPs ($\varepsilon=10^{-10}$, 30 trials). Ratio is GeoQP /
-qpOASES. OSQP\,$=0$ means it did not reach tolerance ($\varepsilon=10^{-10}$)
-within the default iteration limit.}
+\caption{Median solve times ($\mu$s) for \texttt{GaasQP}, \texttt{qpOASES}, and \texttt{OSQP} on
+randomized box QPs ($\varepsilon=10^{-10}$, 30 trials).}
 \label{tab:perf}
 \smallskip
 \begin{tabular}{rrrrrl}
 \hline
-$n$ & $Q$ type & Geo ($\mu$s) & qpOASES ($\mu$s) & OSQP ($\mu$s) & Geo/qpO \\
+$n$ & $Q$ type & Gaas ($\mu$s) & qpOASES ($\mu$s) & OSQP ($\mu$s) & Gaas/qpO \\
+  10 & diagonal $H$  &    5.9 &   10.8 &   16.7 & 0.55$\times$ \\
+  50 & diagonal $H$  &   73.4 &  167.9 &   44.8 & 0.44$\times$ \\
+ 100 & diagonal $H$  &  400.6 & 1047.2 &   86.5 & 0.38$\times$ \\
+ 200 & diagonal $H$  & 2689.6 & 7859.2 &  177.3 & 0.34$\times$ \\
 \hline
-  10 & diagonal  &    5.9 &   10.4 &   14.8 & 0.56$\times$ \\
-  50 & diagonal  &   71.9 &  163.6 &   41.8 & 0.44$\times$ \\
- 100 & diagonal  &  403.7 & 1032.0 &   84.7 & 0.39$\times$ \\
- 200 & diagonal  & 2598.0 & 7712.3 &  172.0 & 0.34$\times$ \\
+  10 & dense $H$     &    6.3 &    6.2 &   23.6 & 1.02$\times$ \\
+  50 & dense $H$     &   70.6 &   61.8 &  180.9 & 1.14$\times$ \\
+ 100 & dense $H$     &  389.9 &  352.8 &  701.8 & 1.11$\times$ \\
+ 200 & dense $H$     & 2554.8 & 2083.4 & 3202.1 & 1.23$\times$ \\
 \hline
-  10 & dense     &    6.5 &    6.2 &   23.7 & 1.05$\times$ \\
-  50 & dense     &   69.2 &   59.7 &  183.9 & 1.16$\times$ \\
- 100 & dense     &  383.4 &  347.4 &  695.8 & 1.10$\times$ \\
- 200 & dense     & 2552.5 & 2121.4 & 3166.5 & 1.20$\times$ \\
+  10 & affine &    7.0 &    7.0 &   25.2 & 0.98$\times$ \\
+  50 & affine &   70.6 &   51.4 &  271.5 & 1.37$\times$ \\
+ 100 & affine &  360.6 &  250.7 & 1337.7 & 1.44$\times$ \\
+ 200 & affine & 2532.4 & 1544.3 & 6572.1 & 1.64$\times$ \\
 \hline
 \end{tabular}
 \end{table}
 
-\paragraph{Accuracy.}
-Objective differences $|f(x_{\mathrm{Geo}}^*)-f(x_{\mathrm{qpO}}^*)|$ are
-below $2\times10^{-11}$ for diagonal $Q$ and below $1.5\times10^{-11}$ for
-dense $Q$ across all trials, confirming that the solver returns high-precision
-solutions consistent with qpOASES.
 
-\paragraph{Conditioning sweep.}
-Increasing $\kappa(Q)$ from $1$ to $10^4$ at $n=15$ does not substantially
-affect convergence: average pivot counts remain in $[2.0,\,5.8]$,
-objective differences stay below $3.1\times10^{-12}$, and all 20 instances
-per sweep point are solved successfully.
-Convergence is maintained at $\kappa(Q)=10^6$ (all 20 instances solved,
-$|f_{\mathrm{Geo}}^*-f_{\mathrm{qpO}}^*|<1.1\times10^{-11}$) though two
-hop-bound violations arise, as noted above.
+Objective differences $|f_{\mathrm{Gaas}}^\star - f_{\mathrm{qpO}}^\star|$ are
+below $2\times10^{-11}$ across all cases.
+The condition-number sweep ($n=15$) confirms robustness up to $\kappa(H)=10^4$. In effect  average pivot counts stay in $[2.0,\,5.8]$, objective errors remain below
+$5\times10^{-12}$, and all instances converge.
+At $\kappa(H)=10^6$ convergence is maintained but two hop-bound violations
+arise, as noted above.
 
-%----------------------------------------------------------------------
-\subsubsection{LIPM Walking MPC}\label{sec:bench_lipm}
-%----------------------------------------------------------------------
 
-\paragraph{Problem formulation.}
-The Linear Inverted Pendulum Model (LIPM) is the standard reduced dynamic model
+\subsection{LIPM Walking MPC}\label{sec:bench_lipm}
+
+The Linear Inverted Pendulum Model (LIPM) is the standard template
 for bipedal locomotion~\cite{kajita2003biped}.
-Under the LIPM assumption the horizontal center of mass evolves as a double
-integrator driven by gravity:
-\[
-  \ddot{p} = \omega^2(p - u), \qquad \omega = \sqrt{g/h_c},
-\]
-where $p\in\mathbb{R}^2$ is the horizontal center-of-mass position, $u\in\mathbb{R}^2$
-is the Zero Moment Point (ZMP), $h_c$ is the (fixed) center-of-mass height, and
-$g=9.81\,\mathrm{m/s}^2$.
-A classical reformulation in terms of the \emph{Divergent Component of Motion}
-(DCM) $\xi = p + \dot{p}/\omega$ yields first-order decoupled dynamics:
-\[
-  \dot{\xi} = \omega(\xi - u).
-\]
-Discretizing at rate $T$ with forward Euler gives
-$\xi_{k+1} = \alpha\,\xi_k + (1-\alpha)\,u_k,$
-where $\alpha = e^{\omega T}$.
-The x and y axes are \emph{identical and independent} after discretization.
+Written in terms of the \emph{Divergent Component of Motion}
+(DCM) $\xi = p + \dot{p}/\omega$, where $\omega=\sqrt{g/h_c}$, gives decoupled
+first-order dynamics $\dot{\xi} = \omega(\xi - u)$, with $u\in\mathbb{R}^2$ the
+Zero Moment Point (ZMP) \cite{englsberger2015three}.
+Integrating with a period $T$ yields
+$\xi_{k+1} = \alpha\,\xi_k + (1-\alpha)\,u_k$, $\alpha = e^{\omega T}$,
+with $x, \ y$ components identical and independent.
 
-\paragraph{Condensed QP.}
-Over a horizon of $N$ steps the cost
+\begin{figure}[!h]
+  \centering
+  \fbox{\parbox{0.95\linewidth}{\centering\vspace{0.5cm}
+      \includegraphics[width=\linewidth]{fig02_lipm_iterations.pdf}
+  \vspace{0.1cm}}}
+  \caption{Average active set iterations comparison, with $5$ trials for each QP problem  size (MPC horizon).}
+  \label{fig:lipm_itr}
+\end{figure}
+
+
+Over a horizon of $N$ steps, the cost
 \[
   J = \sum_{k=0}^{N-1}\|\xi_k - \xi_k^{\mathrm{ref}}\|^2_{Q_\xi}
     + \sum_{k=0}^{N-1}\|u_k - u_{k-1}\|^2_{Q_u}
 \]
-is condensed by substituting the dynamics $\xi_k = S_\xi\xi_0 + S_u U$,
-where $U=[u_0^\top,\ldots,u_{N-1}^\top]^\top\in\mathbb{R}^{2N}$ and
+is transcribed by substituting $\xi_k = S_\xi\xi_0 + S_u U$, where
+$U=[u_0^\top,\ldots,u_{N-1}^\top]^\top\in\mathbb{R}^{2N}$ and
 $S_u\in\mathbb{R}^{N\times N}$ is the lower-triangular step-response matrix
 with entries $(S_u)_{k,j}=(1-\alpha)\alpha^{k-j}$, $j\le k$.
-The second term penalises input increments via the first-difference operator
-$\Theta$ ($\Theta_{k,k}=1$, $\Theta_{k,k-1}=-1$ for $k\ge1$).
-Expanding and collecting:
+The increment term uses the first-difference operator $\Theta$.
+The Hessian and gradients read
 \[
   H = S_u^\top Q_\xi S_u + \Theta^\top Q_u \Theta + \varepsilon I,
   \qquad
   g = S_u^\top Q_\xi(S_\xi\xi_0 - \Xi^{\mathrm{ref}}) - \Theta^\top Q_u \begin{bmatrix}u_{-1}\\ 0\end{bmatrix},
 \]
-where $\varepsilon=10^{-8}$ is a regularisation term for numerical stability.
-
-\paragraph{Hessian structure.}
-The $2N\times 2N$ Hessian $H$ is \emph{dense} but has a
-\emph{block-diagonal structure}: because the x and y axes are
-decoupled, the $(2i,2j)$ and $(2i{+}1,2j{+}1)$ entries equal the scalar
-$(N\times N)$ Hessian $H_s^{ij}$, and all cross-axis entries are zero:
+with $\varepsilon=10^{-8}$ a regularisation term.
+The $2N\times 2N$ matrix $H$ is \emph{block-diagonal}
 \[
-  H = \begin{bmatrix} H_s & 0 \\ 0 & H_s \end{bmatrix}
-  \quad\text{(permuted to interleaved x/y form)}.
+  H = \begin{bmatrix} H_s & 0 \\ 0 & H_s \end{bmatrix},
 \]
-This means $H^{-1}$ is also block-diagonal, and the Schur complement of any
-active set that decouples along the x/y partition factors into two independent
-$N\times N$ problems.
-GeoQP exploits this at solve time: the x and y sub-problems are solved with
-separate $N$-dimensional Schur complement managers, halving the effective
-dimension and reducing the dominant $O(k^2 n)$ Schur update cost by a factor
-of up to $4$ at large horizon lengths.
+where the dense block $H_s\in\mathbb{R}^{N\times N}$ is the shared scalar-axis hessian.
+\texttt{GaasQP} exploits this structure by maintaining separate $N$-dimensional
+Schur complement managers for x and y, halving the effective dimension and
+reducing the dominant $O(k^2 n)$ update cost by up to a factor of $4$.
 
-\paragraph{Constraints.}
-The ZMP must remain within a per-step support rectangle (foot polygon):
-$\ell_k \le u_k \le \bar{\ell}_k$, $k=0,\ldots,N-1$.
-Because the support polygons are axis-aligned rectangles, the constraint set is
-an axis-aligned box in $\mathbb{R}^{2N}$, i.e.\ $\mathcal{P}=\{U:\ell\le U\le\bar\ell\}$
-with $\ell,\bar\ell\in\mathbb{R}^{2N}$.
-This is exactly the class of problems treated in the paper.
+The ZMP constraint differs between gait phases.
+During \emph{single-support} phase (SSP), the ZMP is confined to the stance foot, assumed to be a
+rectangle, $u_k\in[c_k^x\pm h_x]\times[c_k^y\pm h_y]$, which stacks over the
+horizon into a pure axis-aligned box $\mathcal{P}=\{U:\ell\le U\le\bar\ell\}$
+in $\mathbb{R}^{2N}$.
+The \texttt{GaasQP} box fast-path fires and the intitialization is  explicit.
+During \emph{double-support} (DSP), the ZMP must lie in the convex hull of both feet—the
+union of two offset rectangles with $8$ vertices.
+Applying Andrews' monotone chain~\cite{andrew1979} to those vertices yields
+$p_k\in\{4,\ldots,6\}$ normalized halfplane constraints $a_i^\top u_k \le b_i$
+(normalized so $|a_{ij}|\approx 1$),
+which are appended as general polytope rows to the constraint matrix.
+Phase timings are set as $T_{\mathrm{dsp}}=0.05\,\mathrm{s}$,
+$T_{\mathrm{ssp}}=0.35\,\mathrm{s}$ at $100\,\mathrm{Hz}$---DSP contributes
+approximately $12.5\%$ of preview steps, so the polytope rows are
+a sparse minority of the constraint set; \texttt{GaasQP} uses at most $4$ facet hops across the entire horizon at $N=60$.
 
-\paragraph{Experimental parameters.}
-We use the IIT DCMModelPredictiveController parameters: $h_c=0.53\,\mathrm{m}$,
-$T=0.01\,\mathrm{s}$ ($100\,\mathrm{Hz}$), foot half-extents $0.10\times0.05\,\mathrm{m}$,
-stride $0.18\times0.10\,\mathrm{m}$, single-support phase $0.35\,\mathrm{s}$.
-Horizons $N\in\{5,10,15,20,25,30,35,40,45,50,60,75,90,105,120\}$ are tested,
-giving QP dimensions $n=2N\in\{10,\ldots,240\}$.
-Each horizon is solved 30 times from the same initial condition; we report
-warm-run medians (run index 29, all preceding runs serve as cache warm-up).
-The tolerance for all three solvers is $\varepsilon=10^{-7}$.
-qpOASES is run with \texttt{setToMPC()} options (tighter regularization,
-tailored for receding-horizon problems) but without hot-starting (each call
-is a fresh \texttt{init()}), since the benchmark concerns cold-start latency
-per horizon step.
+We match the parameters used to control the iCub robot\cite{romualdi2018benchmarking} setting $h_c=0.53\,\mathrm{m}$,
+$\omega=4.30\,\mathrm{rad/s}$, $T=0.01\,\mathrm{s}$, foot half-extents
+$0.10\times0.05\,\mathrm{m}$, stride $0.18\times0.10\,\mathrm{m}$.
+Horizons $N\in\{5,10,15,20,25,30,35,40,45,50,55,60\}$ are tested, giving
+$n=2N\in\{10,\ldots,120\}$ and constraint rows $m\in\{20,40\}$.
+Each horizon is solved $5$ times from the same initial condition; we report
+the last-run times (all preceding runs serve as cache warm-up).
+All three solvers use tolerance $\varepsilon=10^{-7}$; \texttt{qpOASES} is configured
+with \texttt{setToMPC()} and each call is a fresh \texttt{init()}. Figure~\ref{fig:lipm_itr} reports the superior iteration count performances achieved by \texttt{GaasQP}.
 
-\paragraph{Results.}
-Table~\ref{tab:lipm} reports the warm-run median times.
-GeoQP is faster than qpOASES for $N\ge10$ and the advantage grows with $N$,
-reaching $2.0\times$ at $N=75$, $1.9\times$ at $N=90$, and $1.6\times$ at
-$N=120$.
-At $N=5$ ($n=10$) qpOASES is slightly faster ($0.8\times$); at this size both
-solvers run in under $15\,\mu$s and the overhead of GeoQP's precomputation
-(computing the full $n\times n$ $Q^{-1}$ once per solve, $O(n^3)$) dominates.
-OSQP under $\varepsilon=10^{-7}$ is competitive at small horizons ($N\le25$)
-but becomes progressively slower beyond $N=45$, reaching $2.6\times$ the
-GeoQP time at $N=90$ and more than $2\times$ at $N=120$.
-This reflects the difficulty of ADMM on dense, increasingly ill-conditioned
-Hessians: the spectral radius of the iteration matrix grows with $N$, since
-$\alpha^N\approx(1.044)^{120}\approx180$ amplifies the conditioning of $H$.
+
+\begin{figure}[!h]
+  \centering
+  \fbox{\parbox{0.95\linewidth}{\centering\vspace{0.5cm}
+      \includegraphics[width=\linewidth]{fig01_lipm_performance.pdf}
+  \vspace{0.1cm}}}
+  \caption{Computational time average comparison shows competitive performance in pure cpu wall time.}
+  \label{fig:lipm_timing}
+\end{figure}
+
+
+Table~\ref{tab:lipm} and Figure~\ref{fig:lipm_timing} reports the warm-run solve times with the SS+DS constraint
+schedule active.
+\texttt{GaasQP} is faster than \texttt{qpOASES} in all horizons $N\ge10$, with the advantage
+growing from $1.4\times$ at $N=10$ to $3.3\times$ at $N=60$.
+At $N=5$ both solvers run in under $0.03\,$ms and the results are almost identical ($|f_{\mathrm{Gaaso}}^\star-f_{\mathrm{qpO}}^\star| \leq 2.2\times10^{-11}$).
+\texttt{OSQP} outperform our method in the mid-range ($N = 30 \dots 45$), wherein \texttt{GaasQP} pull ahead at $N \geq 50$, and in any case remains competitive at all horizons. \texttt{OSQP} showcases better scaling compared to \texttt{qpOASES} throughout. 
+
+The facet-hop count grows from $0$ at $N\le20$ to $4$ at $N=60$, consistent
+with the $\le2$ bound of Proposition~\ref{prop:two_hops} applied separately to
+each of the $(\le4)$ DS steps in the horizon.
+Corresponding active-set pivots grow from $2$ to $50$, while \texttt{qpOASES} working-set
+iterations grow from $5$ to $149$, a $3\times$ higher ratio at large $N$.
 
 \begin{table}[h]
 \centering
-\caption{Warm-run median solve times ($\mu$s) on the LIPM walking MPC
-benchmark ($\varepsilon=10^{-7}$, 30 repeats, run~29 reported).
-Ratio is GeoQP / qpOASES.
-All solvers return OK (primal feasibility and optimality within tolerance).}
+\caption{Warm-run solve times (ms) on the LIPM walking MPC benchmark with
+SS-box + DS-hull constraints ($\varepsilon=10^{-7}$, 5 repeats, last run reported).
+$m$ is the number of general halfplane rows (from DSP steps). All solvers return OK.}
 \label{tab:lipm}
 \smallskip
-\begin{tabular}{rrrrrr}
+\begin{tabular}{rrrrrrrrr}
 \hline
-$N$ & QP dim $n$ & Geo ($\mu$s) & qpOASES ($\mu$s) & OSQP ($\mu$s) & Geo/qpO \\
+$N$ & $n$ & $m$ & Hops & Ph2Itr & qpO iter & Gaas (ms) & qpOASES (ms) & OSQP (ms) \\
 \hline
-   5 &  10 &   13.7 &   11.0 &   24.8 & 1.24$\times$ \\
-  10 &  20 &   19.5 &   23.8 &   38.4 & 0.82$\times$ \\
-  15 &  30 &   28.9 &   44.5 &   58.5 & 0.65$\times$ \\
-  20 &  40 &   44.8 &   78.8 &   80.3 & 0.57$\times$ \\
-  30 &  60 &  135.5 &  221.6 &  113.3 & 0.61$\times$ \\
-  40 &  80 &  341.7 &  688.7 &  186.3 & 0.50$\times$ \\
-  50 & 100 &  735.2 & 1562.6 &  542.8 & 0.47$\times$ \\
-  60 & 120 & 1366.3 & 2946.2 & 1221.3 & 0.46$\times$ \\
-  75 & 150 & 2986.4 & 5942.1 & 4653.7 & 0.50$\times$ \\
-  90 & 180 & 5738.3 &10758.3 &15023.5 & 0.53$\times$ \\
- 120 & 240 &16013.6 &25254.4 &37010.9 & 0.63$\times$ \\
+  5 &  10 & 20 &  0 &   2 &   5 & 0.019 & 0.020 & 0.046 \\
+ 10 &  20 & 20 &  0 &   2 &  10 & 0.028 & 0.040 & 0.065 \\
+ 15 &  30 & 20 &  0 &   2 &  15 & 0.042 & 0.091 & 0.095 \\
+ 20 &  40 & 20 &  0 &   2 &  20 & 0.074 & 0.158 & 0.132 \\
+ 25 &  50 & 20 &  1 &  11 &  25 & 0.116 & 0.273 & 0.194 \\
+ 30 &  60 & 20 &  1 &  17 &  30 & 0.178 & 0.392 & 0.158 \\
+ 35 &  70 & 20 &  2 &  23 &  53 & 0.268 & 0.800 & 0.196 \\
+ 40 &  80 & 20 &  2 &  28 &  70 & 0.382 & 1.189 & 0.227 \\
+ 45 &  90 & 40 &  2 &  33 &  83 & 0.499 & 1.708 & 0.449 \\
+ 50 & 100 & 40 &  3 &  39 & 107 & 0.750 & 2.343 & 0.859 \\
+ 55 & 110 & 40 &  3 &  44 & 129 & 0.929 & 3.430 & 1.001 \\
+ 60 & 120 & 40 &  4 &  50 & 149 & 1.307 & 4.312 & 1.338 \\
 \hline
 \end{tabular}
 \end{table}
 
-\paragraph{Accuracy.}
-The objective differences $|f_{\mathrm{Geo}}^*-f_{\mathrm{qpO}}^*|$ are below
-$10^{-12}$ across all horizon lengths, confirming that GeoQP and qpOASES find
-the same solution to within numerical precision.
 
-\paragraph{Algorithmic effort.}
-Phase-3 requires only $2$ active-set pivots at every horizon, consistent with
-the constant-pivot behavior of Remark~\ref{rem:diag_pivots} applied to the
-decoupled x/y sub-problems.
-Facet hops are zero in all runs: the Phase~1/2 initialization lands directly
-on the optimal face, and Phase~3 terminates after a single equality-QP solve
-per sub-problem.
-This confirms that the theoretical mechanism translates to practice on the
-structured LIPM Hessian.
+\section{Conclusion}\label{sec:conc}
 
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.95\linewidth]{figures_lipm/fig01_lipm_performance.pdf}
-  \caption{Solve-time comparison on the LIPM walking MPC benchmark.
-    Lines show the warm-run median over 30 repeats; shaded bands indicate
-    the interquartile range and 5th--95th percentile.
-    GeoQP exploits the block-diagonal Hessian structure via decoupled
-    Schur complements and is consistently faster than qpOASES beyond $N=10$.
-    OSQP under equal tolerance ($\varepsilon=10^{-7}$) is competitive at
-    small horizons but slows substantially for $N\ge45$ due to the increasing
-    spectral radius of the condensed LIPM Hessian.}
-  \label{fig:lipm_timing}
-\end{figure}
+We studied the geometry of box-constrained (and their affine-images) QPs from the perspective of active-set initialization.
+The main observation is Theorem~\ref{thm:halfbox_affine}, which shows that the unconstrained minimizer
+$\bar{x}$ and the constrained optimum $x^\star$ always lie on the same side of the hyperplane that bisects
+the feasible set along the direction determined by $\bar{x}$, halving the search space.
+A direct application of this is Proposition~\ref{prop:two_hops} establishing that the farthest good vertex $\hat{v}$
+(the Euclidean-farthest vertex from which the ray to $\bar{x}$ enters the polytope interior) has a
+computable exit facet $F_0$ that is guaranteed to be adjacent to the optimal face $F^\star$.
+This yields a two-hop chain $\hat{v}\to F_0\to F^\star$ that can be computed entirely in 
+in $O(n)$ time.
 
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.95\linewidth]{figures_lipm/fig03_violin.pdf}
-  \caption{Algorithmic-effort distributions for GeoQP (Phase-3 pivot count)
-    versus qpOASES (reported active-set iterations) at three representative
-    horizons.
-    GeoQP uses exactly $2$ pivots at all horizons owing to the decoupled
-    x/y structure; facet-hop counts are identically $0$.
-    qpOASES iteration counts grow with $N$ and exhibit larger variance.}
-  \label{fig:lipm_hops}
-\end{figure}
+The accompanying open-source solver \texttt{GaasQP} exploits these observations. For \enquote{box-like} constrained QPs, the warm-start point on $F_0$ is obtained in $O(n)$ closed-form operations, after which a short active-set phase drives the iterates to $F^\star$.
+A heuristic extension to general polytopes replaces the closed-form warm-start with a greedy antipodal search.
+Numerical experiments confirm the practical value of the results.
+On randomized box QPs, \texttt{GaasQP} results in consistently lower active set pivots compared to \texttt{qpOASES} both when the feasible set is an axis aligned box, or an affine image thereoff with a dense hessian.
+On a robot walking predictive control benchmark, \texttt{GaasQP} outperforms \texttt{qpOASES} by $1.4\times$--$3.3\times$ for horizons $N\ge10$, with observed facet-hop counts of at most $4$ per solve -- consistent with the two-hop bound applied per double-support phase. The implmeneted solver remains also competitve with \texttt{OSQP}, a state-of-the-art ADMM solver.
+
+% \backmatter
+
+\bmhead{Acknowledgements}
+
+The first author is grateful to the KAUST CRG grant No. \texttt{XXX} for partially funding his research activities.
+
+
+\section*{Declarations}
+
+% Some journals require declarations to be submitted in a standardised format. Please check the Instructions for Authors of the journal to which you are submitting to see if you need to complete this section. If yes, your manuscript must contain the following sections under the heading `Declarations':
+
+\bmhead{Conflict of interest} The authors declare that there is no conflict of interest in the publication of this paper
+
+
+\bmhead{Ethics approval and consent to participate} Not Applicable as no both human and/ or animal studies.
+% \item Consent for publication
+% \item Data availability 
+% \item Materials availability
+% \item Code availability 
+% \item Author contribution
+
+% \noindent
+% If any of the sections are not relevant to your manuscript, please include the heading and write `Not applicable' for that section. 
+
+% %%===================================================%%
+% %% For presentation purpose, we have included        %%
+% %% \bigskip command. Please ignore this.             %%
+% %%===================================================%%
+% \bigskip
+% \begin{flushleft}%
+% Editorial Policies for:
+
+% \bigskip\noindent
+% Springer journals and proceedings: \url{https://www.springer.com/gp/editorial-policies}
+
+% \bigskip\noindent
+% Nature Portfolio journals: \url{https://www.nature.com/nature-research/editorial-policies}
+
+% \bigskip\noindent
+% \textit{Scientific Reports}: \url{https://www.nature.com/srep/journal-policies/editorial-policies}
+
+% \bigskip\noindent
+% BMC journals: \url{https://www.biomedcentral.com/getpublished/editorial-policies}
+% \end{flushleft}
+
+%\begin{appendices}
+
+%\section{Section title of first appendix}\label{secA1}
+
+%An appendix contains supplementary information that is not an essential part of the text itself but which may be helpful in providing a more comprehensive understanding of the research problem or it is information that is too cumbersome to be included in the body of the paper.
+
+%%=============================================%%
+%% For submissions to Nature Portfolio Journals %%
+%% please use the heading ``Extended Data''.   %%
+%%=============================================%%
+
+%%=============================================================%%
+%% Sample for another appendix section			       %%
+%%=============================================================%%
+
+%% \section{Example of another appendix section}\label{secA2}%
+%% Appendices may be used for helpful, supporting or essential material that would otherwise 
+%% clutter, break up or be distracting to the text. Appendices can consist of sections, figures, 
+%% tables and equations etc.
+
+%\end{appendices}
+
+%%===========================================================================================%%
+%% If you are submitting to one of the Nature Portfolio journals, using the eJP submission   %%
+%% system, please include the references within the manuscript file itself. You may do this  %%
+%% by copying the reference list from your .bbl file, paste it into the main manuscript .tex %%
+%% file, and delete the associated \verb+\bibliography+ commands.                            %%
+%%===========================================================================================%%
+
+\bibliography{sn-bibliography}% common bib file
+%% if required, the content of .bbl file can be included here once bbl is generated
+%%\input sn-article.bbl
+
+\end{document}
