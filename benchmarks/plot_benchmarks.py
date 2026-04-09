@@ -1,19 +1,12 @@
 """
-plot_benchmarks.py — Journal-quality figures for GeoQP box benchmark.
+plot_benchmarks.py — random box QPs benchmark.
 
-Generates two publication-ready figures (PDF + PNG):
+Generates two figures (PDF + PNG):
 
-  fig01_performance.pdf    GeoQP vs qpOASES wall-clock time vs n
+  fig01_performance.pdf    GaasQP vs qpOASES wall-clock time vs n
                            (a) diagonal Q   (b) dense Q
-  fig02_iterations.pdf     GeoQP active-set pivots and facet-adjacency hops vs n
+  fig02_iterations.pdf     GaasQP active-set pivots and facet-adjacency hops vs n
                            (a) pivots       (b) hops
-
-Usage:
-    python plot_benchmarks.py <benchmark_output.txt> [output_dir]
-
-Pipe benchmark output to a file first:
-    ./build/benchmarks/benchmark_box > benchmark_results.txt 2>&1
-    python benchmarks/plot_benchmarks.py benchmark_results.txt figures/
 """
 
 import re
@@ -160,16 +153,11 @@ def parse_benchmark(filepath):
         ("perf_affine_dense_refo", r"Dense-T affine image, reformulated"),
     ]:
         sub = _extract_sub_block(perf_blk, sub_re)
-        # Format variants (field indices: n type Geo qpO [OSQP_us] ratio Pivot qpO_iter [OSQP_iter] Hops ObjDiff Result)
-        #  with OSQP  (12 fields): n type Geo qpO OSQP_us ratio Pivot qpO_iter OSQP_iter Hops ObjDiff Result
-        #  without    (10 fields): n type Geo qpO         ratio Pivot qpO_iter           Hops ObjDiff Result
-        #  old 9-field:            n type Geo qpO         ratio Pivot                    Hops ObjDiff Result
+    
         def _row(p):
-            # Robustly detect new/old table formats. The ratio column contains
-            # a trailing 'x' (e.g. '0.627x'); locate it to infer column layout.
+
             if len(p) < 7:
                 return None
-            # find ratio token index (first token that ends with 'x')
             ratio_idx = None
             for idx, tok in enumerate(p):
                 if isinstance(tok, str) and tok.endswith('x'):
@@ -178,18 +166,12 @@ def parse_benchmark(filepath):
             if ratio_idx is None:
                 return None
 
-            # Core fields
             try:
                 geo_us = float(p[2])
                 qpo_us = float(p[3])
             except ValueError:
                 return None
 
-            # Columns between qpO_us (p[3]) and the ratio token can vary.
-            # Common layouts:
-            #  - no extra cols: ratio at p[4]
-            #  - OSQP present: OSQP_us at p[4], ratio at p[5]
-            #  - warm-start + OSQP: qpO_vh_us at p[4], OSQP_us at p[5], ratio at p[6]
             qpovh_us = None
             osqp_us = None
             extra_count = max(0, ratio_idx - 4)
@@ -197,12 +179,9 @@ def parse_benchmark(filepath):
                 if extra_count == 0:
                     qpovh_us = None
                 elif extra_count == 1:
-                    # single extra column — treat as OSQP_us
                     osqp_us = float(p[4])
                 else:
-                    # two or more extras — assume qpOASES warm-start then OSQP
                     qpovh_us = float(p[4])
-                    # second extra may be OSQP_us
                     try:
                         osqp_us = float(p[5])
                     except (IndexError, ValueError):
@@ -211,13 +190,11 @@ def parse_benchmark(filepath):
                 qpovh_us = None
                 osqp_us = None
 
-            # Average pivots sits immediately after the ratio token
             try:
                 avg_pivot = float(p[ratio_idx + 1])
             except (IndexError, ValueError):
                 avg_pivot = None
 
-            # qpOASES iteration count is the token after avg_pivot
             qpO_iter = None
             qpO_vh_iter = None
             osqp_iter = None
@@ -226,25 +203,21 @@ def parse_benchmark(filepath):
             except (IndexError, ValueError):
                 qpO_iter = None
 
-            # If qpO_vh was present, an extra iteration column follows
             if qpovh_us is not None:
                 try:
                     qpO_vh_iter = float(p[ratio_idx + 3])
                 except (IndexError, ValueError):
                     qpO_vh_iter = None
-                # OSQP_iter may follow after that
                 try:
                     osqp_iter = float(p[ratio_idx + 4])
                 except (IndexError, ValueError):
                     osqp_iter = None
             else:
-                # No qpO_vh column: OSQP_iter may be immediately after qpO_iter
                 try:
                     osqp_iter = float(p[ratio_idx + 3])
                 except (IndexError, ValueError):
                     osqp_iter = None
 
-            # Hops token is either after OSQP_iter or after qpO_iter when OSQP absent
             avg_hops = None
             try:
                 avg_hops = float(p[-3])
@@ -254,7 +227,6 @@ def parse_benchmark(filepath):
                 except (IndexError, ValueError):
                     avg_hops = None
 
-            # osqp_us already attempted above; keep as is if parsed.
 
             return dict(
                 n=int(p[0]),
@@ -291,21 +263,15 @@ def _save(fig, outdir, name):
     plt.close(fig)
 
 
-# ===========================================================================
-#  Fig 1 — Performance: GeoQP vs qpOASES
-# ===========================================================================
 
 def fig01_performance(data, outdir):
-    # Panel A: axis-aligned dense Q
     rows_dense = sorted(data.get("perf_dense", []), key=lambda r: r["n"])
-    # Panel B: reformulated dense-T affine image (y = T⁻¹(x-c) → pure box)
 
     if not rows_dense and not data.get("perf_affine_dense_refo"):
         print("  [skip] fig01_performance (no data)"); return
 
     fig, axes = plt.subplots(1, 2, figsize=(W2, H_FIG))
 
-    # ---- Panel (a): axis-aligned box only ----
     ax = axes[0]
     has_data_a = False
     if rows_dense:
@@ -326,7 +292,6 @@ def fig01_performance(data, outdir):
     else:
         ax.set_visible(False)
 
-    # ---- Panel (b): reformulated dense-T affine image ----
     ax = axes[1]
     rows_affine_dense_refo = sorted(data.get("perf_affine_dense_refo", []), key=lambda r: r["n"])
     if rows_affine_dense_refo:
@@ -349,15 +314,6 @@ def fig01_performance(data, outdir):
     _save(fig, outdir, "fig01_performance")
 
 
-# ===========================================================================
-#  Fig 2 — Iterations: diagonal Q vs dense Q  (1 × 2)
-#
-#    (a) Diagonal Q — GeoQP pivots (flat) vs qpOASES (O(n))
-#    (b) Dense Q    — GeoQP pivots vs qpOASES
-#
-#  GeoQP pivots are bounded because hops ≤ 2 (Corollary 2); indicated by
-#  an annotation rather than a second row of panels.
-# ===========================================================================
 
 def fig02_iterations(data, outdir):
     rows_hop = data.get("hops_vs_n", [])
@@ -367,7 +323,6 @@ def fig02_iterations(data, outdir):
     fig, axes = plt.subplots(1, 2, figsize=(W2, H_FIG),
                              gridspec_kw={"wspace": 0.30})
 
-    # Panel (a): axis-aligned box only
     ax = axes[0]
     sub_dense = sorted(
         [r for r in _filter(rows_hop, "Qtype", "dense") if r.get("n_solved", 0) > 0],
@@ -393,7 +348,6 @@ def fig02_iterations(data, outdir):
     ax.legend(fontsize=7, loc="upper left")
     ax.set_ylabel("Iterations")
 
-    # Panel (b): reformulated dense-T affine image
     ax = axes[1]
     aff_refo_rows = sorted(
         [r for r in data.get("perf_affine_dense_refo", []) if r.get("AvgPivot") is not None],
@@ -422,12 +376,6 @@ def fig02_iterations(data, outdir):
     _save(fig, outdir, "fig02_iterations")
 
 
-# Fig.3 removed by request: affine-only iterations handled in fig02_iterations
-
-
-# ===========================================================================
-#  MAIN
-# ===========================================================================
 
 def main():
     if len(sys.argv) < 2:
@@ -450,7 +398,6 @@ def main():
     print("\nGenerating figures...")
     fig01_performance(data, outdir)
     fig02_iterations(data, outdir)
-    # fig03 removed — affine iteration comparisons included in fig02
 
     print(f"\nDone. 2 figures (PDF + PNG) saved to: {outdir}")
 

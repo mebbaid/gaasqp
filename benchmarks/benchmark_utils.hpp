@@ -8,7 +8,6 @@
 #include <random>
 #include <cmath>
 
-// ─── Shared benchmark types ──────────────────────────────────────────────────
 
 struct QPProblem
 {
@@ -23,7 +22,6 @@ struct QPProblem
     std::string name;
 };
 
-// ─── Random PD matrix generators ─────────────────────────────────────────────
 
 static Eigen::MatrixXd randomPD(int n, std::mt19937 &rng, double condition = 10.0)
 {
@@ -53,7 +51,6 @@ static Eigen::MatrixXd randomPD_conditioned(int n, std::mt19937 &rng, double con
     return Orth * eigs.asDiagonal() * Orth.transpose();
 }
 
-// ─── Eigen conversion helpers ─────────────────────────────────────────────────
 
 static std::vector<double> eigen_to_flat(const Eigen::MatrixXd &M)
 {
@@ -76,9 +73,7 @@ static Eigen::VectorXd compute_xbar(const Eigen::MatrixXd &Q, const Eigen::Vecto
     return -Q.ldlt().solve(g);
 }
 
-// ─── GeoQP conversion helpers ─────────────────────────────────────────────────
 
-// Native lb/ub API (triggers box fast-path in GeoQP)
 static geoqp::Problem to_geoqp(const QPProblem &qp)
 {
     geoqp::Problem gp;
@@ -98,7 +93,6 @@ static geoqp::Problem to_geoqp(const QPProblem &qp)
     return gp;
 }
 
-// Explicit A/b form (bounds expanded as rows, consistent constraint indexing)
 static geoqp::Problem to_geoqp_explicit(const QPProblem &qp)
 {
     geoqp::Problem gp;

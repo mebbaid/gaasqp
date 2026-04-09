@@ -1,31 +1,6 @@
 /**
  * @file benchmark-box.cpp
- * @brief Theory-focused benchmark for box QPs and affine-image-of-box QPs,
- *        following box_antipodal.tex.
- *
- * Verifies and characterises the three main results of box_antipodal.tex:
- *
- *   Lemma           (§Background): Good vertices of T(B)+c are characterised
- *                   by the antipodal rule  ŷᵢ = ℓᵢ if ȳᵢ > ℓᵢ, else uᵢ.
- *                   For axis-aligned boxes this is O(n) and vertices_explored == 1.
- *
- *   Proposition 1   (prop:halfbox_affine): x* ∈ P₊, the half-box defined by
- *                   the Euclidean projection direction v = x̄ − xₑ.
- *                   Measures margin  v⊤(x* − c₀) ≥ 0.
- *
- *   Proposition 2   (prop:three_halfspaces): x* ∈ P₊ ∩ H₁ ∩ H₂  where
- *                       H₁ = { x : −∇f(v̂)⊤(x−v̂) ≥ 0 }
- *                       H₂ = { x : (x̄−v̂)⊤(x−v̂) ≥ 0 }
- *                   and v̂ is the Euclidean-farthest good vertex.
- *                   Reports all three margins and their normalisation by ‖x*−x̄‖.
- *
- * Additional sections:
- *   Phase II hop analysis — shows how the H₁/H₂-guided initialisation
- *                   (from Proposition 2) constrains the number of face hops.
- *   Affine image    — verifies the theory for diagonal-T and dense-T images
- *                   T(B)+c; shows that the box fast-path fires for diagonal T.
- *   Performance     — GeoQP vs qpOASES timing over varying n and Q type.
- *   Hotstart        — fixed Q, repeated solves with varying g.
+ * @brief benchmark for box QPs and affine-image-of-box QPs 
  *
  * Code partially written with the help of GitHub Copilot.
  */
@@ -57,10 +32,7 @@
 
 using Clock = std::chrono::high_resolution_clock;
 
-// Ensure that x̄ = -Q⁻¹g lies strictly outside the box [lb, ub] by at least
-// `min_viol` times the per-dimension half-width from the box centre.
-// When randomPD produces eigenvalues O(n), x̄ shrinks as O(1/n) and can fall
-// inside the box for large n.  Scaling g uniformly preserves problem structure.
+// Ensure that x̄ = -Q⁻¹g lies strictly outside the box [lb, ub] 
 static void ensure_xbar_infeasible(
     const Eigen::MatrixXd &H, Eigen::VectorXd &g,
     const Eigen::VectorXd &lb, const Eigen::VectorXd &ub,
@@ -77,9 +49,6 @@ static void ensure_xbar_infeasible(
         g *= (min_viol / std::max(max_rel, 1e-14));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  box_antipodal.tex geometric helpers
-// ═══════════════════════════════════════════════════════════════════════════
 
 // Euclidean squared distance ‖v − x̄‖₂²
 static double eucl_dist_sq(const Eigen::VectorXd &v, const Eigen::VectorXd &xbar)
@@ -88,7 +57,6 @@ static double eucl_dist_sq(const Eigen::VectorXd &v, const Eigen::VectorXd &xbar
 }
 
 // Euclidean projection of xbar onto axis-aligned box [lb, ub]
-// Valid when T is diagonal (P is an axis-aligned box in x-space)
 static Eigen::VectorXd project_onto_box(const Eigen::VectorXd &xbar,
                                          const Eigen::VectorXd &lb,
                                          const Eigen::VectorXd &ub)
@@ -98,8 +66,6 @@ static Eigen::VectorXd project_onto_box(const Eigen::VectorXd &xbar,
 
 // Antipodal good vertex (Lemma part ii, box_antipodal.tex):
 //   ŷᵢ = ℓᵢ  if ȳᵢ > ℓᵢ,  else uᵢ
-// For axis-aligned boxes (T=I, c=0): same in x-space.
-// Takes the Euclidean-farthest bound per coordinate (Proposition 2).
 static Eigen::VectorXd good_vertex_antipodal(const Eigen::VectorXd &xbar,
                                               const Eigen::VectorXd &lb,
                                               const Eigen::VectorXd &ub)
@@ -116,7 +82,6 @@ static Eigen::VectorXd good_vertex_antipodal(const Eigen::VectorXd &xbar,
 }
 
 // True iff v is a good vertex of the axis-aligned box [lb,ub] w.r.t. x̄
-// (Definition 1, box_antipodal.tex):  ∀i: (vᵢ=lbᵢ ⟹ x̄ᵢ>lbᵢ)  and  (vᵢ=ubᵢ ⟹ x̄ᵢ<ubᵢ)
 static bool is_good_box_vertex(const Eigen::VectorXd &v,
                                 const Eigen::VectorXd &xbar,
                                 const Eigen::VectorXd &lb,
@@ -132,7 +97,6 @@ static bool is_good_box_vertex(const Eigen::VectorXd &v,
     return true;
 }
 
-// Enumerate all 2^n vertices of the axis-aligned box [lb, ub]
 static std::vector<Eigen::VectorXd> enumerate_box_vertices(
     const Eigen::VectorXd &lb, const Eigen::VectorXd &ub)
 {
@@ -148,24 +112,27 @@ static std::vector<Eigen::VectorXd> enumerate_box_vertices(
     return verts;
 }
 
-// Proposition 1 (prop:halfbox_affine): margin of x* in P₊
-//   v = x̄ − xₑ  (Euclidean projection direction)
-//   c₀ = (lb+ub)/2  (box centre)
-//   margin = v⊤(x* − c₀)  ← must be ≥ 0
+
+// margin = η⊤(x*−c₀) where ηᵢ = sign(x̄ᵢ−c₀ᵢ)/hᵢ, hᵢ = ½(uᵢ−ℓᵢ)
+// (matches Theorem thm:halfbox_affine in box_antipodal.tex, T=I, c=0 case)
 static double pplus_margin(const Eigen::VectorXd &xstar,
                             const Eigen::VectorXd &xbar,
                             const Eigen::VectorXd &lb,
                             const Eigen::VectorXd &ub)
 {
-    Eigen::VectorXd xe = project_onto_box(xbar, lb, ub);
-    Eigen::VectorXd v  = xbar - xe;
+    int n = xbar.size();
     Eigen::VectorXd c0 = 0.5 * (lb + ub);
-    return v.dot(xstar - c0);
+    Eigen::VectorXd eta(n);
+    for (int i = 0; i < n; ++i)
+    {
+        double diff = xbar(i) - c0(i);
+        double h    = 0.5 * (ub(i) - lb(i));
+        eta(i) = (diff >= 0.0 ? 1.0 : -1.0) / h;
+    }
+    return eta.dot(xstar - c0);
 }
 
-// Proposition 2 (H₁): margin of x* in H₁
-//   H₁ = { x : −∇f(v̂)⊤(x−v̂) ≥ 0 },  −∇f(v̂) = Q(x̄−v̂) (up to sign in gradient)
-//   Actually: ∇f(v̂) = Qv̂ + g,  so H₁ condition is −(Qv̂+g)⊤(x*−v̂) ≥ 0
+
 //   margin = −(Qv̂+g)⊤(x*−v̂)  ← must be ≥ 0
 static double h1_margin(const Eigen::VectorXd &xstar,
                          const Eigen::VectorXd &vhat,
@@ -176,19 +143,7 @@ static double h1_margin(const Eigen::VectorXd &xstar,
     return -grad_vhat.dot(xstar - vhat);         // −∇f(v̂)⊤(x*−v̂) ≥ 0
 }
 
-// Proposition 2 (H₂): margin of x* in H₂
-//   H₂ = { x : (x̄−v̂)⊤(x−v̂) ≥ 0 }
-//   margin = (x̄−v̂)⊤(x*−v̂)  ← must be ≥ 0
-static double h2_margin(const Eigen::VectorXd &xstar,
-                         const Eigen::VectorXd &vhat,
-                         const Eigen::VectorXd &xbar)
-{
-    return (xbar - vhat).dot(xstar - vhat);
-}
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  Problem generators
-// ═══════════════════════════════════════════════════════════════════════════
 static QPProblem makeBoxQP(int n, std::mt19937 &rng, double scale_g = 5.0,
                             double bound = 1.0)
 {
@@ -201,7 +156,6 @@ static QPProblem makeBoxQP(int n, std::mt19937 &rng, double scale_g = 5.0,
     for (int i = 0; i < n; ++i) p.g(i) = d(rng) * scale_g;
     p.lbX = -bound * Eigen::VectorXd::Ones(n);
     p.ubX =  bound * Eigen::VectorXd::Ones(n);
-    // randomPD eigenvalues are O(n) so x̄ = -Q⁻¹g ≈ O(1/n) for large n;
     // scale g to guarantee x̄ lies outside the box.
     ensure_xbar_infeasible(p.H, p.g, p.lbX, p.ubX);
     p.A = Eigen::MatrixXd(0, n);
@@ -247,9 +201,7 @@ static QPProblem makeIllCondBoxQP(int n, std::mt19937 &rng, double cond,
     return p;
 }
 
-// Affine image T(B)+c with diagonal T (tᵢ ∈ [0.5, 3]):
-//   P = { x : lbX ≤ x ≤ ubX } with lbX = T*ℓ+c, ubX = T*u+c
-//   This is still an axis-aligned box in x-space → box fast-path fires.
+// Affine image T(B)+c with diagonal T (tᵢ ∈ [0.5, 3]): still axis aligned box
 static QPProblem makeDiagAffineBoxQP(int n, std::mt19937 &rng, double scale_g = 5.0)
 {
     QPProblem p;
@@ -280,7 +232,7 @@ struct DenseAffineInfo
 {
     Eigen::MatrixXd T;
     Eigen::VectorXd c;
-    Eigen::VectorXd lb_y;  // y-space bounds
+    Eigen::VectorXd lb_y;
     Eigen::VectorXd ub_y;
 };
 
@@ -292,7 +244,6 @@ static QPProblem makeDenseAffineBoxQP(int n, std::mt19937 &rng, double scale_g =
     p.name = "affine-dense/denseQ";
     p.H = randomPD(n, rng);
 
-    // Dense T via random orthogonal * random diagonal (guaranteed invertible)
     std::normal_distribution<> d(0.0, 1.0);
     std::uniform_real_distribution<> sd(0.5, 2.0);
     Eigen::MatrixXd R(n, n);
@@ -339,11 +290,7 @@ static QPProblem makeDenseAffineBoxQP(int n, std::mt19937 &rng, double scale_g =
     return p;
 }
 
-// Dense-T affine image, reformulated as a pure axis-aligned box QP via y=T⁻¹(x-c).
-// Original: min_x  ½xᵀHx + gᵀx,  x ∈ T([-1,1]ⁿ)+c
-// After y = T⁻¹(x-c):  H_new = TᵀHT,  g_new = Tᵀ(Hc+g),  y ∈ [-1,1]ⁿ
-// GeoQP sees a pure axis-aligned box → O(n) fast-path fires exactly as for makeBoxQP.
-// qpOASES and OSQP also receive the reformulated (simpler) problem — comparison is fair.
+
 static QPProblem makeDenseAffineBoxQP_reformulated(int n, std::mt19937 &rng,
                                                     double scale_g = 5.0)
 {
@@ -362,7 +309,6 @@ static QPProblem makeDenseAffineBoxQP_reformulated(int n, std::mt19937 &rng,
     p.ubX =  Eigen::VectorXd::Ones(n);
     p.A = Eigen::MatrixXd(0, n);
     p.b = Eigen::VectorXd(0);
-    // Guarantee x̄_new = -H_new⁻¹g_new lies outside [-1,1]ⁿ
     ensure_xbar_infeasible(p.H, p.g, p.lbX, p.ubX);
     return p;
 }
@@ -376,9 +322,6 @@ static geoqp::Config default_cfg()
     return cfg;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  Reference solver (qpOASES)
-// ═══════════════════════════════════════════════════════════════════════════
 
 struct RefSolution
 {
@@ -462,9 +405,6 @@ static double solveQPOASES_time(const QPProblem &prob, bool &success, double &ob
 }
 
 #ifdef HAVE_OSQP
-// Returns solve time in microseconds.  Sets success=false and returns 0 on
-// any setup/solver failure.  objVal is set to the optimal objective.
-// osqpIter is set to the number of ADMM iterations taken.
 static double solveOSQP_time(const QPProblem &prob, bool &success, double &objVal,
                              int &osqpIter)
 {
@@ -519,16 +459,11 @@ static double solveOSQP_time(const QPProblem &prob, bool &success, double &objVa
     auto t1 = Clock::now();
 
     // QpSolversEigen wrapper doesn't expose iteration count in a stable way here;
-    // set osqpIter=0 for now to avoid calling OsqpEigen internals directly.
     osqpIter = 0;
     objVal = 0.0; // avoid calling getSolution() on OsqpEigen (previously caused heap corruption)
     return std::chrono::duration<double, std::micro>(t1 - t0).count();
 }
 #endif  // HAVE_OSQP
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  Print helpers
-// ═══════════════════════════════════════════════════════════════════════════
 
 static const int W = 130;
 
@@ -545,17 +480,7 @@ static void print_subheader(const std::string &s)
     std::cout << std::string(W, '-') << "\n";
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  Section 1:  LEMMA — Antipodal Good Vertex, O(n) Fast-Path
-//
-//  For each n and Q type the Lemma guarantees:
-//    (a) vertices_explored == 1  (O(n) fast-path fired)
-//    (b) v̂ is a good vertex  (Definition 1)
-//    (c) Each coordinate of v̂ is at the Euclidean-farthest bound from x̄
-//        (the antipodal rule; gives the Euclidean-farthest good vertex for boxes)
-//    (d) v̂ is the maximum-Euclidean-distance vertex among all good vertices
-//        (Proposition 2: v̂ = argmax_{v∈V_good} ‖v−x̄‖₂ for axis-aligned boxes)
-// ═══════════════════════════════════════════════════════════════════════════
+
 
 void run_lemma()
 {
@@ -601,23 +526,19 @@ void run_lemma()
             sum_time += us;
             sum_ph2  += sol.phase2_iterations;
 
-            // Trivial case: xbar is feasible
             if (sol.vertices_explored == 0 && sol.x_phase1.empty()) continue;
             ++ct;
 
             sum_verts += sol.vertices_explored;
 
-            // (a) Fast-path: exactly 1 vertex explored
             if (sol.vertices_explored != 1) fast_path_ok = false;
 
             Eigen::VectorXd xbar = compute_xbar(qp.H, qp.g);
             Eigen::VectorXd vhat =
                 Eigen::Map<const Eigen::VectorXd>(sol.x_phase1.data(), n);
 
-            // (b) v̂ is a good vertex
             if (!is_good_box_vertex(vhat, xbar, qp.lbX, qp.ubX)) good_ok = false;
 
-            // (c) Each coordinate is at the Euclidean-farthest bound
             for (int j = 0; j < n; ++j)
             {
                 double dl = std::abs(xbar(j) - qp.lbX(j));
@@ -626,7 +547,6 @@ void run_lemma()
                 if (std::abs(vhat(j) - expected) > 1e-6) coord_ok = false;
             }
 
-            // (d) v̂ is Euclidean-farthest among all good vertices  (n ≤ 20 only)
             if (n <= 20)
             {
                 auto all_v = enumerate_box_vertices(qp.lbX, qp.ubX);
@@ -666,16 +586,9 @@ void run_lemma()
     std::cout << "\nLemma overall: " << (all_pass ? "PASS" : "** FAIL **") << "\n";
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  Section 2:  PROPOSITION 1 — x* ∈ P₊  (Half-Box Containment)
+//  x* ∈ P₊  (Half-Box Containment)
 //
 //  P₊ = { x ∈ P : v⊤(x−c₀) ≥ 0 }
-//  v   = x̄ − xₑ  (Euclidean projection direction)
-//  c₀  = (lb+ub)/2  (box centre)
-//
-//  Reports the raw margin v⊤(x*−c₀) and its ratio to ‖v‖·‖x*−c₀‖
-//  (should always be ≥ 0 for any x̄ outside P).
-// ═══════════════════════════════════════════════════════════════════════════
 
 void run_proposition1()
 {
@@ -726,7 +639,7 @@ void run_proposition1()
 
             Eigen::VectorXd xe = project_onto_box(xbar, qp.lbX, qp.ubX);
             sum_v += (xbar - xe).norm();
-            sum_L += (xbar - xstar).norm();  // rough ‖L‖ = distance to solution
+            sum_L += (xbar - xstar).norm();  
         }
 
         if (!ok) all_pass = false;
@@ -764,30 +677,19 @@ void run_proposition1()
     std::cout << "\nProposition 1 overall: " << (all_pass ? "PASS" : "** FAIL **") << "\n";
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  Section 3:  PROPOSITION 2 — x* ∈ P₊ ∩ H₁ ∩ H₂
-//
-//  v̂ = Euclidean-farthest good vertex (from Phase I, sol.x_phase1).
+// x* ∈ P₊ ∩ H₁
 //  H₁ = { x : −∇f(v̂)⊤(x−v̂) ≥ 0 }  ← convexity + optimality of f at v̂
-//  H₂ = { x : (x̄−v̂)⊤(x−v̂) ≥ 0 }  ← v̂ is farthest from x̄ in V_good
-//
-//  All three margins must be ≥ 0. The H₂ margin satisfies the stronger bound
-//  (from the proof): (x̄−v̂)⊤(x*−v̂) ≥ ½‖x*−v̂‖².
-// ═══════════════════════════════════════════════════════════════════════════
 
 void run_proposition2()
 {
-    print_header("PROPOSITION 2 (prop:three_halfspaces): x* ∈ P₊ ∩ H₁ ∩ H₂");
+    print_header("COROLLARY (cor:three_halfspaces): x* ∈ P₊ ∩ H₁");
 
     std::cout << std::setw(6)   << "n"
               << std::setw(12)  << "Q type"
               << std::setw(14)  << "P+ margin"
               << std::setw(14)  << "H1 margin"
-              << std::setw(14)  << "H2 margin"
-              << std::setw(14)  << "H2≥½‖x*−v̂‖²?"
               << std::setw(10)  << "min P+"
               << std::setw(10)  << "min H1"
-              << std::setw(10)  << "min H2"
               << std::setw(10)  << "Result"
               << "\n";
     std::cout << std::string(W, '-') << "\n";
@@ -798,9 +700,8 @@ void run_proposition2()
 
     auto check = [&](int n, bool diagonal)
     {
-        double sum_pp = 0, sum_h1 = 0, sum_h2 = 0;
-        double min_pp = 1e30, min_h1 = 1e30, min_h2 = 1e30;
-        bool h2_bound_ok = true;
+        double sum_pp = 0, sum_h1 = 0;
+        double min_pp = 1e30, min_h1 = 1e30;
         int ct = 0;
         bool row_ok = true;
 
@@ -826,20 +727,12 @@ void run_proposition2()
 
             double pp = pplus_margin(xstar, xbar, qp.lbX, qp.ubX);
             double h1 = h1_margin(xstar, vhat, qp.H, qp.g);
-            double h2 = h2_margin(xstar, vhat, xbar);
 
             sum_pp += pp; min_pp = std::min(min_pp, pp);
             sum_h1 += h1; min_h1 = std::min(min_h1, h1);
-            sum_h2 += h2; min_h2 = std::min(min_h2, h2);
 
             if (pp < -1e-6) row_ok = false;
             if (h1 < -1e-6) row_ok = false;
-            if (h2 < -1e-6) row_ok = false;
-
-            // Verify the stronger H₂ bound from the proof:
-            //   (x̄−v̂)⊤(x*−v̂) ≥ ½‖x*−v̂‖²
-            double half_sq = 0.5 * (xstar - vhat).squaredNorm();
-            if (h2 < half_sq - 1e-6) h2_bound_ok = false;
         }
 
         if (!row_ok) all_pass = false;
@@ -849,11 +742,8 @@ void run_proposition2()
                   << std::setw(14)  << std::scientific << std::setprecision(2)
                      << (sum_pp * inv)
                   << std::setw(14)  << (sum_h1 * inv)
-                  << std::setw(14)  << (sum_h2 * inv)
-                  << std::setw(14)  << (h2_bound_ok ? "OK" : "FAIL")
                   << std::setw(10)  << std::setprecision(1) << min_pp
                   << std::setw(10)  << min_h1
-                  << std::setw(10)  << min_h2
                   << std::setw(10)  << (row_ok ? "PASS" : "FAIL")
                   << "\n";
     };
@@ -864,25 +754,24 @@ void run_proposition2()
         check(n, false);
     }
 
-    std::cout << "\nProposition 2 overall: " << (all_pass ? "PASS" : "** FAIL **") << "\n";
+    std::cout << "\nCorollary overall: " << (all_pass ? "PASS" : "** FAIL **") << "\n";
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  Section 4:  Phase II Hop Analysis
+//  Pivots and Hop Analysis
 //
-//  Since x* ∈ P₊ ∩ H₁ ∩ H₂ (Proposition 2), and Phase I already places v̂
-//  at the farthest good vertex, the H₁/H₂ guided violated-constraint filter
-//  should result in very few Phase II hops in practice.
+//  Since x* ∈ P₊ ∩ H₁ (Corollary cor:three_halfspaces), and Phase I already
+//  places v̂ at the farthest good vertex, the H₁-guided violated-constraint
+//  filter results in very few Phase II hops in practice.
 //
-//  Reports: avg hops, max hops, adjacency bound 2(2n−k), us per hop, and
-//  how phase II cost scales with n vs phase I and phase III.
+//  Reports: avg hops, max hops, adjacency bound ≤2, us per hop, and how
+//  phase II cost scales with n vs phase I and phase III.
 // ═══════════════════════════════════════════════════════════════════════════
 
 void run_hop_analysis()
 {
-    print_header("PHASE II HOP ANALYSIS: H₁/H₂ Guided Convergence");
+    print_header("PHASE II HOP ANALYSIS: H₁-Guided Convergence");
 
-    // (a) Hop count vs n and Q type
     print_subheader("(a) Hop count vs n — box QP (diag and dense Q)");
     std::cout << std::setw(6)   << "n"
               << std::setw(12)  << "Q type"
@@ -1090,28 +979,18 @@ void run_hop_analysis()
     std::cout << "\nHop analysis overall: " << (all_pass ? "PASS" : "** FAIL **") << "\n";
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  Section 5:  AFFINE IMAGE T(B)+c
-//
-//  The paper's theory holds for any nonsingular T.  We verify:
-//    (a) Diagonal T  → bounds remain axis-aligned in x-space;
-//                      box fast-path fires; Props 1 and 2 hold.
-//    (b) Dense T     → explicit A/b form; fast-path does not fire (BFS);
-//                      but GeoQP still finds the correct solution (obj check).
-// ═══════════════════════════════════════════════════════════════════════════
 
 void run_affine_image()
 {
     print_header("AFFINE IMAGE T(B)+c: Theory Verification");
 
     // (a) Diagonal T
-    print_subheader("(a) Diagonal T: fast-path fires, Props 1&2 hold");
+    print_subheader("(a) Diagonal T: fast-path fires, Thm+Corollary hold");
     std::cout << std::setw(6)   << "n"
               << std::setw(10)  << "Verts"
               << std::setw(10)  << "FastPath?"
               << std::setw(14)  << "P+ margin"
               << std::setw(14)  << "H1 margin"
-              << std::setw(14)  << "H2 margin"
               << std::setw(12)  << "ObjDiff"
               << std::setw(10)  << "Result"
               << "\n";
@@ -1123,13 +1002,12 @@ void run_affine_image()
 
     for (int n : {4, 6, 8, 12, 16, 20, 30, 50, 100})
     {
-        double sum_v = 0, sum_pp = 0, sum_h1 = 0, sum_h2 = 0, sum_od = 0;
-        bool fp_ok = true, pp_ok = true, h1_ok = true, h2_ok = true;
+        double sum_v = 0, sum_pp = 0, sum_h1 = 0, sum_od = 0;
+        bool fp_ok = true, pp_ok = true, h1_ok = true;
         int ct = 0;
 
         for (int t = 0; t < trials_a; ++t)
         {
-            // Diagonal-T affine image is still axis-aligned in x-space
             QPProblem qp = makeDiagAffineBoxQP(n, rng_a);
             auto gp = to_geoqp(qp);
             geoqp::Solver solver(default_cfg());
@@ -1149,19 +1027,17 @@ void run_affine_image()
 
             double pp = pplus_margin(xstar, xbar, qp.lbX, qp.ubX);
             double h1 = h1_margin(xstar, vhat, qp.H, qp.g);
-            double h2 = h2_margin(xstar, vhat, xbar);
 
-            sum_pp += pp; sum_h1 += h1; sum_h2 += h2;
+            sum_pp += pp; sum_h1 += h1;
             if (pp < -1e-6) pp_ok = false;
             if (h1 < -1e-6) h1_ok = false;
-            if (h2 < -1e-6) h2_ok = false;
 
             auto ref = solveQPOASES(qp);
             if (ref.success)
                 sum_od += std::abs(sol.objective_value - ref.obj);
         }
 
-        bool row_ok = fp_ok && pp_ok && h1_ok && h2_ok;
+        bool row_ok = fp_ok && pp_ok && h1_ok;
         if (!row_ok) all_pass = false;
         double inv = ct > 0 ? 1.0 / ct : 0.0;
         std::cout << std::setw(6)  << n
@@ -1169,7 +1045,6 @@ void run_affine_image()
                   << std::setw(10) << (fp_ok ? "OK" : "FAIL")
                   << std::setw(14) << std::scientific << std::setprecision(2) << (sum_pp * inv)
                   << std::setw(14) << (sum_h1 * inv)
-                  << std::setw(14) << (sum_h2 * inv)
                   << std::setw(12) << (sum_od * inv)
                   << std::setw(10) << (row_ok ? "PASS" : "FAIL")
                   << "\n";
@@ -1237,10 +1112,6 @@ void run_affine_image()
 
     std::cout << "\nAffine image overall: " << (all_pass ? "PASS" : "** FAIL **") << "\n";
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  Section 6:  TIMING BREAKDOWN  — Phase-level cost on box QPs
-// ═══════════════════════════════════════════════════════════════════════════
 
 void run_timing_breakdown()
 {
@@ -1318,9 +1189,6 @@ void run_timing_breakdown()
         profile(n, false);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  Section 7:  PERFORMANCE vs qpOASES
-// ═══════════════════════════════════════════════════════════════════════════
 
 void run_performance()
 {
@@ -1419,13 +1287,10 @@ void run_performance()
     for (int n : {5, 10, 20, 30, 50, 75, 100, 150, 200})
         bench(n, "affine-diag/Q", [](int n, std::mt19937 &r){ return makeDiagAffineBoxQP(n, r); });
 
-    // Dense-T uses the general-polytope vertex-search initialiser (max 1000 vertices,
-    // each expansion costs O(k·m·n³)).  Keep n small — same limit as Section 5(b).
     print_subheader("Dense-T affine image, dense Q");
     for (int n : {3, 4, 5, 6, 7, 8, 10, 12})
         bench(n, "affine-dense/Q", [](int n, std::mt19937 &r){ return makeDenseAffineBoxQP(n, r); });
 
-    // Reformulated: y = T⁻¹(x-c) → pure box QP with H_new=TᵀHT.  Fast-path fires.
     print_subheader("Dense-T affine image, reformulated (box fast-path)");
     for (int n : {5, 10, 20, 30, 50, 75, 100, 150, 200})
         bench(n, "affine-dense/refo", [](int n, std::mt19937 &r){ return makeDenseAffineBoxQP_reformulated(n, r); });
@@ -1436,9 +1301,6 @@ void run_performance()
               [](int n, std::mt19937 &r){ return makeIllCondBoxQP(n, r, 1e4); });
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  Section 8:  HOTSTART — Fixed Q, Repeated Solves with Varying g
-// ═══════════════════════════════════════════════════════════════════════════
 
 void run_hotstart()
 {
@@ -1543,9 +1405,6 @@ void run_hotstart()
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  MAIN
-// ═══════════════════════════════════════════════════════════════════════════
 
 int main()
 {
@@ -1554,14 +1413,14 @@ int main()
     std::cout << "  Lemma | Proposition 1 | Proposition 2 | Affine image | Performance\n";
     std::cout << std::string(W, '=') << "\n";
 
-    run_lemma();           // Lemma:   O(n) antipodal construction, V_good ≠ ∅
-    run_proposition1();    // Prop 1:  x* ∈ P₊
-    run_proposition2();    // Prop 2:  x* ∈ P₊ ∩ H₁ ∩ H₂
-    run_hop_analysis();    // Phase II hop count and H₁/H₂ guidance
-    run_affine_image();    // Affine image T(B)+c: diagonal and dense T
-    run_timing_breakdown();// Phase-level cost breakdown
-    run_performance();     // GeoQP vs qpOASES, varying n and Q type
-    run_hotstart();        // Hotstart: fixed Q, varying g
+    run_lemma();           
+    run_proposition1();    
+    run_proposition2();    
+    run_hop_analysis();    
+    run_affine_image();    
+    run_timing_breakdown();
+    run_performance();     
+    run_hotstart();        
 
     std::cout << "\n" << std::string(W, '=') << "\n";
     std::cout << "  Benchmark complete.\n";

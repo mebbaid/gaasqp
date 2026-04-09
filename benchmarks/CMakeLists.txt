@@ -1,10 +1,7 @@
-# Benchmarks comparing GeoQP with other QP solvers
-
 find_package(QpSolversEigen QUIET)
 find_package(OsqpEigen QUIET)
 find_package(qpOASES QUIET)
 
-# RANDOM GENERATED PROBLEMS AND LIPM-MPC-LIKE Problem
 if(qpOASES_FOUND)
     message(STATUS "Building box-focused benchmark")
 
@@ -33,20 +30,6 @@ if(qpOASES_FOUND)
         RUNTIME DESTINATION bin)
 endif()
 
-if(QpSolversEigen_FOUND AND qpOASES_FOUND)
-    message(STATUS "Building Unified Benchmark (legacy)")
-
-    add_executable(benchmark benchmark.cpp)
-    target_include_directories(benchmark PRIVATE ${qpOASES_INCLUDE_DIR})
-    target_link_libraries(benchmark PRIVATE 
-        geoqp 
-        QpSolversEigen::QpSolversEigen
-        ${qpOASES_LIBRARY})
-    target_compile_features(benchmark PRIVATE cxx_std_17)
-    
-    install(TARGETS benchmark
-        RUNTIME DESTINATION bin)
-endif()
 
 if(OsqpEigen_FOUND AND qpOASES_FOUND)
     message(STATUS "Building LIPM walking controller benchmark")

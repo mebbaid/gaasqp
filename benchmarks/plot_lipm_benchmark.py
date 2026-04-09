@@ -6,11 +6,6 @@ Generates two figures (PDF + PNG):
   fig01_lipm_performance.pdf    Avg solve time (ms) per solver (caching OFF/ON)
   fig02_lipm_iterations.pdf    Iteration counts per solver (where available)
 
-Usage:
-    python plot_lipm_benchmark.py <benchmark_output.txt> [output_dir]
-
-This parses the "Results (caching = OFF)" and "Results (caching = ON)" tables
-printed by `benchmark_lipm_walking` and makes simple comparison plots.
 """
 
 import os
@@ -67,9 +62,6 @@ def _extract_sub_block(lines, header_re):
 
 
 def _parse_results_table(block):
-    # Parse CASE lines emitted by the modified benchmark (key=value tokens)
-    # Example:
-    # CASE n=4 QP_n=4 QP_m=4 Geo_us=0.123 qpO_us=0.456 OSQP_us=0.789 Geo_it=5 qpO_it=100 OSQP_it=-1 Geo_hops=2 AvgObjGeo=... Diff_vs_qpO=... OK_geo=1 OK_qpO=1 OK_osqp=1
     rows = []
     for line in block:
         s = line.strip()
@@ -81,7 +73,6 @@ def _parse_results_table(block):
             if '=' not in tok:
                 continue
             k, v = tok.split('=', 1)
-            # try numeric conversion
             try:
                 if '.' in v or 'e' in v or 'E' in v:
                     d[k] = float(v)
@@ -89,7 +80,6 @@ def _parse_results_table(block):
                     d[k] = int(v)
             except Exception:
                 d[k] = v
-        # require numeric n (skip header-like CASE lines with placeholders)
         if 'n' in d and isinstance(d['n'], (int, float)):
             rows.append(d)
     return rows
@@ -99,7 +89,6 @@ def fig01_performance(off_rows, on_rows, outdir):
     if not off_rows:
         print("  [skip] fig01_lipm_performance (no data)"); return
 
-    # Group rows by QP size (QP_n or n). Allow multiple runs per size.
     rows = sorted(off_rows, key=lambda r: int(r.get('QP_n', r.get('n', 0))))
     sizes = []
     groups = {}
@@ -133,7 +122,6 @@ def fig01_performance(off_rows, on_rows, outdir):
 
     fig, ax = plt.subplots(figsize=(W2, 3.0))
 
-    # helper to plot median + IQR + 5-95
     def plot_with_bands(series, color, label, marker):
         med = np.array([np.nanmedian(s) for s in series])
         p25 = np.array([np.nanpercentile(s, 25) for s in series])
@@ -146,12 +134,10 @@ def fig01_performance(off_rows, on_rows, outdir):
 
     plot_with_bands(geo_series, C_GEO, 'GaasQP', 'o')
     plot_with_bands(qpo_series, C_QPO, 'qpOASES', 's')
-    # only plot OSQP if there is numeric data
     if not all(np.isnan(np.array([np.nanmedian(s) for s in osqp_series]))):
         plot_with_bands(osqp_series, C_OSQP, 'OSQP', '^')
 
     ax.set_xscale("log")
-    # choose readable x-ticks: a small set of nicely spaced ticks (log-spaced for wide ranges)
     min_n = int(sizes.min())
     max_n = int(sizes.max())
     if max_n <= 30:
@@ -178,7 +164,6 @@ def fig01_performance(off_rows, on_rows, outdir):
 def _write_csv(rows, outpath):
     if not rows:
         return
-    # collect all keys
     keys = set()
     for r in rows:
         keys.update(r.keys())
@@ -197,18 +182,15 @@ def fig03_violin(off_rows, on_rows, outdir):
     sizes = sorted({int(r.get('QP_n', r.get('n'))) for r in rows})
     if not sizes:
         return
-    # pick small, medium, large
     idxs = [0, len(sizes)//2, -1]
     picks = [sizes[i] for i in idxs]
 
     fig, axes = plt.subplots(1, 3, figsize=(W2, 2.6), sharey=False)
     for ax, nn in zip(axes, picks):
-        # collect candidate metrics for Geo
         geo_it_vals = [r.get('Geo_it') for r in rows if int(r.get('QP_n', r.get('n'))) == nn]
         avg_pivot_vals = [r.get('AvgPivot') for r in rows if int(r.get('QP_n', r.get('n'))) == nn]
         geo_hops_vals = [r.get('Geo_hops') for r in rows if int(r.get('QP_n', r.get('n'))) == nn]
 
-        # choose Geo metric: prefer phase2 iters (Geo_it) if present, otherwise AvgPivot, otherwise facet hops
         has_geo_iters = any((v is not None and v != 0) for v in geo_it_vals)
         if has_geo_iters:
             geo_vals = [float(v) for v in geo_it_vals if v is not None and v != 0]
@@ -221,14 +203,12 @@ def fig03_violin(off_rows, on_rows, outdir):
                 geo_vals = [float(v) for v in geo_hops_vals if v is not None]
                 ylabel = 'Facet hops'
 
-        # qpOASES iterations (filter sentinel negatives)
         qpo_vals = [float(r['qpO_it']) for r in rows if int(r.get('QP_n', r.get('n'))) == nn and r.get('qpO_it') is not None and r.get('qpO_it') >= 0]
 
         geo = np.array(geo_vals) if geo_vals else np.array([])
         qpo = np.array(qpo_vals) if qpo_vals else np.array([])
         data = [geo, qpo]
 
-        # If no iteration-like data at all, fallback to solve-time distributions
         total_samples = sum(int(d.size) for d in data)
         if total_samples == 0:
             geo = np.array([float(r['Geo_ms']) for r in rows if int(r.get('QP_n', r.get('n'))) == nn and r.get('Geo_ms') is not None])
@@ -241,12 +221,10 @@ def fig03_violin(off_rows, on_rows, outdir):
             ax.text(0.5, 0.5, 'no data', ha='center', va='center', transform=ax.transAxes)
             continue
 
-        # If every dataset has at least 2 samples, use violinplot; otherwise scatter+box
         enough_for_violin = all(d.size >= 2 for d in data)
         colors = [C_GEO, C_QPO]
         if enough_for_violin:
             parts = ax.violinplot([d for d in data], showmeans=False, showextrema=False)
-            # color bodies per series
             for i, pc in enumerate(parts['bodies']):
                 pc.set_facecolor(colors[i])
                 pc.set_alpha(0.5)
@@ -262,7 +240,6 @@ def fig03_violin(off_rows, on_rows, outdir):
         ax.set_title(f'n={nn}')
         ax.set_ylabel(ylabel)
 
-    # minimal layout for journal; rely on panel titles and axis labels
     fig.tight_layout()
     for ext in ('pdf', 'png'):
         fig.savefig(os.path.join(outdir, f'fig03_violin.{ext}'), dpi=300, bbox_inches='tight')
@@ -277,7 +254,6 @@ def fig04_cdf(off_rows, on_rows, outdir):
     sizes = sorted({int(r.get('QP_n', r.get('n'))) for r in rows})
     if not sizes:
         return
-    # pick size with most samples; if none has enough samples, aggregate across sizes
     counts_per_size = {}
     for nn in sizes:
         counts_per_size[nn] = sum(1 for r in rows if int(r.get('QP_n', r.get('n'))) == nn and r.get('Geo_us') is not None)
@@ -287,7 +263,6 @@ def fig04_cdf(off_rows, on_rows, outdir):
     osqp = sorted([float(r['OSQP_ms']) for r in rows if int(r.get('QP_n', r.get('n'))) == nn and r.get('OSQP_ms') is not None])
     total_samples = len(geo) + len(qpo) + len(osqp)
     if total_samples < 4:
-        # aggregate across all sizes
         geo = sorted([float(r['Geo_ms']) for r in rows if r.get('Geo_ms') is not None])
         qpo = sorted([float(r['qpO_ms']) for r in rows if r.get('qpO_ms') is not None])
         osqp = sorted([float(r['OSQP_ms']) for r in rows if r.get('OSQP_ms') is not None])
@@ -326,7 +301,6 @@ def fig02_iterations(off_rows, on_rows, outdir):
     qpo_it = np.array([np.nan if r.get('qpO_it') is None else float(r.get('qpO_it')) for r in rows])
     geo_hops = np.array([np.nan if r.get('Geo_hops') is None else float(r.get('Geo_hops')) for r in rows])
     avg_pivot = np.array([np.nan if r.get('AvgPivot') is None else float(r.get('AvgPivot')) for r in rows])
-    # Choose Geo metric: prefer Geo phase2 iters if present, otherwise prefer phase2 pivot counts, then facet hops
     use_geo_iters = not np.all(np.isnan(geo_it) | (geo_it == 0))
     if use_geo_iters:
         geo_metric = geo_it
@@ -344,7 +318,6 @@ def fig02_iterations(off_rows, on_rows, outdir):
     ax.plot(n, geo_metric, "o-", color=C_GEO, label=geo_label, linewidth=1.6)
     ax.plot(n, qpo_it, "s--", color=C_QPO, label="qpOASES (iters)", linewidth=1.4)
     ax.set_xscale("log")
-    # readable x-ticks as in performance plot
     min_n = int(n.min())
     max_n = int(n.max())
     if max_n <= 30:
@@ -383,7 +356,6 @@ def main():
     with open(filepath) as fh:
         raw = fh.readlines()
 
-    # New CASE-based output: parse the "Results (horizons)" section
     horizon_blk = _extract_sub_block(raw, r"Results \(horizons\)")
     rows = _parse_results_table(horizon_blk) if horizon_blk else []
 
