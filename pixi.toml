@@ -1,0 +1,45 @@
+[workspace]
+authors = ["mebbaid <mohamed.elobaid@kaust.edu.sa>"]
+channels = ["conda-forge"]
+name = "geoqp"
+platforms = ["linux-64", "osx-arm64"]
+version = "0.1.0"
+
+[dependencies]
+qpsolvers-eigen = ">=0.2.0,<0.3"
+qpoases = ">=3.2,<4"
+eigen = ">=3.4.0,<4"
+
+cmake = ">=4.2.3,<5"
+cxx-compiler = ">=1.11.0,<2"
+ninja = ">=1.12,<2"
+gtest = ">=1.14,<2"
+
+# conceptualization
+python = "*"
+matplotlib = ">=3.10.8,<4"
+pandas = ">=3.0.1,<4"
+scipy = ">=1.17.1,<2"
+
+[target.linux-64.dependencies]
+valgrind = ">=3.26.0,<4"
+
+
+[tasks]
+configure = { cmd = "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release" }
+build = { cmd = "cmake --build build -j$(nproc)", depends-on = ["configure"] }
+configure-debug = { cmd = "cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug" }
+build-debug = { cmd = "cmake --build build-debug -j$(nproc)", depends-on = ["configure-debug"] }
+benchmark = { cmd = "./build/benchmarks/benchmark", depends-on = ["build"] }
+
+benchmark-box = {cmd = "./build/benchmarks/benchmark_box", depends-on = ["build"] }
+benchmark-lipm = { cmd = "./build/benchmarks/benchmark_lipm_walking", depends-on = ["build"] }
+example = { cmd = "./build/examples/simple_example", depends-on = ["build"] }
+test = { cmd = "cd build && ctest --output-on-failure", depends-on = ["build"], description = "Run all tests" }
+
+
+[target.linux-64.tasks]
+valgrind = { cmd = "valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes ./build-debug/examples/simple_example", depends-on = ["build-debug"] }
+
+
+
