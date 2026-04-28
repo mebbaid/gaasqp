@@ -1,7 +1,7 @@
 
 # GaasQP
 
-A geometric active-set QP solver for polytope-constrained quadratic programs. GaasQP exploits the polyhedral structure of the feasible region to find the optimal face via coordinate-antipodal vertex initialization and face-hopping, bypassing the need for a phase-I feasibility pass on warm-started problems.
+A geometric active-set QP solver for box-constrained quadratic programs. GaasQP exploits the combinatorial structure of the feasible region to find the optimal face via coordinate-antipodal vertex initialization and face-hopping, bypassing the need for a phase-I feasibility pass on warm-started problems.
 
 Companion code for the paper *"Antipodal Initialization for Box-Constrained Quadratic Programs"*.
 
