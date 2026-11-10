@@ -5,6 +5,7 @@
 #include <memory>
 #include <stdexcept>
 #include <cmath>
+#include <limits>
 
 namespace geoqp
 {
@@ -57,6 +58,18 @@ namespace geoqp
         int num_active_constraints; // Number of active constraints at solution
         int vertices_explored;      // Number of vertices explored in Phase 1
         std::vector<double> x_phase1; // Phase I vertex v* (BFS result, before Phase II/III)
+
+        // Geometric certificate (visible-facet lemma).  When x̄ is infeasible, some
+        // constraint violated by x̄ is active at x★ with a strictly positive
+        // multiplier; for a box these are the visible facets.
+        //   violated_active_count : # active rows with λ > tol and aᵢᵀx̄ > bᵢ
+        //                           (theory: ≥ 1); −1 when not applicable
+        //                           (x̄ feasible, or no active set)
+        //   visible_cut_margin    : Σ_{i∈V} ζ★ᵢ − 2 in the antipodal frame
+        //                           (theory: ≥ 0); NaN unless the feasible set
+        //                           is a pure axis-aligned box
+        int violated_active_count = -1;
+        double visible_cut_margin = std::numeric_limits<double>::quiet_NaN();
         double solve_time;
         double phase1_time;
         double phase2_time;

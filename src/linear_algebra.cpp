@@ -4,6 +4,11 @@
 #include <cmath>
 #include <algorithm>
 #include <cstring>
+#include <vector>
+
+#ifdef GEOQP_USE_EIGEN
+#include <Eigen/Cholesky>
+#endif
 
 namespace geoqp
 {
@@ -80,13 +85,103 @@ namespace geoqp
         void LinearAlgebra::cholesky(const double *GEOQP_RESTRICT A, double *GEOQP_RESTRICT L, int n)
         {
             geoqp::timing::ScopedTimer _t_chol(geoqp::timing::la_cholesky_ns, geoqp::timing::la_cholesky_count);
-            // Zero only the lower-triangular portion that we write.
-            // The old std::fill(L, L+n*n, 0) wrote the full n² elements (e.g. 20 KB for
-            // n=50) but only the lower triangle is ever set; the upper stays unused.
-            for (int i = 0; i < n; ++i)
-                for (int j = 0; j <= i; ++j)
-                    L[i * n + j] = 0.0;
+            // Diagonal matrix: L = diag(sqrt(aᵢᵢ)).  The general loop below gives
+            // exactly this, but in O(n³); the scan stops at the first off-diagonal
+            // non-zero, so dense matrices pay O(1) for it.
+            {
+                bool diagonal = true;
+                for (int i = 1; i < n && diagonal; ++i)
+                    for (int j = 0; j < i; ++j)
+                        if (A[i * n + j] != 0.0)
+                        {
+                            diagonal = false;
+                            break;
+                        }
+                if (diagonal)
+                {
+                    for (int i = 0; i < n; ++i)
+                    {
+                        for (int j = 0; j < i; ++j)
+                            L[i * n + j] = 0.0;
+                        double val = A[i * n + i];
+                        if (val < 0.0)
+                        {
+                            if (val < -1e-9)
+                                throw NumericalException("Matrix is not positive definite");
+                            val = 0.0;
+                        }
+                        L[i * n + i] = std::sqrt(val);
+                    }
+                    return;
+                }
+            }
 
+            // Fast paths.  Both write only the lower triangle, like the reference
+            // loop; if either rejects the matrix the reference loop below runs and
+            // decides (it tolerates pivots in [−1e-9, 0] and throws otherwise).
+            const auto copy_lower = [&]() {
+                for (int i = 0; i < n; ++i)
+                    std::memcpy(L + static_cast<size_t>(i) * n, A + static_cast<size_t>(i) * n,
+                                static_cast<size_t>(i + 1) * sizeof(double));
+            };
+
+            bool use_right_looking = true;
+#ifdef GEOQP_USE_EIGEN
+            // Large n: Eigen's blocked factorisation.  A row-major lower factor
+            // occupies the same memory as a column-major upper factor (A = UᵀU,
+            // L = Uᵀ), the layout Eigen is fastest on.
+            if (n > 80)
+            {
+                use_right_looking = false;
+                copy_lower();
+                Eigen::Map<Eigen::MatrixXd> M(L, n, n);
+                Eigen::LLT<Eigen::Ref<Eigen::MatrixXd>, Eigen::Upper> llt(M);
+                if (llt.info() == Eigen::Success)
+                    return;
+            }
+#endif
+            // Small and medium n (matrix fits in L1/L2): right-looking form.  Once
+            // column j is final it is copied to a contiguous buffer and every later
+            // row gets one axpy, row_i[j+1..i] −= L[i][j]·col[j+1..i].  An axpy has no
+            // reduction, so it vectorises without reordering any sum.
+            if (use_right_looking)
+            {
+                static thread_local std::vector<double> tl_col;
+                if (tl_col.size() < static_cast<size_t>(n))
+                    tl_col.resize(n);
+                double *GEOQP_RESTRICT col = tl_col.data();
+                copy_lower();
+                bool ok = true;
+                for (int j = 0; j < n && ok; ++j)
+                {
+                    double d = L[static_cast<size_t>(j) * n + j];
+                    if (!(d > 0.0))
+                    {
+                        ok = false;
+                        break;
+                    }
+                    d = std::sqrt(d);
+                    L[static_cast<size_t>(j) * n + j] = d;
+                    const double inv = 1.0 / d;
+                    for (int i = j + 1; i < n; ++i)
+                    {
+                        const double v = L[static_cast<size_t>(i) * n + j] * inv;
+                        L[static_cast<size_t>(i) * n + j] = v;
+                        col[i] = v;
+                    }
+                    for (int i = j + 1; i < n; ++i)
+                    {
+                        const double lij = col[i];
+                        double *GEOQP_RESTRICT row = L + static_cast<size_t>(i) * n;
+                        for (int k = j + 1; k <= i; ++k)
+                            row[k] -= lij * col[k];
+                    }
+                }
+                if (ok)
+                    return;
+            }
+
+            // Reference loop: every entry of the lower triangle is assigned.
             for (int i = 0; i < n; ++i)
             {
                 for (int j = 0; j <= i; ++j)
@@ -167,6 +262,34 @@ namespace geoqp
             }
         }
 
+        // Solve L x = e_v.  Same operations in the same order as
+        // forward_sub(L, e_v, x, n) minus the terms that are exactly zero
+        // (x[j] = 0 for j < v), so the result is bit-identical.
+        void LinearAlgebra::forward_sub_unit(const double *GEOQP_RESTRICT L, int v,
+                                             double *GEOQP_RESTRICT x, int n)
+        {
+            for (int i = 0; i < v; ++i)
+                x[i] = 0.0;
+            const int j0 = v & ~3; // keep forward_sub's 4-way accumulator alignment
+            for (int i = v; i < n; ++i)
+            {
+                const double *GEOQP_RESTRICT Li = L + i * n;
+                double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
+                int j = j0;
+                for (; j + 3 < i; j += 4)
+                {
+                    sum0 += Li[j] * x[j];
+                    sum1 += Li[j + 1] * x[j + 1];
+                    sum2 += Li[j + 2] * x[j + 2];
+                    sum3 += Li[j + 3] * x[j + 3];
+                }
+                double sum = (sum0 + sum1) + (sum2 + sum3);
+                for (; j < i; ++j)
+                    sum += Li[j] * x[j];
+                x[i] = ((i == v ? 1.0 : 0.0) - sum) / Li[i];
+            }
+        }
+
         void LinearAlgebra::backward_sub(const double *GEOQP_RESTRICT L, const double *GEOQP_RESTRICT b,
                                          double *GEOQP_RESTRICT x, int n)
         {
@@ -230,20 +353,12 @@ namespace geoqp
             solve_cholesky(tl_L.data(), b, x, n);
         }
 
-        void LinearAlgebra::solve_linear_system(const double *A, const double *b, double *x, int n)
+        // Gaussian elimination with partial pivoting, overwriting A and b.
+        // Returns false if a pivot is below 1e-14.
+        bool LinearAlgebra::solve_linear_system_inplace(double *GEOQP_RESTRICT A_copy,
+                                                        double *GEOQP_RESTRICT b_copy,
+                                                        double *GEOQP_RESTRICT x, int n)
         {
-            geoqp::timing::ScopedTimer _t_solve(geoqp::timing::solve_ns, geoqp::timing::solve_count);
-            static thread_local std::vector<double> tl_A_copy;
-            static thread_local std::vector<double> tl_b_copy;
-            if (tl_A_copy.size() < static_cast<size_t>(n) * static_cast<size_t>(n))
-                tl_A_copy.resize(n * n);
-            if (tl_b_copy.size() < static_cast<size_t>(n))
-                tl_b_copy.resize(n);
-            std::memcpy(tl_A_copy.data(), A, n * n * sizeof(double));
-            std::memcpy(tl_b_copy.data(), b, n * sizeof(double));
-            double *GEOQP_RESTRICT A_copy = tl_A_copy.data();
-            double *GEOQP_RESTRICT b_copy = tl_b_copy.data();
-
             for (int k = 0; k < n; ++k)
             {
                 int pivot = k;
@@ -259,9 +374,7 @@ namespace geoqp
                 }
 
                 if (max_val < 1e-14)
-                {
-                    throw NumericalException("Singular matrix in linear system");
-                }
+                    return false;
 
                 if (pivot != k)
                 {
@@ -292,6 +405,22 @@ namespace geoqp
                 }
                 x[i] = (b_copy[i] - sum) / A_copy[i * n + i];
             }
+            return true;
+        }
+
+        void LinearAlgebra::solve_linear_system(const double *A, const double *b, double *x, int n)
+        {
+            geoqp::timing::ScopedTimer _t_solve(geoqp::timing::solve_ns, geoqp::timing::solve_count);
+            static thread_local std::vector<double> tl_A_copy;
+            static thread_local std::vector<double> tl_b_copy;
+            if (tl_A_copy.size() < static_cast<size_t>(n) * static_cast<size_t>(n))
+                tl_A_copy.resize(n * n);
+            if (tl_b_copy.size() < static_cast<size_t>(n))
+                tl_b_copy.resize(n);
+            std::memcpy(tl_A_copy.data(), A, n * n * sizeof(double));
+            std::memcpy(tl_b_copy.data(), b, n * sizeof(double));
+            if (!solve_linear_system_inplace(tl_A_copy.data(), tl_b_copy.data(), x, n))
+                throw NumericalException("Singular matrix in linear system");
         }
 
         bool LinearAlgebra::cholesky_rank1_update(double *L, const double *v, int k)

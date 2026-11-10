@@ -64,6 +64,8 @@ namespace geoqp
             const Config &config) : Q_(Q), A_(A), b_(b), x_bar_(x_bar), m_(m), n_(n), config_(config)
         {
             detect_box_constraints();
+            refresh_box_bounds();
+            compute_antipodal_frame();
 
             ws_Axbar_.resize(m);
             compute_axbar();
@@ -80,6 +82,8 @@ namespace geoqp
         {
             b_ = b;
             x_bar_ = x_bar;
+            refresh_box_bounds();
+            compute_antipodal_frame();
             compute_axbar();
         }
 
@@ -96,18 +100,14 @@ namespace geoqp
 
         void Initializer::detect_box_constraints()
         {
+            // Structure only (depends on A): which rows are ±eⱼ.  Bound values
+            // come from b in refresh_box_bounds(), so a hot-start update() with
+            // a new b stays consistent.
             is_box_constrained_ = false;
-            box_lb_.clear();
-            box_ub_.clear();
-            has_lb_.clear();
-            has_ub_.clear();
-
-            box_lb_.assign(n_, -std::numeric_limits<double>::infinity());
-            box_ub_.assign(n_, std::numeric_limits<double>::infinity());
+            box_rows_.clear();
             has_lb_.assign(n_, false);
             has_ub_.assign(n_, false);
 
-            int box_count = 0;
             for (int i = 0; i < m_; ++i)
             {
                 const double *a_row = A_ + i * n_;
@@ -131,52 +131,102 @@ namespace geoqp
                 {
                     if (std::abs(nonzero_val - 1.0) < 1e-10)
                     {
-                        box_ub_[nonzero_idx] = std::min(box_ub_[nonzero_idx], b_[i]);
+                        box_rows_.push_back({i, nonzero_idx, +1});
                         has_ub_[nonzero_idx] = true;
-                        box_count++;
                     }
                     else if (std::abs(nonzero_val + 1.0) < 1e-10)
                     {
-                        box_lb_[nonzero_idx] = std::max(box_lb_[nonzero_idx], -b_[i]);
+                        box_rows_.push_back({i, nonzero_idx, -1});
                         has_lb_[nonzero_idx] = true;
-                        box_count++;
                     }
                 }
             }
 
-            if (box_count >= 2 * n_)
-            {
-                bool all_bounded = true;
-                for (int j = 0; j < n_; ++j)
+            bool all_bounded = true;
+            for (int j = 0; j < n_; ++j)
+                if (!has_lb_[j] || !has_ub_[j])
                 {
-                    if (!has_lb_[j] || !has_ub_[j])
+                    all_bounded = false;
+                    break;
+                }
+            is_box_constrained_ = all_bounded;
+        }
+
+        void Initializer::refresh_box_bounds()
+        {
+            box_lb_.assign(n_, -std::numeric_limits<double>::infinity());
+            box_ub_.assign(n_, std::numeric_limits<double>::infinity());
+            lb_row_.assign(n_, -1);
+            ub_row_.assign(n_, -1);
+            if (b_ == nullptr)
+                return;
+            for (const BoxRow &r : box_rows_)
+            {
+                if (r.sign > 0)
+                {
+                    if (b_[r.row] < box_ub_[r.var])
                     {
-                        all_bounded = false;
-                        break;
+                        box_ub_[r.var] = b_[r.row];
+                        ub_row_[r.var] = r.row;
                     }
                 }
-                is_box_constrained_ = all_bounded;
+                else if (-b_[r.row] > box_lb_[r.var])
+                {
+                    box_lb_[r.var] = -b_[r.row];
+                    lb_row_[r.var] = r.row;
+                }
             }
+        }
+
+        void Initializer::compute_antipodal_frame()
+        {
+            AntipodalFrame &f = frame_;
+            f.valid = false;
+            f.violated.clear();
+            f.i0 = -1;
+            f.exit_row = -1;
+            if (!is_box_constrained_ || static_cast<int>(x_bar_.size()) != n_)
+                return;
+            for (int j = 0; j < n_; ++j)
+                if (!(box_lb_[j] < box_ub_[j]))
+                    return; // degenerate or empty box: no frame
+
+            f.pure_box = (static_cast<int>(box_rows_.size()) == m_);
+            f.s.resize(n_);
+            f.h.resize(n_);
+            f.zeta_bar.resize(n_);
+            f.v_hat.resize(n_);
+            f.plus_row.resize(n_);
+            double best = -std::numeric_limits<double>::infinity();
+            for (int j = 0; j < n_; ++j)
+            {
+                const double lo = box_lb_[j], hi = box_ub_[j];
+                const double mu = 0.5 * (lo + hi);
+                const double h = 0.5 * (hi - lo);
+                const double xb = x_bar_[j];
+                const bool up = (xb >= mu);
+                f.s[j] = up ? 1.0 : -1.0;
+                f.h[j] = h;
+                f.v_hat[j] = up ? lo : hi;                       // μ − s·h
+                f.zeta_bar[j] = (up ? (xb - lo) : (hi - xb)) / h; // s(x̄ − v̂)/h
+                f.plus_row[j] = up ? ub_row_[j] : lb_row_[j];    // {ζⱼ = 2} = μ + s·h
+                if (xb > hi || xb < lo)
+                    f.violated.push_back(j);
+                if (f.zeta_bar[j] > best)
+                {
+                    best = f.zeta_bar[j];
+                    f.i0 = j;
+                }
+            }
+            if (!f.violated.empty())
+                f.exit_row = f.plus_row[f.i0];
+            f.valid = true;
         }
 
         std::vector<double> Initializer::find_good_vertex_box_fast() const
         {
-            std::vector<double> vertex(n_);
-            for (int j = 0; j < n_; ++j)
-            {
-                double dist_to_lb = has_lb_[j] ? (x_bar_[j] - box_lb_[j]) : std::numeric_limits<double>::infinity();
-                double dist_to_ub = has_ub_[j] ? (box_ub_[j] - x_bar_[j]) : std::numeric_limits<double>::infinity();
-
-                if (dist_to_lb > dist_to_ub)
-                {
-                    vertex[j] = box_lb_[j];
-                }
-                else
-                {
-                    vertex[j] = box_ub_[j];
-                }
-            }
-            return vertex;
+            // ζ-frame origin.  Good whenever ζ̄ ≥ 1, which holds by construction.
+            return frame_.v_hat;
         }
 
         double Initializer::compute_q_weighted_distance_squared_ptr(const double *vptr) const
@@ -403,7 +453,7 @@ namespace geoqp
             iterations = 0;
             vertices_explored = 0;
 
-            if (is_box_constrained_)
+            if (is_box_constrained_ && frame_.valid)
             {
                 vertices_explored = 1;
                 iterations = 1;

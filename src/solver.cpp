@@ -100,6 +100,54 @@ namespace geoqp
 
             return 0.5 * quad_obj + lin_obj;
         }
+
+        // Visible-facet certificate, see Solution::violated_active_count.
+        //   face, lam : optimal working set and its multipliers (same order)
+        //   frame     : Phase I antipodal frame, or nullptr
+        void fill_certificate(Solution &sol,
+                              const std::vector<int> &face, const std::vector<double> &lam,
+                              const double *A, const double *b,
+                              const std::vector<double> &x_bar, int n,
+                              const internal::AntipodalFrame *frame,
+                              const Config &config)
+        {
+            sol.violated_active_count = -1;
+            sol.visible_cut_margin = std::numeric_limits<double>::quiet_NaN();
+            if (face.empty() || lam.size() < face.size())
+                return;
+
+            int count = 0;
+            for (size_t k = 0; k < face.size(); ++k)
+            {
+                if (!(lam[k] > config.tolerance))
+                    continue;
+                const double *row = A + static_cast<size_t>(face[k]) * n;
+                double ax = 0.0;
+                for (int j = 0; j < n; ++j)
+                    ax += row[j] * x_bar[j];
+                if (ax > b[face[k]])
+                    ++count;
+            }
+            sol.violated_active_count = count;
+
+            if (frame != nullptr && frame->valid && frame->pure_box && !frame->violated.empty() &&
+                sol.x.size() == static_cast<size_t>(n))
+            {
+                double sum = 0.0;
+                for (int i : frame->violated)
+                    sum += frame->s[i] * (sol.x[i] - frame->v_hat[i]) / frame->h[i];
+                sol.visible_cut_margin = sum - 2.0;
+            }
+
+            const bool fail = (count < 1) ||
+                              (sol.visible_cut_margin < -std::sqrt(config.constraint_tolerance));
+            if (fail && config.verbosity >= 1)
+            {
+                std::cout << "Warning: visible-facet certificate failed (violated_active_count="
+                          << count << ", visible_cut_margin=" << sol.visible_cut_margin
+                          << ") - solution may be inaccurate\n";
+            }
+        }
     }
 
     class SolverImpl
@@ -119,6 +167,95 @@ namespace geoqp
         // Workspace for bound-constraint expansion (lb/ub → A/b rows)
         std::vector<double> ws_A_exp_;
         std::vector<double> ws_b_exp_;
+
+        // Pure-box problems (all variables bounded, every explicit row ±eⱼ) go
+        // through BoxKernel: same algorithm and pivots as the general path below,
+        // without building or scanning a constraint matrix.  Returns false when
+        // the problem is not a pure box (nothing has been done then).
+        internal::BoxKernel box_kernel_;
+        std::unique_ptr<double[]> ws_box_chol_; // n×n, not zero-initialised: only the
+        size_t ws_box_chol_cap_ = 0;            // lower triangle is written and read
+        std::vector<double> ws_box_xbar_;
+
+        bool solve_pure_box(const Problem &problem, Solution &sol)
+        {
+            using Clock = std::chrono::high_resolution_clock;
+            const int n = problem.n;
+            if (!box_kernel_.setup(n, problem.m, problem.A.data(), problem.b.data(),
+                                   problem.lb, problem.ub))
+                return false;
+
+            const double *Q = problem.Q.data();
+            if (ws_box_chol_cap_ < static_cast<size_t>(n) * n)
+            {
+                ws_box_chol_cap_ = static_cast<size_t>(n) * n;
+                ws_box_chol_.reset(new double[ws_box_chol_cap_]);
+            }
+            try
+            {
+                internal::LinearAlgebra::cholesky(Q, ws_box_chol_.get(), n);
+            }
+            catch (...)
+            {
+                return false; // let the general path report it
+            }
+            const double *L = ws_box_chol_.get();
+
+            // x̄ = −Q⁻¹g
+            ws_box_xbar_.resize(n);
+            ws_temp_n_.resize(n);
+            for (int i = 0; i < n; ++i)
+                ws_temp_n_[i] = -problem.g[i];
+            internal::LinearAlgebra::solve_cholesky(L, ws_temp_n_.data(), ws_box_xbar_.data(), n);
+            const std::vector<double> &x_bar = ws_box_xbar_;
+
+            if (box_kernel_.contains(x_bar.data(), config_.constraint_tolerance))
+            {
+                if (config_.verbosity >= 1)
+                    std::cout << "Unconstrained minimum is feasible - optimal!\n";
+                sol.x = x_bar;
+                sol.lambda.assign(problem.m, 0.0);
+                sol.objective_value = compute_objective(x_bar, problem.Q, problem.g, n);
+                return true;
+            }
+
+            const auto t0 = Clock::now();
+            if (!box_kernel_.solve(Q, L, x_bar.data(), config_))
+                throw NumericalException("Phase III projection failed");
+            sol.phase2_time = std::chrono::duration<double>(Clock::now() - t0).count();
+
+            const int k = box_kernel_.num_active();
+            sol.x.assign(box_kernel_.x(), box_kernel_.x() + n);
+            sol.x_phase1.assign(box_kernel_.v_hat(), box_kernel_.v_hat() + n);
+            sol.phase1_iterations = 1;
+            sol.vertices_explored = 1;
+            sol.phase2_iterations = box_kernel_.iterations();
+            sol.phase2_facet_hops = box_kernel_.facet_hops();
+            sol.active_set.assign(box_kernel_.active_rows(), box_kernel_.active_rows() + k);
+            sol.num_active_constraints = k;
+            sol.lambda.assign(problem.m, 0.0);
+            const double *lam = box_kernel_.lambda();
+            for (int i = 0; i < k; ++i)
+                if (sol.active_set[i] < problem.m)
+                    sol.lambda[sol.active_set[i]] = lam[i];
+            sol.objective_value = compute_objective_ptr(sol.x.data(), Q, problem.g.data(), n);
+            sol.violated_active_count = sol.active_set.empty()
+                                            ? -1
+                                            : box_kernel_.violated_active_count(config_.tolerance);
+            sol.visible_cut_margin = box_kernel_.visible_cut_margin();
+
+            if (config_.verbosity >= 1)
+            {
+                std::cout << "Box kernel: optimal face with " << sol.num_active_constraints
+                          << " bounds after " << sol.phase2_iterations << " pivots\n";
+                if (sol.violated_active_count == 0 ||
+                    sol.visible_cut_margin < -std::sqrt(config_.constraint_tolerance))
+                    std::cout << "Warning: visible-facet certificate failed (violated_active_count="
+                              << sol.violated_active_count << ", visible_cut_margin="
+                              << sol.visible_cut_margin << ") - solution may be inaccurate\n";
+            }
+            return true;
+        }
 
         // Expand lb/ub from `prob` into ws_A_exp_ / ws_b_exp_.
         // Returns the expanded constraint count m_exp (>= prob.m).
@@ -208,6 +345,12 @@ namespace geoqp
                     throw InvalidProblemException("Problem validation failed");
                 }
 
+                if (solve_pure_box(problem, sol))
+                {
+                    sol.solve_time = std::chrono::duration<double>(Clock::now() - start_time).count();
+                    return sol;
+                }
+
                 // Expand lb/ub into extra A/b rows (no-op if both are empty).
                 const int m_exp = expand_bounds_into_constraints(problem);
                 const bool has_bounds = (m_exp > problem.m);
@@ -267,14 +410,6 @@ namespace geoqp
                     std::cout << "Unconstrained minimum is infeasible - starting geometric algorithm\n";
                 }
 
-                internal::Polytope polytope(A_ptr, b_ptr, m_exp, problem.n);
-                ws_initial_vertex_ = polytope.find_initial_vertex();
-
-                if (config_.verbosity >= 2)
-                {
-                    std::cout << "Initial vertex found\n";
-                }
-
                 auto phase1_start = Clock::now();
 
                 // Q_chol_local already factored above — share it with Initializer.
@@ -285,6 +420,23 @@ namespace geoqp
 
                 if (has_Q_chol_local)
                     initializer.set_Q_chol(Q_chol_local);
+
+                // A starting vertex is only needed by the general-polytope search.
+                // The box fast path takes v̂ straight from the antipodal frame, so
+                // the (O(n³)) generic vertex search is skipped there.
+                if (initializer.antipodal_frame().valid)
+                {
+                    ws_initial_vertex_.clear();
+                }
+                else
+                {
+                    internal::Polytope polytope(A_ptr, b_ptr, m_exp, problem.n);
+                    ws_initial_vertex_ = polytope.find_initial_vertex();
+                    if (config_.verbosity >= 2)
+                    {
+                        std::cout << "Initial vertex found\n";
+                    }
+                }
 
                 ws_good_vertex_ = initializer.find_good_vertex(
                     ws_initial_vertex_, sol.phase1_iterations, sol.vertices_explored);
@@ -307,13 +459,14 @@ namespace geoqp
                 // otherwise let FaceHopper compute its own.
                 auto make_face_hopper = [&]() -> internal::FaceHopper {
                     if (has_Q_chol_local)
-                        // Precompute Q_inv (O(n³)) to convert per-pivot Cholesky solves
-                        // from O(k·n²) to O(k·n) column lookups.  Cost is amortized over
-                        // the O(n/2) expected pivots; break-even is k·pivots ≳ n (almost
-                        // always true for box-constrained MPC at horizon ≥ 5).
+                        // One-shot solve: do NOT build the full Q⁻¹ (O(n³), more than the
+                        // rest of the solve put together).  Rows of Q⁻¹ are computed on
+                        // demand, one Cholesky solve per constraint that becomes active.
+                        // (setup()/solve_hotstart keep the full inverse: there it is paid
+                        // once and reused.)
                         return internal::FaceHopper(
                             problem.Q.data(), A_ptr, b_ptr, x_bar,
-                            m_exp, problem.n, config_, Q_chol_local, /*precompute_q_inv=*/true);
+                            m_exp, problem.n, config_, Q_chol_local, /*precompute_q_inv=*/false);
                     else
                         return internal::FaceHopper(
                             problem.Q.data(), A_ptr, b_ptr, x_bar,
@@ -321,6 +474,7 @@ namespace geoqp
                 };
                 internal::FaceHopper face_hopper = make_face_hopper();
 
+                face_hopper.set_antipodal_frame(&initializer.antipodal_frame());
                 ws_initial_face_ = face_hopper.find_initial_face(ws_good_vertex_);
 
                 if (config_.verbosity >= 2)
@@ -359,17 +513,28 @@ namespace geoqp
                 {
                     auto phase3_start = Clock::now();
 
-                    // Use ProjectionSolver directly to leverage Q_inv if available
-                    ws_lambda_local_.resize(ws_optimal_face_.size());
-                    sol.x.resize(problem.n);
-
-                    bool success = internal::ProjectionSolver::solve(
-                        ws_optimal_face_, problem.Q.data(), A_ptr, b_ptr,
-                        x_bar, face_hopper.get_Q_chol(),
-                        m_exp, problem.n, sol.x, ws_lambda_local_,
-                        face_hopper.get_Q_inv(),
-                        face_hopper.q_is_diagonal(),
-                        face_hopper.get_Q_diag());
+                    // Phase II usually ends having just projected onto the optimal
+                    // face; reuse that x★ and λ.  Otherwise project here.
+                    bool success = true;
+                    if (face_hopper.has_last_solution() &&
+                        face_hopper.last_lambda().size() == ws_optimal_face_.size() &&
+                        face_hopper.last_x().size() == static_cast<size_t>(problem.n))
+                    {
+                        sol.x = face_hopper.last_x();
+                        ws_lambda_local_ = face_hopper.last_lambda();
+                    }
+                    else
+                    {
+                        ws_lambda_local_.resize(ws_optimal_face_.size());
+                        sol.x.resize(problem.n);
+                        success = internal::ProjectionSolver::solve(
+                            ws_optimal_face_, problem.Q.data(), A_ptr, b_ptr,
+                            x_bar, face_hopper.get_Q_chol(),
+                            m_exp, problem.n, sol.x, ws_lambda_local_,
+                            face_hopper.get_Q_inv(),
+                            face_hopper.q_is_diagonal(),
+                            face_hopper.get_Q_diag());
+                    }
 
                     if (!success)
                     {
@@ -394,14 +559,19 @@ namespace geoqp
                     sol.objective_value = compute_objective_fast(sol.x.data(), problem.Q.data(),
                                                                 problem.g.data(), problem.n);
 
+                    fill_certificate(sol, ws_optimal_face_, ws_lambda_local_, A_ptr, b_ptr,
+                                     x_bar, problem.n, &initializer.antipodal_frame(), config_);
+
                     if (config_.verbosity >= 1)
                     {
                         std::cout << "Phase III: Projection complete\n";
                     }
                 }
 
-                if (config_.check_optimality)
+                if (config_.check_optimality && config_.verbosity >= 1)
                 {
+                    // (The check only ever prints a warning, so it is skipped when
+                    //  nothing would be printed.)
                     // Build a full-size lambda for the KKT checker — it indexes
                     // by active_set[i] which can contain bound-expansion row
                     // indices in [problem.m, m_exp).  sol.lambda stays sized to
@@ -656,7 +826,7 @@ namespace geoqp
                         std::cout << "Using warm-start from previous solution\n";
                     }
                 }
-                else
+                else if (!cached_initializer_->antipodal_frame().valid)
                 {
                     initial_vertex = cached_polytope_->find_initial_vertex();
                 }
@@ -690,6 +860,7 @@ namespace geoqp
                 }
                 else
                 {
+                    cached_face_hopper_->set_antipodal_frame(&cached_initializer_->antipodal_frame());
                     ws_initial_face_ = cached_face_hopper_->find_initial_face(ws_good_vertex_);
                 }
 
@@ -734,6 +905,10 @@ namespace geoqp
                     sol.active_set = ws_optimal_face_;
                     sol.num_active_constraints = static_cast<int>(ws_optimal_face_.size());
                     sol.objective_value = compute_objective_ptr(sol.x.data(), setup_Q_, g, setup_n_);
+
+                    fill_certificate(sol, ws_optimal_face_, ws_lambda_, setup_A_, b,
+                                     ws_x_bar_, setup_n_, &cached_initializer_->antipodal_frame(),
+                                     config_);
                 }
 
                 if (config_.warm_start)

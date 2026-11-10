@@ -112,7 +112,15 @@ namespace geoqp
                 }
             }
 
-            // Precompute Q_inv when requested and n is manageable..
+            // Q⁻¹.  Precompute the whole matrix only when asked to (hot-start setup:
+            // O(n³) once, reused by every later solve).  Otherwise rows are computed
+            // on demand in q_inv_row(), so a one-shot solve pays for the handful of
+            // constraints that actually become active instead of all n.
+            Q_inv_.clear();
+            q_inv_full_ = false;
+            q_inv_lazy_rows_.clear();
+            H_s_inv_.clear();
+            hs_have_.clear();
             if (precompute_q_inv && n_ <= 256 && !Q_chol_.empty())
             {
                 Q_inv_.resize(n_ * n_);
@@ -123,32 +131,9 @@ namespace geoqp
                     LinearAlgebra::solve_cholesky(Q_chol_.data(), e.data(), &Q_inv_[i * n_], n_);
                     e[i] = 0.0;
                 }
+                q_inv_full_ = true;
                 if (config_.verbosity >= 2)
                     std::cout << "  Precomputed Q_inv for O(k·n) per-pivot projection\n";
-
-                // For box problems whose Q is block-diagonal (x/y decoupled, n_=2N),
-                // extract the compact N×N sub-inverse H_s_inv from Q_inv by reading
-                // every other row/column (even-even entries = x block = y block).
-                // Has_diagonal_constraints_ is only set after this block, so we check
-                // the structure directly: Q must have exactly zero off-parity entries.
-                // We do a quick check: if n_ is even, try extracting and verify one
-                // cross entry Q_inv[0 * n_ + 1] ≈ 0 (sufficient for LIPM structure).
-                if (n_ % 2 == 0)
-                {
-                    const int N_half = n_ / 2;
-                    const double cross = Q_inv_[0 * n_ + 1];
-                    if (std::abs(cross) < 1e-10)
-                    {
-                        H_s_inv_.resize(N_half * N_half);
-                        for (int i = 0; i < N_half; ++i)
-                            for (int j = 0; j < N_half; ++j)
-                                H_s_inv_[i * N_half + j] = Q_inv_[2 * i * n_ + 2 * j];
-                    }
-                    else
-                    {
-                        H_s_inv_.clear();
-                    }
-                }
             }
 
             ws_residual_.resize(m_);
@@ -207,6 +192,64 @@ namespace geoqp
                 for (int i = 0; i < m_; ++i)
                     constraint_var_half_[i] = constraint_var_[i] / 2;
             }
+
+            // Box problems whose Q is block-diagonal with x/y decoupled (n = 2N,
+            // interleaved): the compact N×N inverse H_s_inv holds the even-even
+            // entries of Q⁻¹.  Structure test as before: Q⁻¹[0][1] ≈ 0 (sufficient
+            // for the LIPM structure).  Precomputed mode fills every row now; lazy
+            // mode fills rows in ensure_hs_row(), and only bothers at all when the
+            // box-Schur path can actually run.
+            if (n_ % 2 == 0 && n_ >= 2)
+            {
+                const int N_half = n_ / 2;
+                const bool lazy_wanted = !q_inv_full_ && config_.use_caching &&
+                                         has_diagonal_constraints_ && !q_is_diagonal_;
+                if (q_inv_full_ || lazy_wanted)
+                {
+                    const double *row0 = q_inv_row(0);
+                    if (row0 != nullptr && std::abs(row0[1]) < 1e-10)
+                    {
+                        H_s_inv_.resize(N_half * N_half);
+                        hs_have_.assign(N_half, 0);
+                        if (q_inv_full_)
+                            for (int i = 0; i < N_half; ++i)
+                                ensure_hs_row(i);
+                    }
+                }
+            }
+        }
+
+        const double *FaceHopper::q_inv_row(int v) const
+        {
+            if (q_inv_full_)
+                return &Q_inv_[static_cast<size_t>(v) * n_];
+            if (Q_chol_.empty())
+                return nullptr;
+            if (q_inv_lazy_rows_.empty())
+                q_inv_lazy_rows_.resize(n_);
+            std::vector<double> &row = q_inv_lazy_rows_[v];
+            if (row.empty())
+            {
+                // Same computation as the precomputed path: Q⁻¹ e_v by one
+                // forward and one backward substitution.
+                row.resize(n_);
+                ws_unit_.assign(n_, 0.0);
+                ws_unit_[v] = 1.0;
+                LinearAlgebra::solve_cholesky(Q_chol_.data(), ws_unit_.data(), row.data(), n_);
+            }
+            return row.data();
+        }
+
+        void FaceHopper::ensure_hs_row(int p) const
+        {
+            if (hs_have_[p])
+                return;
+            const int N_half = n_ / 2;
+            const double *row = q_inv_row(2 * p);
+            double *dst = &H_s_inv_[static_cast<size_t>(p) * N_half];
+            for (int j = 0; j < N_half; ++j)
+                dst[j] = row[2 * j];
+            hs_have_[p] = 1;
         }
 
         double FaceHopper::compute_intersection_parameter(
@@ -300,10 +343,23 @@ namespace geoqp
 
             Timer t;
 
-            // ── Box fast-path: compute F₀ via ray-exit  ───────
-            // For box constraints with a good vertex v̂, The exit facet F₀ is
-            // the far facet i₀ = argmin_i t_i, where
-            //   t_i = (b_i − sign_i · v̂[var_i]) / (sign_i · d[var_i])
+            // ── Box fast-path, frame form: F₀ = {ζ_{i₀} = 2}, i₀ = argmax ζ̄ ──
+            // Used when Phase I handed over its antipodal frame and v is that
+            // frame's origin v̂.  Equivalent to the ray trace below.
+            if (has_vhat_hint_ && frame_ != nullptr && frame_->valid && frame_->exit_row >= 0 &&
+                frame_->v_hat == v)
+            {
+                if (config_.timing_verbosity > 0)
+                {
+                    timing_stats_.find_initial_face_total += t.elapsed_ms();
+                    ++timing_stats_.find_initial_face_calls;
+                }
+                return {frame_->exit_row};
+            }
+
+            // ── Box fast-path, ray form (any good vertex v) ─────────────────
+            // The exit facet F₀ is i₀ = argmin_i t_i, where
+            //   t_i = (b_i − sign_i · v[var_i]) / (sign_i · d[var_i])
             if (has_vhat_hint_)
             {
                 const double *GEOQP_RESTRICT d_ptr   = ws_d_vhat_.data();
@@ -647,9 +703,8 @@ namespace geoqp
                         std::fill(target_col, target_col + n_, 0.0);
                         target_col[v] = s / Q_diag_[v];
                     }
-                    else if (!Q_inv_.empty())
+                    else if (const double *GEOQP_RESTRICT Qi = q_inv_row(v))
                     {
-                        const double *GEOQP_RESTRICT Qi = &Q_inv_[v * n_];
                         int i = 0;
                         GEOQP_UNROLL_LOOP_4
                         for (; i + 3 < n_; i += 4)
@@ -730,7 +785,7 @@ namespace geoqp
             bool success = ProjectionSolver::solve(
                 face, Q_, A_, b_, x_bar_, Q_chol_,
                 m_, n_, x_star, lambda,
-                Q_inv_, q_is_diagonal_, Q_diag_);
+                get_Q_inv(), q_is_diagonal_, Q_diag_);
 
             if (!success)
             {
@@ -797,14 +852,14 @@ namespace geoqp
             const double *GEOQP_RESTRICT lambda_ptr = lambda.data();
 
             // x* = x̄ − Q⁻¹ Aᵀ λ
-            if (has_diagonal_constraints_ && !Q_inv_.empty())
+            if (has_diagonal_constraints_ && !Q_chol_.empty())
             {
                 std::copy(xbar_ptr, xbar_ptr + n_, xstar_ptr);
                 for (int j = 0; j < k; ++j)
                 {
                     const int v = constraint_var_[face[j]];
                     const double lam_s = lambda_ptr[j] * constraint_sign_[face[j]];
-                    const double *GEOQP_RESTRICT col = Q_inv_.data() + v * n_;
+                    const double *GEOQP_RESTRICT col = q_inv_row(v);
                     int i = 0;
                     for (; i + 3 < n_; i += 4)
                     {
@@ -964,14 +1019,14 @@ namespace geoqp
                 double *GEOQP_RESTRICT xstar_ptr = ws_x_star_.data();
                 const double *GEOQP_RESTRICT lambda_ptr = ws_lambda_.data();
 
-                if (has_diagonal_constraints_ && !Q_inv_.empty())
+                if (has_diagonal_constraints_ && !Q_chol_.empty())
                 {
                     std::copy(xbar_ptr, xbar_ptr + n_, xstar_ptr);
                     for (int j = 0; j < k; ++j)
                     {
                         const int v = constraint_var_[current_face[j]];
                         const double lam_s = lambda_ptr[j] * constraint_sign_[current_face[j]];
-                        const double *GEOQP_RESTRICT col = Q_inv_.data() + v * n_;
+                        const double *GEOQP_RESTRICT col = q_inv_row(v);
                         int i = 0;
                         for (; i + 3 < n_; i += 4)
                         {
@@ -1285,6 +1340,9 @@ namespace geoqp
                 else                              face_y_init.push_back(c);
             }
 
+            for (int c : initial_face)
+                ensure_hs_row(constraint_var_half_[c]);
+
             SchurComplementManager sx, sy;
             if (!sx.initialize_box(face_x_init, constraint_var_half_, constraint_sign_, Hs, N) ||
                 !sy.initialize_box(face_y_init, constraint_var_half_, constraint_sign_, Hs, N))
@@ -1448,6 +1506,12 @@ namespace geoqp
                     result.reserve(kx + ky);
                     for (int c : fx) result.push_back(c);
                     for (int c : fy) result.push_back(c);
+                    // x★ and λ of this face are already known: keep them so the
+                    // caller does not have to project again.
+                    last_x_.assign(xstar, xstar + n_);
+                    last_lambda_.assign(ws_lambda_.begin(), ws_lambda_.begin() + kx);
+                    last_lambda_.insert(last_lambda_.end(), ws_lambda_y_.begin(), ws_lambda_y_.begin() + ky);
+                    last_valid_ = true;
                     return result;
                 }
 
@@ -1468,6 +1532,8 @@ namespace geoqp
                                               int space) -> bool
                 {
                     if (viol.empty()) return true;
+                    for (int c : viol)
+                        ensure_hs_row(constraint_var_half_[c]);
                     if ((int)viol.size() <= space)
                     {
                         for (int c : viol)
@@ -1505,6 +1571,7 @@ namespace geoqp
             Timer t;
             iterations = 0;
             facet_hops = 0;
+            last_valid_ = false;
 
             if (initial_face.empty())
             {
@@ -1703,6 +1770,11 @@ namespace geoqp
 
                         if (ws_opt_violated_.empty())
                         {
+                            // The projection onto this face was just computed: keep it.
+                            last_x_ = ws_opt_x_star_;
+                            last_lambda_.assign(ws_opt_lambda_.begin(),
+                                                ws_opt_lambda_.begin() + current_face.size());
+                            last_valid_ = true;
                             if (config_.verbosity >= 3)
                             {
                                 std::cout << "  Optimal face with " << current_face.size() << " constraints\n";

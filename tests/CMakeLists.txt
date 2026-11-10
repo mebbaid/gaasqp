@@ -24,8 +24,17 @@ target_link_libraries(test_integration PRIVATE geoqp::geoqp GTest::gtest_main)
 add_executable(test_schur_complement test_schur_complement.cpp)
 target_link_libraries(test_schur_complement PRIVATE geoqp::geoqp GTest::gtest_main)
 
+# Visible-facet geometry (uses Eigen for an independent reference QP solver)
+if(GEOQP_USE_EIGEN)
+    add_executable(test_box_geometry test_box_geometry.cpp)
+    target_link_libraries(test_box_geometry PRIVATE geoqp::geoqp GTest::gtest_main)
+endif()
+
 # Register tests
 include(GoogleTest)
+if(GEOQP_USE_EIGEN)
+    gtest_discover_tests(test_box_geometry)
+endif()
 gtest_discover_tests(test_linear_algebra)
 gtest_discover_tests(test_utilities)
 gtest_discover_tests(test_integration)

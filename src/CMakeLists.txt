@@ -11,6 +11,8 @@ set(GEOQP_SOURCES
     utilities.cpp
     schur_complement.cpp
     c_api.cpp
+    box_geometry.cpp
+    box_kernel.cpp
 )
 
 add_library(geoqp ${GEOQP_SOURCES})

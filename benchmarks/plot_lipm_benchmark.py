@@ -3,8 +3,10 @@ plot_lipm_benchmark.py — Figures for LIPM walking benchmark.
 
 Generates two figures (PDF + PNG):
 
-  fig01_lipm_performance.pdf    Avg solve time (ms) per solver (caching OFF/ON)
-  fig02_lipm_iterations.pdf    Iteration counts per solver (where available)
+  fig01_lipm_performance.pdf    Median solve time (ms) per solver over the repeats
+                                (GaasQP and every third-party solver on the CASE lines)
+  fig02_lipm_iterations.pdf     Iterations of the active-set solvers (GaasQP pivots,
+                                qpOASES / qpOASES-B working-set changes, DAQP)
 
 """
 
@@ -18,44 +20,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
-COLORS = {
-    "GeoQP": "#2166ac",
-    "qpOASES": "#4daf4a",
-    "OSQP": "#ff7f00",
-}
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import plot_style as ps  # noqa: E402
 
-# match colors used in plot_benchmarks.py
-C_GEO = COLORS["GeoQP"]
-C_QPO = COLORS["qpOASES"]
-C_OSQP = COLORS["OSQP"]
-
-matplotlib.rcParams.update({
-    "font.family":        "serif",
-    "font.serif":         ["Times New Roman", "DejaVu Serif"],
-    "font.size":          15,
-    "axes.titlesize":     18,
-    "axes.labelsize":     16,
-    "xtick.labelsize":    15,
-    "ytick.labelsize":    15,
-    "legend.fontsize":    14,
-    "legend.framealpha":  0.92,
-    "legend.edgecolor":   "0.7",
-    "legend.fancybox":    False,
-    "lines.linewidth":    1.5,
-    "lines.markersize":   5,
-    "axes.grid":          True,
-    "grid.alpha":         0.25,
-    "grid.linewidth":     0.4,
-    "grid.linestyle":     "--",
-    "figure.dpi":         150,
-    "savefig.dpi":        300,
-    "savefig.bbox":       "tight",
-    "savefig.pad_inches": 0.04,
-    "pdf.fonttype":       42,
-    "ps.fonttype":        42,
-    "axes.spines.top":    False,
-    "axes.spines.right":  False,
-})
+COLORS = ps.COLOR
+C_GEO = ps.COLOR["GaasQP"]
+C_QPO = ps.COLOR["qpOASES"]
+C_OSQP = ps.COLOR["OSQP"]
+ps.apply()
 
 W2 = 7.16
 
@@ -97,78 +69,65 @@ def _parse_results_table(block):
     return rows
 
 
+def _by_size(rows):
+    groups = {}
+    for r in rows:
+        groups.setdefault(int(r.get('QP_n', r.get('n'))), []).append(r)
+    return np.array(sorted(groups)), groups
+
+
+def _solver_keys(rows):
+    """CASE-line key for each solver's time / iterations / success flag."""
+    keys = {"GaasQP": ("Geo_ms", "AvgPivot", "OK_geo")}
+    present = set()
+    for r in rows:
+        present.update(k for k in r if k.startswith("S_") and k.endswith("_ms"))
+    for s in ps.SOLVERS[1:]:
+        if f"S_{s}_ms" in present:
+            keys[s] = (f"S_{s}_ms", f"S_{s}_it", f"S_{s}_ok")
+    if "qpOASES" not in keys and any("qpO_ms" in r for r in rows):  # older output
+        keys["qpOASES"] = ("qpO_ms", "qpO_it", "OK_qpO")
+    if "OSQP" not in keys and any("OSQP_ms" in r for r in rows):
+        keys["OSQP"] = ("OSQP_ms", "OSQP_it", "OK_osqp")
+    return keys
+
+
+def _median_series(sizes, groups, key, ok_key):
+    out = []
+    for nn in sizes:
+        vals = [float(r[key]) for r in groups[nn]
+                if key in r and int(r.get(ok_key, 1)) == 1 and float(r[key]) >= 0]
+        out.append(np.median(vals) if vals else np.nan)
+    return np.array(out)
+
+
+def _x_ticks(ax, sizes):
+    ax.set_xscale("log")
+    ticks = [int(t) for t in sizes if int(t) in (10, 20, 40, 60, 80, 120)] or list(sizes)
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([str(t) for t in ticks])
+    ax.minorticks_off()
+
+
 def fig01_performance(off_rows, on_rows, outdir):
     if not off_rows:
         print("  [skip] fig01_lipm_performance (no data)"); return
-
-    rows = sorted(off_rows, key=lambda r: int(r.get('QP_n', r.get('n', 0))))
-    sizes = []
-    groups = {}
-    for r in rows:
-        nn = int(r.get('QP_n', r.get('n')))
-        if nn not in groups:
-            groups[nn] = []
-            sizes.append(nn)
-        groups[nn].append(r)
-
-    sizes = np.array(sorted(sizes))
-
-    def solver_series(key):
-        series = []
-        for nn in sizes:
-            vals = []
-            for r in groups[nn]:
-                v = r.get(key)
-                if v is None:
-                    continue
-                try:
-                    vals.append(float(v))
-                except Exception:
-                    pass
-            series.append(np.array(vals) if vals else np.array([np.nan]))
-        return series
-
-    geo_series = solver_series('Geo_ms')
-    qpo_series = solver_series('qpO_ms')
-    osqp_series = solver_series('OSQP_ms')
-
-    fig, ax = plt.subplots(figsize=(W2, 3.0))
-
-    def plot_with_bands(series, color, label, marker):
-        med = np.array([np.nanmedian(s) for s in series])
-        p25 = np.array([np.nanpercentile(s, 25) for s in series])
-        p75 = np.array([np.nanpercentile(s, 75) for s in series])
-        p05 = np.array([np.nanpercentile(s, 5) for s in series])
-        p95 = np.array([np.nanpercentile(s, 95) for s in series])
-        ax.plot(sizes, med, marker + '-', color=color, label=label, linewidth=1.6)
-        ax.fill_between(sizes, p25, p75, color=color, alpha=0.18)
-        ax.fill_between(sizes, p05, p95, color=color, alpha=0.08)
-
-    plot_with_bands(geo_series, C_GEO, 'GaasQP', 'o')
-    plot_with_bands(qpo_series, C_QPO, 'qpOASES', 's')
-    if not all(np.isnan(np.array([np.nanmedian(s) for s in osqp_series]))):
-        plot_with_bands(osqp_series, C_OSQP, 'OSQP', '^')
-
-    ax.set_xscale("log")
-    min_n = int(sizes.min())
-    max_n = int(sizes.max())
-    if max_n <= 30:
-        step = max(2, int(round(max_n / 6.0)))
-        ticks = list(range(min_n, max_n + 1, step))
-    else:
-        ticks = np.unique(np.round(np.logspace(np.log10(min_n), np.log10(max_n), num=6))).astype(int).tolist()
-        if ticks[-1] != max_n:
-            ticks.append(max_n)
-    ax.set_xticks(ticks)
-    ax.set_xticklabels([str(int(t)) for t in ticks])
-    ax.set_xlabel(r"QP dimension $n$")
-    ax.set_ylabel(r"Solve time (ms)")
-    ax.set_title("LIPM Benchmark — Avg solve time vs QP size")
-    ax.legend()
+    sizes, groups = _by_size(off_rows)
+    keys = _solver_keys(off_rows)
+    fig, ax = plt.subplots(figsize=(ps.W2 * 0.62, 2.6))
+    for s in ps.SOLVERS:
+        if s in keys:
+            y = _median_series(sizes, groups, keys[s][0], keys[s][2])
+            if not np.all(np.isnan(y)):
+                ps.line(ax, s, sizes, y)
+    ax.set_yscale("log")
+    _x_ticks(ax, sizes)
+    ax.set_xlabel(r"QP dimension $n = 2N$")
+    ax.set_ylabel("Median solve time (ms)")
+    ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5))
     fig.tight_layout()
-
     for ext in ("pdf", "png"):
-        fig.savefig(os.path.join(outdir, f"fig01_lipm_performance.{ext}"), dpi=300, bbox_inches='tight')
+        fig.savefig(os.path.join(outdir, f"fig01_lipm_performance.{ext}"))
     plt.close(fig)
     print("  fig01_lipm_performance")
 
@@ -307,48 +266,22 @@ def fig04_cdf(off_rows, on_rows, outdir):
 def fig02_iterations(off_rows, on_rows, outdir):
     if not off_rows:
         print("  [skip] fig02_lipm_iterations (no data)"); return
-    rows = sorted(off_rows, key=lambda r: int(r.get('QP_n', r.get('n', 0))))
-    n = np.array([int(r.get('QP_n', r.get('n'))) for r in rows])
-    geo_it = np.array([np.nan if r.get('Geo_it') is None else float(r.get('Geo_it')) for r in rows])
-    qpo_it = np.array([np.nan if r.get('qpO_it') is None else float(r.get('qpO_it')) for r in rows])
-    geo_hops = np.array([np.nan if r.get('Geo_hops') is None else float(r.get('Geo_hops')) for r in rows])
-    avg_pivot = np.array([np.nan if r.get('AvgPivot') is None else float(r.get('AvgPivot')) for r in rows])
-    use_geo_iters = not np.all(np.isnan(geo_it) | (geo_it == 0))
-    if use_geo_iters:
-        geo_metric = geo_it
-        geo_label = "GaasQP (iters)"
-    else:
-        has_avg_pivot = not np.all(np.isnan(avg_pivot))
-        if has_avg_pivot:
-            geo_metric = avg_pivot
-            geo_label = "GaasQP (iters)"
-        else:
-            geo_metric = geo_hops
-            geo_label = "GaasQP (facet hops)"
-
-    fig, ax = plt.subplots(figsize=(W2, 3.0))
-    ax.plot(n, geo_metric, "o-", color=C_GEO, label=geo_label, linewidth=1.6)
-    ax.plot(n, qpo_it, "s--", color=C_QPO, label="qpOASES (iters)", linewidth=1.4)
-    ax.set_xscale("log")
-    min_n = int(n.min())
-    max_n = int(n.max())
-    if max_n <= 30:
-        step = max(2, int(round(max_n / 6.0)))
-        ticks = list(range(min_n, max_n + 1, step))
-    else:
-        ticks = np.unique(np.round(np.logspace(np.log10(min_n), np.log10(max_n), num=6))).astype(int).tolist()
-        if ticks[-1] != max_n:
-            ticks.append(max_n)
-    ax.set_xticks(ticks)
-    ax.set_xticklabels([str(int(t)) for t in ticks])
-    ax.set_xlabel(r"QP dimension $n$")
-    ax.set_ylabel(r"Iterations (avg)")
-    ax.set_title("LIPM Benchmark — Iterations vs QP size")
-    ax.legend()
-
+    sizes, groups = _by_size(off_rows)
+    keys = _solver_keys(off_rows)
+    fig, ax = plt.subplots(figsize=(ps.W2 * 0.62, 2.6))
+    for s in ps.ACTIVE_SET:
+        if s in keys:
+            y = _median_series(sizes, groups, keys[s][1], keys[s][2])
+            if not np.all(np.isnan(y)):
+                ps.line(ax, s, sizes, np.maximum(y, 1.0))
+    ax.set_yscale("log")
+    _x_ticks(ax, sizes)
+    ax.set_xlabel(r"QP dimension $n = 2N$")
+    ax.set_ylabel("Iterations")
+    ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5))
     fig.tight_layout()
     for ext in ("pdf", "png"):
-        fig.savefig(os.path.join(outdir, f"fig02_lipm_iterations.{ext}"), dpi=300, bbox_inches='tight')
+        fig.savefig(os.path.join(outdir, f"fig02_lipm_iterations.{ext}"))
     plt.close(fig)
     print("  fig02_lipm_iterations")
 

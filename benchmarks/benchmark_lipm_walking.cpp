@@ -12,8 +12,7 @@
  */
 
 #include <geoqp/geoqp.hpp>
-#include <QpSolversEigen/QpSolversEigen.hpp>
-#include <qpOASES.hpp>
+#include "solver_suite.hpp"
 
 #include <iostream>
 #include <iomanip>
@@ -29,6 +28,10 @@
 #include <geoqp/internal.hpp>
 #include <geoqp/timing.hpp>
 #include <cstdlib>
+#include <limits>
+
+// Tolerance applied to every solver in this benchmark (paper: 1e-7).
+static constexpr double kLipmTol = 1e-7;
 
 using Clock = std::chrono::high_resolution_clock;
 
@@ -455,11 +458,14 @@ static Result runGeoQP(const DenseQP &qp, geoqp::FaceHoppingStrategy strat, cons
 
     geoqp::Config cfg;
     cfg.face_hopping_strategy = strat;
+    // Plain Phase II by default: on this benchmark it needs far fewer pivots
+    // (2–7 instead of 2–50) and is faster than the Schur-caching variant.
+    // GEOQP_USE_CACHING=1 selects the caching variant for the general path.
     const char *env = std::getenv("GEOQP_USE_CACHING");
-    cfg.use_caching = !(env && std::string(env) == "0");
+    cfg.use_caching = (env && std::string(env) == "1");
     cfg.warm_start = false;
-    cfg.tolerance = 1e-7;
-    cfg.constraint_tolerance = 1e-6; 
+    cfg.tolerance = kLipmTol;
+    cfg.constraint_tolerance = kLipmTol; // same tolerance as every other solver
 
     if (!geoqp::validate_problem(prob))
     {
@@ -485,142 +491,31 @@ static Result runGeoQP(const DenseQP &qp, geoqp::FaceHoppingStrategy strat, cons
     return res;
 }
 
-static Result runOSQP(const DenseQP &qp)
+// Condensed LIPM QP → common benchmark QP (bounds with |v| ≥ 1e20 mean "none").
+static bench::QP to_bench_qp(const DenseQP &qp)
 {
-    Result res;
-    res.name = "OSQP";
-    int n = qp.n;
-    int m = qp.m; 
-    Eigen::MatrixXd H_e(n, n);
-    Eigen::VectorXd g_e(n);
-    for (int i = 0; i < n; ++i)
-    {
-        g_e(i) = qp.g[i];
-        for (int j = 0; j < n; ++j)
-            H_e(i, j) = qp.H[i * n + j];
-    }
-
-    bool has_box = (int)qp.lb.size() == n && (int)qp.ub.size() == n;
-
-    // OSQP Form: lb <= [I; C] * x <= ub  (if box present)
-    int m_total = (has_box ? n + m : m);
-    Eigen::VectorXd lb_all(m_total);
-    Eigen::VectorXd ub_all(m_total);
-    Eigen::MatrixXd A_all(m_total, n);
-
-    // Box Constraints (Identity) if present
-    if (has_box)
-    {
-        A_all.topRows(n).setIdentity();
+    const int n = qp.n, m = qp.m;
+    bench::QP b;
+    b.H = Eigen::Map<const Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>(qp.H.data(), n, n);
+    b.g = Eigen::Map<const Eigen::VectorXd>(qp.g.data(), n);
+    b.lb = Eigen::VectorXd::Constant(n, -bench::kInf);
+    b.ub = Eigen::VectorXd::Constant(n, bench::kInf);
+    if ((int)qp.lb.size() == n && (int)qp.ub.size() == n)
         for (int i = 0; i < n; ++i)
         {
-            lb_all(i) = qp.lb[i];
-            ub_all(i) = qp.ub[i];
+            b.lb(i) = std::max(qp.lb[i], -bench::kInf);
+            b.ub(i) = std::min(qp.ub[i], bench::kInf);
         }
-    }
-
-    // General Constraints (C)
+    b.A.resize(m, n);
+    b.lbA.resize(m);
+    b.ubA.resize(m);
     for (int i = 0; i < m; ++i)
     {
-        int row = (has_box ? n + i : i);
-        lb_all(row) = qp.lbA[i];
-        ub_all(row) = qp.ubA[i];
-        for (int j = 0; j < n; ++j)
-            A_all(row, j) = qp.C[i * n + j];
+        for (int j = 0; j < n; ++j) b.A(i, j) = qp.C[i * n + j];
+        b.lbA(i) = std::max(qp.lbA[i], -bench::kInf);
+        b.ubA(i) = std::min(qp.ubA[i], bench::kInf);
     }
-
-    // Extract triangular view to dense first, then convert to sparse.
-    Eigen::MatrixXd H_upper = H_e.triangularView<Eigen::Upper>();
-    Eigen::SparseMatrix<double> H_s = H_upper.sparseView();
-    Eigen::SparseMatrix<double> A_s = A_all.sparseView();
-
-    QpSolversEigen::Solver solver;
-    if (!solver.instantiateSolver("osqp"))
-        return res;
-
-    solver.setBooleanParameter("verbose", false);
-    solver.setRealNumberParameter("eps_abs", 1e-7);
-    solver.setRealNumberParameter("eps_rel", 1e-7);
-    solver.data()->setNumberOfVariables(n);
-    solver.data()->setNumberOfInequalityConstraints(m_total);
-    solver.data()->setHessianMatrix(H_s);
-    solver.data()->setGradient(g_e);
-    solver.data()->setInequalityConstraintsMatrix(A_s);
-    solver.data()->setLowerBound(lb_all);
-    solver.data()->setUpperBound(ub_all);
-
-    auto t0 = Clock::now();
-    if (solver.initSolver())
-    {
-        if (solver.solveProblem() == QpSolversEigen::ErrorExitFlag::NoError)
-        {
-            res.success = true;
-            res.objective = solver.getObjValue() + qp.const_term;
-            auto sv = solver.getSolution();
-            res.solution.assign(sv.data(), sv.data() + n);
-        }
-    }
-    res.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
-    // QpSolversEigen/OSQP wrapper does not expose phase2-like hops; leave as -1
-    res.facet_hops = -1;
-    return res;
-}
-
-static Result runQpOASES(const DenseQP &qp)
-{
-    int n = qp.n;
-    int m = qp.m;
-
-
-    std::vector<qpOASES::real_t> H_d(qp.H.begin(), qp.H.end());
-    std::vector<qpOASES::real_t> g_d(qp.g.begin(), qp.g.end());
-    std::vector<qpOASES::real_t> C_d(qp.C.begin(), qp.C.end());
-
-    std::vector<qpOASES::real_t> lb_d;
-    std::vector<qpOASES::real_t> ub_d;
-    if ((int)qp.lb.size() == n && (int)qp.ub.size() == n) {
-        lb_d.assign(qp.lb.begin(), qp.lb.end());
-        ub_d.assign(qp.ub.begin(), qp.ub.end());
-    } else {
-        // No box bounds provided (unbounded variables). Provide large finite bounds
-        // qpOASES expects arrays of length n; choose large but finite limits.
-        const qpOASES::real_t BIG = static_cast<qpOASES::real_t>(1e20);
-        lb_d.assign(n, -BIG);
-        ub_d.assign(n, BIG);
-    }
-
-    std::vector<qpOASES::real_t> lbA_d(qp.lbA.begin(), qp.lbA.end());
-    std::vector<qpOASES::real_t> ubA_d(qp.ubA.begin(), qp.ubA.end());
-
-    qpOASES::QProblem prob(n, m, qpOASES::HST_POSDEF);
-    qpOASES::Options opts;
-    opts.setToMPC();
-    opts.printLevel = qpOASES::PL_NONE;
-    prob.setOptions(opts);
-
-    int nWSR = 1000;
-    Result res;
-    res.name = "qpOASES";
-
-    auto t0 = Clock::now();
-    auto ret = prob.init(H_d.data(), g_d.data(), C_d.data(),
-                         lb_d.data(), ub_d.data(),
-                         lbA_d.data(), ubA_d.data(), nWSR);
-    res.time_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
-
-    res.success = (ret == qpOASES::SUCCESSFUL_RETURN);
-    res.iterations = nWSR;
-    res.facet_hops = 0;
-
-    if (res.success)
-    {
-        res.objective = prob.getObjVal() + qp.const_term;
-        std::vector<qpOASES::real_t> sol(n);
-        prob.getPrimalSolution(sol.data());
-        res.solution.assign(sol.begin(), sol.end());
-    }
-
-    return res;
+    return b;
 }
 
 
@@ -663,7 +558,7 @@ int main()
     int repeats = repeats_env ? std::atoi(repeats_env) : 30;
 
     const char *caching_env = std::getenv("GEOQP_USE_CACHING");
-    const bool caching_on = !(caching_env && std::string(caching_env) == "0");
+    const bool caching_on = (caching_env && std::string(caching_env) == "1");
 
     const char *ds_env = std::getenv("GEOQP_ENABLE_DS");
     const bool enable_ds = (ds_env && std::string(ds_env) == "1");
@@ -710,16 +605,25 @@ int main()
         for (int run_idx = 0; run_idx < repeats; ++run_idx)
         {
             auto geo_res  = runGeoQP(qp, geoqp::FaceHoppingStrategy::STANDARD, "GeoQP");
-            auto osqp_res = runOSQP(qp);
-            auto qpo_res  = runQpOASES(qp);
+            // Third-party solvers through the common runners (cold solve each).
+            const bench::QP bq = to_bench_qp(qp);
+            std::vector<bench::Run> others;
+            for (bench::SolverId id : bench::all_solvers())
+                if (bench::applicable(id, bq))
+                    others.push_back(bench::run(id, bq, kLipmTol));
+            auto find = [&](bench::SolverId id) -> const bench::Run * {
+                for (const auto &r : others)
+                    if (r.id == id) return &r;
+                return nullptr;
+            };
+            const bench::Run *qpo = find(bench::SolverId::qpOASES);
+            const bench::Run *osqp = find(bench::SolverId::OSQP);
+            const double f_ref = (qpo && qpo->ok) ? qpo->obj + qp.const_term
+                                                  : std::numeric_limits<double>::quiet_NaN();
 
             double diff_geo = 0.0;
-            if (qpo_res.success && geo_res.success)
-                diff_geo = std::abs(geo_res.objective - qpo_res.objective);
-
-            int ok_geo  = geo_res.success  ? 1 : 0;
-            int ok_qpo  = qpo_res.success  ? 1 : 0;
-            int ok_osqp = osqp_res.success ? 1 : 0;
+            if (qpo && qpo->ok && geo_res.success)
+                diff_geo = std::abs(geo_res.objective - f_ref);
 
             std::cout << "CASE "
                       << "n=" << h << " "
@@ -728,18 +632,30 @@ int main()
                       << "mode=" << mode_str << " "
                       << "run_idx=" << run_idx << " "
                       << "Geo_ms=" << geo_res.time_ms << " "
-                      << "qpO_ms=" << qpo_res.time_ms << " "
-                      << "OSQP_ms=" << osqp_res.time_ms << " "
+                      << "qpO_ms=" << (qpo ? qpo->time_us * 1e-3 : -1.0) << " "
+                      << "OSQP_ms=" << (osqp ? osqp->time_us * 1e-3 : -1.0) << " "
                       << "Geo_it=" << geo_res.iterations << " "
-                      << "qpO_it=" << qpo_res.iterations << " "
-                      << "OSQP_it=" << -1 << " "
+                      << "qpO_it=" << (qpo ? qpo->iters : -1) << " "
+                      << "OSQP_it=" << (osqp ? osqp->iters : -1) << " "
                       << "Geo_hops=" << geo_res.facet_hops << " "
                       << "AvgPivot=" << geo_res.avg_pivot << " "
                       << "AvgObjGeo=" << geo_res.objective << " "
                       << "Diff_vs_qpO=" << diff_geo << " "
-                      << "OK_geo=" << ok_geo << " "
-                      << "OK_qpO=" << ok_qpo << " "
-                      << "OK_osqp=" << ok_osqp << "\n";
+                      << "OK_geo=" << (geo_res.success ? 1 : 0) << " "
+                      << "OK_qpO=" << ((qpo && qpo->ok) ? 1 : 0) << " "
+                      << "OK_osqp=" << ((osqp && osqp->ok) ? 1 : 0);
+            // One group per third-party solver: S_<name>_{ms,it,ok,df}
+            for (const auto &r : others)
+            {
+                const std::string nm = bench::name(r.id);
+                const double df = r.ok ? std::abs(r.obj + qp.const_term - f_ref)
+                                       : std::numeric_limits<double>::quiet_NaN();
+                std::cout << " S_" << nm << "_ms=" << r.time_us * 1e-3
+                          << " S_" << nm << "_it=" << r.iters
+                          << " S_" << nm << "_ok=" << (r.ok ? 1 : 0)
+                          << " S_" << nm << "_df=" << df;
+            }
+            std::cout << "\n";
         }
     }
 

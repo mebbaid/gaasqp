@@ -46,11 +46,15 @@ namespace geoqp
             static void solve_linear_system(
                 const double *A, const double *b, double *x,
                 int n);
+            // Same elimination, overwriting A and b; false if singular.
+            static bool solve_linear_system_inplace(double *A, double *b, double *x, int n);
             static void cholesky(const double *A, double *L, int n);
 
             static void forward_sub(
                 const double *L, const double *b, double *x,
                 int n);
+            // L x = e_v, bit-identical to forward_sub on the unit vector.
+            static void forward_sub_unit(const double *L, int v, double *x, int n);
             static void backward_sub(
                 const double *L, const double *b, double *x,
                 int n);
@@ -97,6 +101,117 @@ namespace geoqp
             int n_;
         };
 
+        // Antipodal edge frame of an axis-aligned box  ℓ ≤ x ≤ u  relative to x̄.
+        //
+        //   sᵢ = +1 if x̄ᵢ ≥ μᵢ else −1,   hᵢ = ½(uᵢ − ℓᵢ),   μ = ½(ℓ + u)
+        //   v̂ = μ − s∘h                    (antipodal good vertex)
+        //   ζ = s∘(x − v̂)/h                (box ↦ [0,2]ⁿ, v̂ ↦ 0, ζ̄ ≥ 1)
+        //   V = { i : x̄ᵢ ∉ [ℓᵢ, uᵢ] } = { i : ζ̄ᵢ > 2 }   (visible facets {ζᵢ = 2})
+        //   i₀ = argmax ζ̄ᵢ                  (exit facet F₀ of the ray v̂ → x̄)
+        //
+        // The visible-facet lemma puts x★ on some {ζᵢ = 2}, i ∈ V, and that facet
+        // is F₀ or shares a ridge with it.
+        struct AntipodalFrame
+        {
+            bool valid = false;
+            bool pure_box = false;      // every constraint row is a box row
+            std::vector<double> s;
+            std::vector<double> h;      // half-widths
+            std::vector<double> zeta_bar;
+            std::vector<double> v_hat;
+            std::vector<int> plus_row;  // per coordinate: row index of the {ζᵢ = 2} wall
+            std::vector<int> violated;  // V, ascending
+            int i0 = -1;                // argmax ζ̄ (smallest index on ties)
+            int exit_row = -1;          // row of F₀, or −1 if V is empty
+        };
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Pure-box kernel:  min ½xᵀQx + gᵀx  s.t.  ℓ ≤ x ≤ u,  x̄ = −Q⁻¹g ∉ box.
+        //
+        // Same algorithm and pivot rule as Initializer (antipodal frame) +
+        // FaceHopper (plain Phase II, no caching) on a box, but working on the
+        // bound arrays directly: no constraint matrix is built, scanned or
+        // multiplied, no helper objects are constructed, and nothing is
+        // allocated per iteration.  Rows of Q⁻¹ are computed on demand.
+        //
+        // Constraints are addressed by position p ∈ [0, 2n) in *row order* (the
+        // order the equivalent explicit rows have), which fixes tie-breaking.
+        // ─────────────────────────────────────────────────────────────────────
+        class BoxKernel
+        {
+        public:
+            // Fills the per-position tables.  Returns false unless every variable
+            // has a finite lower and upper bound with ℓ < u and every explicit
+            // row of A is ±eⱼ (then that row's bound is merged, tightest wins).
+            //   rows 0..m−1 : explicit A x ≤ b;  then finite ub;  then finite lb
+            //   (the solver's bound-expansion order).
+            bool setup(int n, int m, const double *A, const double *b,
+                       const std::vector<double> &lb, const std::vector<double> &ub);
+
+            // Solve.  L is the Cholesky factor of Q (unused when Q is diagonal).
+            // Returns false only on a numerical failure of the final projection.
+            bool solve(const double *Q, const double *L, const double *x_bar, const Config &config);
+
+            int n() const { return n_; }
+            // x̄ within the bounds up to tol?
+            bool contains(const double *x, double tol) const;
+
+            // Results of the last solve().
+            const double *x() const { return x_; }
+            const double *v_hat() const { return v_hat_; }
+            int num_active() const { return W_size_; }
+            const int *active_rows() const { return active_rows_; } // ascending
+            const double *lambda() const { return lam_; }           // same order
+            int iterations() const { return iterations_; }
+            int facet_hops() const { return hops_; }
+            // Certificate (see Solution): active bounds with λ > tol that x̄ violates,
+            // and Σ_{i∈V} ζ★ᵢ − 2 in the antipodal frame.
+            int violated_active_count(double tol) const;
+            double visible_cut_margin() const;
+
+        private:
+            bool project(const double *L, const double *x_bar, const Config &config);
+            const double *q_inv_row(const double *L, int v);
+            void allocate(int n);
+
+            int n_ = 0;
+
+            // All fixed-size arrays live in two arenas (one allocation each), so a
+            // freshly constructed solver does not pay for two dozen small mallocs.
+            std::vector<double> darena_;
+            std::vector<int> iarena_;
+            double *lb_ = nullptr, *ub_ = nullptr;       // n each
+            // Per position p (row order): variable, sign (+1 upper / −1 lower),
+            // right-hand side (u or −ℓ), original row index.
+            int *pvar_ = nullptr, *prow_ = nullptr;      // 2n each
+            double *psign_ = nullptr, *pb_ = nullptr;    // 2n each
+            int *pos_upper_ = nullptr, *pos_lower_ = nullptr; // position of each variable's walls
+
+            bool q_diag_ = false;
+            double *q_diagonal_ = nullptr;               // n
+            const double *xbar_ = nullptr;
+
+            int *W_ = nullptr;                           // working set, positions, ascending (≤ 2n)
+            int W_size_ = 0;
+            int *in_W_ = nullptr;                        // 2n flags
+            double *x_ = nullptr, *lam_ = nullptr;       // n, 2n
+            double *v_hat_ = nullptr, *neg_grad_ = nullptr, *s_frame_ = nullptr, *h_frame_ = nullptr; // n each
+            int *violated_frame_ = nullptr;              // ≤ n
+            int violated_frame_size_ = 0;
+            int *viol_ = nullptr;                        // ≤ 2n
+            double *unit_ = nullptr;                     // n
+            int *row_slot_ = nullptr;                    // per variable: index into rows_ or −1
+            int *active_rows_ = nullptr;                 // ≤ 2n
+
+            // Dense-Q only, sized by the working set as it grows.
+            std::vector<double> S_, rhs_;
+            std::vector<double> rows_;                   // lazily computed rows of Q⁻¹, n each
+            int rows_used_ = 0;
+
+            int iterations_ = 0, hops_ = 0;
+            bool solve_failed_ = false; // last project(): the k×k system could not be solved
+        };
+
         class Initializer
         {
         public:
@@ -119,9 +234,14 @@ namespace geoqp
                 int &iterations,
                 int &vertices_explored);
 
+            // Valid when every variable has a ±eⱼ lower and upper bound row.
+            const AntipodalFrame &antipodal_frame() const { return frame_; }
+
         private:
             void compute_axbar();
-            void detect_box_constraints();
+            void detect_box_constraints();   // structural, from A only
+            void refresh_box_bounds();       // values, from b (cheap, O(#box rows))
+            void compute_antipodal_frame();  // O(n), needs bounds and x̄
 
             bool is_good_vertex(
                 const std::vector<double> &v,
@@ -159,6 +279,12 @@ namespace geoqp
             std::vector<double> box_ub_;
             std::vector<bool> has_lb_;
             std::vector<bool> has_ub_;
+            std::vector<int> lb_row_;   // row realising box_lb_[j]
+            std::vector<int> ub_row_;   // row realising box_ub_[j]
+            // Box rows found by detect_box_constraints: (row, var, +1 upper / −1 lower)
+            struct BoxRow { int row; int var; int sign; };
+            std::vector<BoxRow> box_rows_;
+            AntipodalFrame frame_;
 
             mutable std::vector<double> ws_Axbar_;
             mutable std::vector<double> ws_direction_;
@@ -303,11 +429,21 @@ namespace geoqp
                 const std::vector<double> &Q_chol,
                 bool precompute_q_inv);
 
+            // New b and x̄ for the same Q and A (hot start).  Recomputes A·x̄, which
+            // every Phase II residual uses, and drops the previous frame.
             void update(const double *b, const std::vector<double> &x_bar)
             {
                 b_ = b;
                 x_bar_ = x_bar;
+                ws_Axbar_.resize(m_);
+                LinearAlgebra::matvec(A_, x_bar_.data(), ws_Axbar_.data(), m_, n_);
+                frame_ = nullptr;
             }
+
+            // Antipodal frame from Phase I (non-owning; must outlive the next
+            // find_initial_face call).  When it is valid and v is its v̂, the
+            // initial face is {F₀} read off the frame instead of ray-traced.
+            void set_antipodal_frame(const AntipodalFrame *frame) { frame_ = frame; }
 
             std::vector<int> find_initial_face(
                 const std::vector<double> &v);
@@ -321,7 +457,21 @@ namespace geoqp
             const std::vector<double> &get_last_lambda() const { return ws_lambda_; }
 
             const std::vector<double> &get_Q_chol() const { return Q_chol_; }
-            const std::vector<double> &get_Q_inv() const { return Q_inv_; }
+            // The full Q⁻¹ (row-major n×n) when it was precomputed, else empty.
+            // In lazy mode only individual rows exist; use q_inv_row().
+            const std::vector<double> &get_Q_inv() const { return q_inv_full_ ? Q_inv_ : empty_vec_; }
+
+            // Row v of Q⁻¹ (= column v).  Precomputed mode: a pointer into the full
+            // matrix.  Lazy mode: computed by one Cholesky solve on first use and
+            // kept; the pointer stays valid for the life of this object.  Returns
+            // nullptr when no Cholesky factor is available.
+            const double *q_inv_row(int v) const;
+
+            // x★ and λ of the face returned by the last find_optimal_face call
+            // (λ in the order of that face).  Valid only if has_last_solution().
+            bool has_last_solution() const { return last_valid_; }
+            const std::vector<double> &last_x() const { return last_x_; }
+            const std::vector<double> &last_lambda() const { return last_lambda_; }
             const std::vector<double> &get_Q_diag() const { return Q_diag_; }
             bool q_is_diagonal() const { return q_is_diagonal_; }
             bool has_diagonal_constraints() const { return has_diagonal_constraints_; }
@@ -378,8 +528,23 @@ namespace geoqp
             Config config_;
 
             std::vector<double> Q_chol_;
+            // Q⁻¹: either the full matrix (q_inv_full_, hot-start setup where the
+            // O(n³) cost is paid once) or rows computed on demand (one-shot solves,
+            // where only the rows of constraints that become active are needed).
             mutable std::vector<double> Q_inv_;
+            bool q_inv_full_ = false;
+            mutable std::vector<std::vector<double>> q_inv_lazy_rows_; // per variable, empty = not yet
+            mutable std::vector<double> ws_unit_;
+            std::vector<double> empty_vec_;
+            // Compact N×N inverse of the shared x/y block (LIPM structure).  In lazy
+            // mode its rows are filled on demand by ensure_hs_row().
             mutable std::vector<double> H_s_inv_;
+            mutable std::vector<char> hs_have_;
+            void ensure_hs_row(int p) const;
+
+            mutable bool last_valid_ = false;
+            mutable std::vector<double> last_x_;
+            mutable std::vector<double> last_lambda_;
             std::vector<int> constraint_var_half_;
             bool has_diagonal_constraints_ = false;
             bool q_is_dense_ = false;
@@ -425,6 +590,7 @@ namespace geoqp
             // H1 filter for adding box constraint i (var j, sign s):
             //   ws_neg_grad_vhat_[j] * s ≥ 0
             bool has_vhat_hint_ = false;
+            const AntipodalFrame *frame_ = nullptr;
             std::vector<double> v_hat_;
             mutable std::vector<double> ws_neg_grad_vhat_;
             mutable std::vector<double> ws_d_vhat_;

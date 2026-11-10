@@ -197,3 +197,109 @@ TEST(LinearAlgebraTest, SolveCholeskyDecomposed) {
     EXPECT_NEAR(check[1], b[1], 1e-8);
 }
 
+
+// ── factorisation fast paths ────────────────────────────────────────────────
+// cholesky() picks a path by size and structure (diagonal shortcut, right-looking
+// loop, Eigen for large n, reference loop as fallback).  All must satisfy
+// L·Lᵀ = A on the lower triangle and leave the strict upper triangle untouched.
+TEST(LinearAlgebraTest, CholeskyAllPathsReconstructA)
+{
+    unsigned seed = 7u;
+    auto rnd = [&seed]() {
+        seed = seed * 1664525u + 1013904223u;
+        return (seed >> 8) / double(1u << 24) - 0.5;
+    };
+    for (int n : {1, 2, 3, 15, 16, 17, 40, 80, 81, 150})
+    {
+        std::vector<double> R(n * n), A(n * n, 0.0);
+        for (auto &r : R) r = rnd();
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j)
+            {
+                double s = (i == j) ? 0.05 * n : 0.0;
+                for (int k = 0; k < n; ++k) s += R[k * n + i] * R[k * n + j];
+                A[i * n + j] = s;
+            }
+        const double marker = -12345.0;
+        std::vector<double> L(n * n, marker);
+        LinearAlgebra::cholesky(A.data(), L.data(), n);
+        for (int i = 0; i < n; ++i)
+        {
+            EXPECT_GT(L[i * n + i], 0.0) << "n=" << n;
+            for (int j = i + 1; j < n; ++j)
+                EXPECT_EQ(L[i * n + j], marker) << "upper triangle written, n=" << n;
+            for (int j = 0; j <= i; ++j)
+            {
+                double s = 0.0;
+                for (int k = 0; k <= j; ++k) s += L[i * n + k] * L[j * n + k];
+                EXPECT_NEAR(s, A[i * n + j], 1e-11 * (1.0 + std::abs(A[i * n + j]))) << "n=" << n;
+            }
+        }
+    }
+}
+
+TEST(LinearAlgebraTest, CholeskyDiagonalAndIndefinite)
+{
+    // Diagonal: exact square roots, zeros below the diagonal.
+    for (int n : {4, 100})
+    {
+        std::vector<double> A(n * n, 0.0), L(n * n, 9.0);
+        for (int i = 0; i < n; ++i) A[i * n + i] = 1.0 + i;
+        LinearAlgebra::cholesky(A.data(), L.data(), n);
+        for (int i = 0; i < n; ++i)
+        {
+            EXPECT_EQ(L[i * n + i], std::sqrt(1.0 + i));
+            for (int j = 0; j < i; ++j) EXPECT_EQ(L[i * n + j], 0.0);
+        }
+    }
+    // Indefinite matrices are rejected on every path.
+    for (int n : {3, 40, 120})
+    {
+        std::vector<double> A(n * n, 0.0), L(n * n);
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < n; ++j) A[i * n + j] = (i == j) ? 1.0 : 0.9;
+        A[(n - 1) * n + (n - 1)] = -5.0;
+        EXPECT_THROW(LinearAlgebra::cholesky(A.data(), L.data(), n), geoqp::NumericalException) << "n=" << n;
+    }
+}
+
+TEST(LinearAlgebraTest, ForwardSubUnitIsBitIdenticalToForwardSub)
+{
+    unsigned seed = 11u;
+    auto rnd = [&seed]() {
+        seed = seed * 1664525u + 1013904223u;
+        return (seed >> 8) / double(1u << 24) - 0.5;
+    };
+    for (int n : {1, 2, 5, 8, 13, 37})
+    {
+        std::vector<double> L(n * n, 0.0);
+        for (int i = 0; i < n; ++i)
+        {
+            for (int j = 0; j < i; ++j) L[i * n + j] = rnd();
+            L[i * n + i] = 1.0 + std::abs(rnd());
+        }
+        for (int v = 0; v < n; ++v)
+        {
+            std::vector<double> e(n, 0.0), ref(n), got(n);
+            e[v] = 1.0;
+            LinearAlgebra::forward_sub(L.data(), e.data(), ref.data(), n);
+            LinearAlgebra::forward_sub_unit(L.data(), v, got.data(), n);
+            for (int i = 0; i < n; ++i)
+                EXPECT_EQ(got[i], ref[i]) << "n=" << n << " v=" << v << " i=" << i;
+        }
+    }
+}
+
+TEST(LinearAlgebraTest, InplaceSolveMatchesGeneralSolve)
+{
+    const int n = 6;
+    std::vector<double> A = {4, 1, 0, 2, 0, 1,  1, 5, 1, 0, 1, 0,  0, 1, 6, 1, 0, 2,
+                             2, 0, 1, 7, 1, 0,  0, 1, 0, 1, 8, 1,  1, 0, 2, 0, 1, 9};
+    std::vector<double> b = {1, -2, 3, -4, 5, -6}, x1(n), x2(n);
+    LinearAlgebra::solve_linear_system(A.data(), b.data(), x1.data(), n);
+    std::vector<double> Ac = A, bc = b;
+    ASSERT_TRUE(LinearAlgebra::solve_linear_system_inplace(Ac.data(), bc.data(), x2.data(), n));
+    for (int i = 0; i < n; ++i) EXPECT_EQ(x1[i], x2[i]);
+    std::vector<double> Z(4, 0.0), z(2, 1.0), xz(2);
+    EXPECT_FALSE(LinearAlgebra::solve_linear_system_inplace(Z.data(), z.data(), xz.data(), 2));
+}
